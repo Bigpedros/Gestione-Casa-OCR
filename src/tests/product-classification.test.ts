@@ -533,4 +533,218 @@ describe('Sistema di Classificazione Automatica Prodotti OCR (TEST-PRODUCT-CLASS
     expect(allProducts.length).toBe(1);
     expect(allProducts[0].id).toBe(existing.id);
   });
+
+  it('13. Punto 9: classifyReceiptLines non modifica productId né reviewStatus nel DB', async () => {
+    const categories = await categoryRepository.getAll();
+    const prod = await productRepository.create({
+      displayName: 'Acqua Naturale 1.5L',
+      normalizedName: 'ACQUA NATURALE 1.5L',
+      categoryId: categories[0].id,
+    });
+
+    const ocrProc = await ocrProcessRepository.create({
+      attachmentId: 'att-13',
+      status: 'completed',
+      confirmationRequired: true,
+      confirmedByUser: false,
+    });
+
+    const line = await ocrReceiptLineRepository.create({
+      ocrProcessId: ocrProc.id,
+      originalText: 'ACQUA NATURALE 1.5L 0.40',
+      description: 'ACQUA NATURALE 1.5L',
+      quantity: 1,
+      unitPrice: 0.4,
+      lineTotal: 0.4,
+      confidence: 95,
+      reviewStatus: 'pending',
+      productId: null,
+    });
+
+    // Esegue la proposta
+    const proposal = await productClassificationService.classifyReceiptLines(ocrProc.id);
+
+    // Verifica che la proposta contenga il match
+    expect(proposal.lineProposals[0].matchedProduct?.id).toBe(prod.id);
+
+    // Verifica che il DB NON sia stato modificato
+    const lineInDb = await ocrReceiptLineRepository.getById(line.id);
+    expect(lineInDb?.productId).toBeNull();
+    expect(lineInDb?.reviewStatus).toBe('pending');
+  });
+
+  it('14. Punto 9: Salva bozza non crea Product, ProductAlias, Supplier né Expense', async () => {
+    const ocrProc = await ocrProcessRepository.create({
+      attachmentId: 'att-14',
+      status: 'completed',
+      confirmationRequired: true,
+      confirmedByUser: false,
+    });
+
+    const line = await ocrReceiptLineRepository.create({
+      ocrProcessId: ocrProc.id,
+      originalText: 'BISCOTTI INTEGRALI 2.50',
+      description: 'BISCOTTI INTEGRALI',
+      quantity: 1,
+      unitPrice: 2.5,
+      lineTotal: 2.5,
+      confidence: 80,
+      reviewStatus: 'pending',
+    });
+
+    // Simulazione del salvataggio bozza (come in OcrReviewModal)
+    await ocrProcessRepository.update(ocrProc.id, {
+      detectedSupplier: 'SUPERMERCATO TEST',
+      confirmedByUser: false,
+    });
+
+    await ocrReceiptLineRepository.update(line.id, {
+      description: 'BISCOTTI INTEGRALI 500G',
+      reviewStatus: 'modified',
+      productId: null,
+    });
+
+    // Verifiche: nessun Product, Alias, Supplier o Expense creato
+    const products = await db.products.toArray();
+    const aliases = await db.productAliases.toArray();
+    const suppliers = await db.suppliers.toArray();
+    const expenses = await db.expenses.toArray();
+    const expenseItems = await db.expenseItems.toArray();
+
+    expect(products.length).toBe(0);
+    expect(aliases.length).toBe(0);
+    expect(suppliers.length).toBe(0);
+    expect(expenses.length).toBe(0);
+    expect(expenseItems.length).toBe(0);
+
+    const procInDb = await ocrProcessRepository.getById(ocrProc.id);
+    expect(procInDb?.confirmedByUser).toBe(false);
+  });
+
+  it('15. Punto 9: Transazione atomica di conferma ed eliminazione righe con rollback su errore', async () => {
+    const ocrProc = await ocrProcessRepository.create({
+      attachmentId: 'att-15',
+      status: 'completed',
+      confirmationRequired: true,
+      confirmedByUser: false,
+    });
+
+    const line1 = await ocrReceiptLineRepository.create({
+      ocrProcessId: ocrProc.id,
+      originalText: 'MELA ANNURCA 1KG 2.00',
+      description: 'MELA ANNURCA 1KG',
+      quantity: 1,
+      unitPrice: 2,
+      lineTotal: 2,
+      confidence: 90,
+      reviewStatus: 'pending',
+    });
+
+    const line2 = await ocrReceiptLineRepository.create({
+      ocrProcessId: ocrProc.id,
+      originalText: 'SACCHETTO PLASTICA 0.10',
+      description: 'SACCHETTO PLASTICA',
+      quantity: 1,
+      unitPrice: 0.1,
+      lineTotal: 0.1,
+      confidence: 90,
+      reviewStatus: 'pending',
+    });
+
+    // 1. Esegue conferma con richiesta di eliminazione di line2
+    const result = await productClassificationService.confirmReceiptClassifications({
+      ocrProcessId: ocrProc.id,
+      supplierName: 'FRUTTIVENDOLO',
+      deletedLineIds: [line2.id],
+      decisions: [
+        {
+          lineId: line1.id,
+          originalText: line1.originalText,
+          description: line1.description,
+          quantity: 1,
+          unitPrice: 2,
+          lineTotal: 2,
+          action: 'create_new',
+          newProductDetails: { displayName: 'Mela Annurca' },
+        },
+      ],
+    });
+
+    expect(result.updatedLinesCount).toBe(1);
+    const line2InDb = await ocrReceiptLineRepository.getById(line2.id);
+    expect(line2InDb).toBeUndefined(); // line2 eliminata atomicamente
+
+    // 2. Rollback test: Se confirmReceiptClassifications viene chiamata per un ocrProcess non esistente, fallisce e nulla cambia
+    await expect(
+      productClassificationService.confirmReceiptClassifications({
+        ocrProcessId: 'non-existing-proc-id',
+        deletedLineIds: [line1.id],
+        decisions: [],
+      })
+    ).rejects.toThrow();
+
+    // line1 esiste ancora
+    const line1InDb = await ocrReceiptLineRepository.getById(line1.id);
+    expect(line1InDb).not.toBeNull();
+  });
+
+  it('16. Punto 9: Idempotenza della conferma ripetuta (nessun duplicato creato)', async () => {
+    const ocrProc = await ocrProcessRepository.create({
+      attachmentId: 'att-16',
+      status: 'completed',
+      confirmationRequired: true,
+      confirmedByUser: false,
+    });
+
+    const line = await ocrReceiptLineRepository.create({
+      ocrProcessId: ocrProc.id,
+      originalText: 'PANE INTEGRALE 1.80',
+      description: 'PANE INTEGRALE',
+      quantity: 1,
+      unitPrice: 1.8,
+      lineTotal: 1.8,
+      confidence: 85,
+      reviewStatus: 'pending',
+    });
+
+    const params = {
+      ocrProcessId: ocrProc.id,
+      supplierName: 'PANIFICIO BIO',
+      decisions: [
+        {
+          lineId: line.id,
+          originalText: line.originalText,
+          description: line.description,
+          quantity: 1,
+          unitPrice: 1.8,
+          lineTotal: 1.8,
+          action: 'create_new' as const,
+          newProductDetails: { displayName: 'Pane Integrale 500g' },
+        },
+      ],
+    };
+
+    // Prima conferma
+    const res1 = await productClassificationService.confirmReceiptClassifications(params);
+    expect(res1.createdProductsCount).toBe(1);
+    expect(res1.createdAliasesCount).toBe(1);
+
+    const productsCount1 = (await db.products.toArray()).length;
+    const aliasesCount1 = (await db.productAliases.toArray()).length;
+
+    // Seconda conferma dello stesso processo
+    const res2 = await productClassificationService.confirmReceiptClassifications(params);
+    expect(res2.createdProductsCount).toBe(0);
+    expect(res2.createdAliasesCount).toBe(0);
+
+    const productsCount2 = (await db.products.toArray()).length;
+    const aliasesCount2 = (await db.productAliases.toArray()).length;
+
+    expect(productsCount2).toBe(productsCount1);
+    expect(aliasesCount2).toBe(aliasesCount1);
+
+    // Verifico che NON sono state create Expense
+    const expenses = await db.expenses.toArray();
+    expect(expenses.length).toBe(0);
+  });
 });

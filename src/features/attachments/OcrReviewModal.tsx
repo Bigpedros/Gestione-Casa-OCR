@@ -489,13 +489,14 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
           ? newSupplierName.trim()
           : suppliers.find((s) => s.id === selectedSupplierId)?.name || detectedSupplierName;
 
-      // Clean up deleted lines
+      // Identify deleted lines to be removed inside the atomic confirmation transaction
       const existingDbLines = await ocrReceiptLineRepository.getByOcrProcessId(ocrProcess.id);
       const currentLineIds = new Set(editableLines.map((l) => l.id));
+      const deletedLineIds: string[] = [];
 
       for (const dbLine of existingDbLines) {
         if (!currentLineIds.has(dbLine.id)) {
-          await ocrReceiptLineRepository.delete(dbLine.id);
+          deletedLineIds.push(dbLine.id);
         }
       }
 
@@ -539,6 +540,7 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
         expenseDate,
         documentTotal,
         decisions,
+        deletedLineIds,
       });
 
       // Update Session status to 'reviewed'

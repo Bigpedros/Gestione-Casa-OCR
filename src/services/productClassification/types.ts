@@ -141,4 +141,5 @@ export interface ConfirmReceiptClassificationParams {
   expenseDate?: string | null;
   documentTotal?: number | null;
   decisions: LineClassificationDecision[];
+  deletedLineIds?: EntityId[];
 }

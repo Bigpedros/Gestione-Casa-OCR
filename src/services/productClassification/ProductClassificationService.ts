@@ -89,19 +89,6 @@ export class ProductClassificationService {
         defaultUnclassifiedCategoryInfo
       );
       lineProposals.push(result);
-
-      // Aggiornamento idempotente di ocrReceiptLines con productId solo se confidenza elevata e senza conflitti bloccanti
-      if (result.matchedProduct && result.confidence >= 75 && !result.hasConflict) {
-        if (line.productId !== result.matchedProduct.id) {
-          await ocrReceiptLineRepository.update(line.id, {
-            productId: result.matchedProduct.id,
-          });
-        }
-      } else if (line.productId !== null) {
-        await ocrReceiptLineRepository.update(line.id, {
-          productId: null,
-        });
-      }
     }
 
     // 5. Calcola le metriche di riepilogo
@@ -423,10 +410,24 @@ export class ProductClassificationService {
         db.auditLogs,
       ],
       async () => {
-        // 1. Aggiorna processo OCR
+        // 1. Verfica e aggiorna processo OCR
         const ocrProc = await ocrProcessRepository.getById(params.ocrProcessId);
         if (!ocrProc) {
           throw new Error(`Processo OCR ${params.ocrProcessId} non trovato`);
+        }
+
+        // Idempotenza: Se il processo è già stato confermato in precedenza, evita duplicazione
+        if (ocrProc.confirmedByUser) {
+          return;
+        }
+
+        // 2. Eliminazione atomica delle righe rimosse dall'utente
+        if (params.deletedLineIds && params.deletedLineIds.length > 0) {
+          for (const lineId of params.deletedLineIds) {
+            if (!lineId.startsWith('temp-line-')) {
+              await ocrReceiptLineRepository.delete(lineId);
+            }
+          }
         }
 
         let supplierId: string | null = params.supplierId || null;

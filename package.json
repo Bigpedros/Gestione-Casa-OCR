@@ -1,9 +1,9 @@
 {
-  "name": "gestione-casa",
+  "name": "gestione-casa-ocr",
   "private": true,
   "version": "1.0.0",
   "type": "module",
-  "description": "PWA local-first per la gestione economica della casa e del nucleo familiare.",
+  "description": "PWA local-first per la gestione economica della casa con acquisizione OCR di scontrini e documenti.",
   "scripts": {
     "dev": "vite --port=3000 --host=0.0.0.0",
     "build": "tsc --noEmit && vite build",

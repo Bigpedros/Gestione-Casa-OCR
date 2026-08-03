@@ -1,3 +1,4 @@
+import { db } from '../../database/db';
 import {
   ocrProcessRepository,
   ocrReceiptLineRepository,
@@ -5,6 +6,7 @@ import {
   productAliasRepository,
   supplierRepository,
   categoryRepository,
+  auditLogRepository,
 } from '../../repositories';
 import type { Product, ProductAlias, Supplier, OCRReceiptLine, Category } from '../../types';
 import { ProductFingerprintService } from './ProductFingerprint';
@@ -14,6 +16,8 @@ import type {
   SupplierClassificationProposal,
   CandidateMatch,
   ProposedCategoryInfo,
+  ConfidenceLevel,
+  ConfirmReceiptClassificationParams,
 } from './types';
 
 export class ProductClassificationService {
@@ -296,6 +300,22 @@ export class ProductClassificationService {
       warnings.push('Presenza di prodotti alternativi compatibili');
     }
 
+    // Calcolo livello di confidenza
+    let confidenceLevel: ConfidenceLevel = 'unresolved';
+    if (hasConflict) {
+      confidenceLevel = 'unresolved';
+    } else if (topCandidate && topCandidate.score >= 50) {
+      if (topCandidate.matchType === 'exact_barcode' || topCandidate.matchType === 'exact_alias') {
+        confidenceLevel = 'exact';
+      } else if (topCandidate.score >= 80) {
+        confidenceLevel = 'high_confidence';
+      } else {
+        confidenceLevel = 'possible';
+      }
+    } else {
+      confidenceLevel = 'new_product';
+    }
+
     // Decisione associazione prodotto e proposta
     if (topCandidate && topCandidate.score >= 50) {
       const matchedProduct = topCandidate.product;
@@ -328,6 +348,7 @@ export class ProductClassificationService {
         matchedProduct,
         matchedAlias: topCandidate.alias || null,
         confidence: topCandidate.score,
+        confidenceLevel,
         matchType: topCandidate.matchType,
         proposedCategory: proposedCat,
         proposedSubcategory: proposedSubcat,
@@ -353,6 +374,7 @@ export class ProductClassificationService {
       matchedProduct: null,
       matchedAlias: null,
       confidence: topCandidate ? topCandidate.score : 0,
+      confidenceLevel,
       matchType: 'none',
       proposedCategory: defaultUnclassifiedCat,
       proposedSubcategory: null,
@@ -375,6 +397,176 @@ export class ProductClassificationService {
       conflictDetails,
       warnings,
     };
+  }
+
+  /**
+   * Conferma la classificazione delle righe scontrino con garanzia di consistenza transazionale (Dexie),
+   * apprendimento automatico di alias e creazione controllata di nuovi prodotti previa verifica anti-duplicato.
+   */
+  public async confirmReceiptClassifications(params: ConfirmReceiptClassificationParams): Promise<{
+    updatedLinesCount: number;
+    createdProductsCount: number;
+    createdAliasesCount: number;
+  }> {
+    let createdProductsCount = 0;
+    let createdAliasesCount = 0;
+    let updatedLinesCount = 0;
+
+    await db.transaction(
+      'rw',
+      [
+        db.products,
+        db.productAliases,
+        db.ocrReceiptLines,
+        db.ocrProcesses,
+        db.suppliers,
+        db.auditLogs,
+      ],
+      async () => {
+        // 1. Aggiorna processo OCR
+        const ocrProc = await ocrProcessRepository.getById(params.ocrProcessId);
+        if (!ocrProc) {
+          throw new Error(`Processo OCR ${params.ocrProcessId} non trovato`);
+        }
+
+        let supplierId: string | null = params.supplierId || null;
+        if (params.supplierName && (!supplierId || supplierId === 'new')) {
+          const supMatch = await supplierRepository.getByNameOrAlias(params.supplierName);
+          if (supMatch) {
+            supplierId = supMatch.id;
+          } else {
+            const newSup = await supplierRepository.create({
+              name: params.supplierName.trim(),
+              aliases: [],
+              status: 'confirmed',
+            });
+            supplierId = newSup.id;
+          }
+        }
+
+        await ocrProcessRepository.update(params.ocrProcessId, {
+          detectedSupplier: params.supplierName || ocrProc.detectedSupplier,
+          detectedDate: params.expenseDate || ocrProc.detectedDate,
+          detectedTotal: params.documentTotal ?? ocrProc.detectedTotal,
+          confirmedByUser: true,
+          status: 'completed',
+        });
+
+        // 2. Processa ciascuna decisione riga
+        for (const decision of params.decisions) {
+          const rawDesc = decision.description || decision.originalText;
+          const normText = ProductFingerprintService.normalizeText(rawDesc);
+          const cleanNormName = ProductFingerprintService.computeCleanNormalizedName(rawDesc);
+
+          let finalProductId: string | null = null;
+
+          if (decision.action === 'link_existing' && decision.productId) {
+            finalProductId = decision.productId;
+
+            // Apprendimento progressivo: crea alias se non esiste già per questo prodotto e testo
+            const existingAliases = await productAliasRepository.getByProduct(finalProductId);
+            const aliasExists = existingAliases.some(
+              (a) => a.normalizedText === normText || a.originalText.toUpperCase().trim() === rawDesc.toUpperCase().trim()
+            );
+
+            if (!aliasExists && normText.length > 1) {
+              await productAliasRepository.create({
+                productId: finalProductId,
+                originalText: decision.originalText || decision.description,
+                normalizedText: normText,
+                supplierId: supplierId || null,
+                confidence: 100,
+                confirmedByUser: true,
+              });
+              createdAliasesCount++;
+            }
+          } else if (decision.action === 'create_new') {
+            // Controllo anti-duplicato per nome normalizzato
+            const existingProduct = await productRepository.getByNormalizedName(cleanNormName);
+
+            if (existingProduct) {
+              finalProductId = existingProduct.id;
+            } else {
+              // Creazione nuovo prodotto solo su conferma esplicita
+              const details = decision.newProductDetails;
+              const newProd = await productRepository.create({
+                displayName: details?.displayName || decision.description,
+                normalizedName: cleanNormName,
+                brand: details?.brand || ProductFingerprintService.extractBrand(rawDesc) || null,
+                barcode: details?.barcode || ProductFingerprintService.extractBarcode(rawDesc) || null,
+                unitOfMeasure:
+                  details?.unitOfMeasure ||
+                  ProductFingerprintService.extractUnitOfMeasure(rawDesc).unitOfMeasure ||
+                  null,
+                categoryId: decision.categoryId || details?.categoryId || null,
+                subcategoryId: decision.subcategoryId || details?.subcategoryId || null,
+              });
+              finalProductId = newProd.id;
+              createdProductsCount++;
+            }
+
+            // Crea alias per il nuovo prodotto creato o riutilizzato
+            const existingAliases = await productAliasRepository.getByProduct(finalProductId);
+            const aliasExists = existingAliases.some(
+              (a) => a.normalizedText === normText || a.originalText.toUpperCase().trim() === rawDesc.toUpperCase().trim()
+            );
+
+            if (!aliasExists && normText.length > 1) {
+              await productAliasRepository.create({
+                productId: finalProductId,
+                originalText: decision.originalText || decision.description,
+                normalizedText: normText,
+                supplierId: supplierId || null,
+                confidence: 100,
+                confirmedByUser: true,
+              });
+              createdAliasesCount++;
+            }
+          }
+
+          // Aggiorna o crea riga scontrino nel DB
+          if (decision.lineId && !decision.lineId.startsWith('temp-line-')) {
+            await ocrReceiptLineRepository.update(decision.lineId, {
+              description: decision.description,
+              quantity: decision.quantity,
+              unitPrice: decision.unitPrice,
+              lineTotal: decision.lineTotal,
+              productId: finalProductId,
+              reviewStatus: 'confirmed',
+            });
+            updatedLinesCount++;
+          } else {
+            await ocrReceiptLineRepository.create({
+              ocrProcessId: params.ocrProcessId,
+              originalText: decision.originalText || decision.description,
+              description: decision.description,
+              quantity: decision.quantity,
+              unitPrice: decision.unitPrice,
+              lineTotal: decision.lineTotal,
+              confidence: decision.confidence || 100,
+              reviewStatus: 'confirmed',
+              productId: finalProductId,
+            });
+            updatedLinesCount++;
+          }
+        }
+
+        // Audit Log
+        await auditLogRepository.create({
+          entityType: 'ocrProcess',
+          entityId: params.ocrProcessId,
+          action: 'update',
+          newValues: {
+            updatedLinesCount,
+            createdProductsCount,
+            createdAliasesCount,
+            supplierId,
+          },
+        });
+      }
+    );
+
+    return { updatedLinesCount, createdProductsCount, createdAliasesCount };
   }
 }
 

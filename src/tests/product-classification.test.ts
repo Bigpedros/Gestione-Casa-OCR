@@ -406,4 +406,131 @@ describe('Sistema di Classificazione Automatica Prodotti OCR (TEST-PRODUCT-CLASS
     expect(expenses.length).toBe(0);
     expect(expenseItems.length).toBe(0);
   });
+
+  it('11. Punto 9: Conferma revisione con creazione nuovo prodotto esplicita e apprendimento alias', async () => {
+    const ocrProc = await ocrProcessRepository.create({
+      attachmentId: 'att-11',
+      status: 'completed',
+      detectedSupplier: 'SUPERMERCATO DESPAR',
+      confirmationRequired: true,
+      confirmedByUser: false,
+    });
+
+    const line = await ocrReceiptLineRepository.create({
+      ocrProcessId: ocrProc.id,
+      originalText: 'CREMA SPALMABLE NOCCIOLA 350G 3.99',
+      description: 'CREMA SPALMABLE NOCCIOLA 350G',
+      quantity: 1,
+      unitPrice: 3.99,
+      lineTotal: 3.99,
+      confidence: 85,
+      reviewStatus: 'pending',
+    });
+
+    // Conferma con richiesta esplicita di creazione nuovo prodotto
+    const result = await productClassificationService.confirmReceiptClassifications({
+      ocrProcessId: ocrProc.id,
+      supplierName: 'SUPERMERCATO DESPAR',
+      decisions: [
+        {
+          lineId: line.id,
+          originalText: line.originalText,
+          description: line.description,
+          quantity: 1,
+          unitPrice: 3.99,
+          lineTotal: 3.99,
+          action: 'create_new',
+          newProductDetails: {
+            displayName: 'Crema Spalmabile Nocciola 350g',
+          },
+        },
+      ],
+    });
+
+    expect(result.createdProductsCount).toBe(1);
+    expect(result.createdAliasesCount).toBe(1);
+
+    const products = await productRepository.getAll();
+    expect(products.length).toBe(1);
+    expect(products[0].displayName).toBe('Crema Spalmabile Nocciola 350g');
+
+    const aliases = await db.productAliases.toArray();
+    expect(aliases.length).toBe(1);
+    expect(aliases[0].productId).toBe(products[0].id);
+
+    // Un secondo scontrino con lo stesso testo deve ora fare match esatto tramite l'alias appreso!
+    const ocrProc2 = await ocrProcessRepository.create({
+      attachmentId: 'att-11-2',
+      status: 'completed',
+      confirmationRequired: true,
+      confirmedByUser: false,
+    });
+
+    await ocrReceiptLineRepository.create({
+      ocrProcessId: ocrProc2.id,
+      originalText: 'CREMA SPALMABLE NOCCIOLA 350G 3.99',
+      description: 'CREMA SPALMABLE NOCCIOLA 350G',
+      quantity: 1,
+      unitPrice: 3.99,
+      lineTotal: 3.99,
+      confidence: 85,
+      reviewStatus: 'pending',
+    });
+
+    const proposal2 = await productClassificationService.classifyReceiptLines(ocrProc2.id);
+    expect(proposal2.lineProposals[0].matchedProduct?.id).toBe(products[0].id);
+    expect(proposal2.lineProposals[0].matchType).toBe('exact_alias');
+    expect(proposal2.lineProposals[0].confidenceLevel).toBe('exact');
+  });
+
+  it('12. Punto 9: Anti-duplicazione - Se un prodotto con stesso nome normalizzato esiste, evita la duplicazione', async () => {
+    // Prodotto già esistente
+    const existing = await productRepository.create({
+      displayName: 'Yogurt Greco 0% 150g',
+      normalizedName: 'YOGURT GRECO 0 150G',
+    });
+
+    const ocrProc = await ocrProcessRepository.create({
+      attachmentId: 'att-12',
+      status: 'completed',
+      confirmationRequired: true,
+      confirmedByUser: false,
+    });
+
+    const line = await ocrReceiptLineRepository.create({
+      ocrProcessId: ocrProc.id,
+      originalText: 'PROMO YOGURT GRECO 0 150G 1.10',
+      description: 'PROMO YOGURT GRECO 0 150G',
+      quantity: 1,
+      unitPrice: 1.1,
+      lineTotal: 1.1,
+      confidence: 80,
+      reviewStatus: 'pending',
+    });
+
+    // L'utente seleziona "Crea nuovo prodotto", ma il nome normalizzato pulito corrisponde a quello esistente
+    const result = await productClassificationService.confirmReceiptClassifications({
+      ocrProcessId: ocrProc.id,
+      decisions: [
+        {
+          lineId: line.id,
+          originalText: line.originalText,
+          description: 'YOGURT GRECO 0 150G',
+          quantity: 1,
+          unitPrice: 1.1,
+          lineTotal: 1.1,
+          action: 'create_new',
+          newProductDetails: {
+            displayName: 'Yogurt Greco 0% 150g',
+          },
+        },
+      ],
+    });
+
+    // Non crea un duplicato, riutilizza il prodotto esistente
+    expect(result.createdProductsCount).toBe(0);
+    const allProducts = await productRepository.getAll();
+    expect(allProducts.length).toBe(1);
+    expect(allProducts[0].id).toBe(existing.id);
+  });
 });

@@ -48,6 +48,13 @@ export interface ProposedCategoryInfo {
   isDefaultUnclassified?: boolean;
 }
 
+export type ConfidenceLevel =
+  | 'exact'
+  | 'high_confidence'
+  | 'possible'
+  | 'new_product'
+  | 'unresolved';
+
 export interface ProposedNewProductInfo {
   normalizedName: string;
   displayName: string;
@@ -69,6 +76,7 @@ export interface ClassificationMatchResult {
   matchedProduct: Product | null;
   matchedAlias: ProductAlias | null;
   confidence: number;
+  confidenceLevel: ConfidenceLevel;
   matchType: MatchType;
   proposedCategory: ProposedCategoryInfo | null;
   proposedSubcategory: ProposedCategoryInfo | null;
@@ -102,4 +110,35 @@ export interface ReceiptClassificationProposal {
   newProductCount: number;
   conflictCount: number;
   isProvisional: true;
+}
+
+export interface LineClassificationDecision {
+  lineId?: EntityId;
+  originalText: string;
+  description: string;
+  quantity: number;
+  unitPrice: number;
+  lineTotal: number;
+  confidence?: number;
+  action: 'link_existing' | 'create_new' | 'unlinked';
+  productId?: string | null;
+  newProductDetails?: {
+    displayName: string;
+    brand?: string | null;
+    barcode?: string | null;
+    unitOfMeasure?: string | null;
+    categoryId?: string | null;
+    subcategoryId?: string | null;
+  };
+  categoryId?: string | null;
+  subcategoryId?: string | null;
+}
+
+export interface ConfirmReceiptClassificationParams {
+  ocrProcessId: EntityId;
+  supplierId?: string | null;
+  supplierName?: string | null;
+  expenseDate?: string | null;
+  documentTotal?: number | null;
+  decisions: LineClassificationDecision[];
 }

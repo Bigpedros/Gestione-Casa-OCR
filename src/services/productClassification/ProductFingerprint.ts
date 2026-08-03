@@ -136,6 +136,17 @@ export class ProductFingerprintService {
   }
 
   /**
+   * Genera un nome normalizzato pulito per il catalogo prodotti, rimuovendo prefissi e rumore OCR
+   */
+  public static computeCleanNormalizedName(text: string): string {
+    const norm = this.normalizeText(text);
+    if (!norm) return '';
+    const tokens = norm.split(' ').filter((t) => t.length > 0);
+    const cleaned = tokens.filter((t) => !STOPWORDS.has(t) || t === 'DI' || t === 'CON' || t === 'IN');
+    return cleaned.length > 0 ? cleaned.join(' ') : norm;
+  }
+
+  /**
    * Estrae eventuali codici EAN/GTIN (8, 12, 13 o 14 cifre consecutive)
    */
   public static extractBarcode(text: string): string | null {

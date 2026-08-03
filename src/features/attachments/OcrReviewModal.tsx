@@ -33,7 +33,6 @@ import {
   supplierRepository,
   productRepository,
   categoryRepository,
-  auditLogRepository,
 } from '../../repositories';
 import { productClassificationService } from '../../services/productClassification/ProductClassificationService';
 import { receiptParserService } from '../../services/ocrParser/receiptParserService';
@@ -52,6 +51,9 @@ import type {
 import type {
   ReceiptClassificationProposal,
   ClassificationMatchResult,
+  ConfidenceLevel,
+  CandidateMatch,
+  LineClassificationDecision,
 } from '../../services/productClassification/types';
 
 export interface OcrReviewModalProps {
@@ -76,6 +78,8 @@ export interface EditableReviewLine {
   categoryId: string | null;
   subcategoryId: string | null;
   // Proposal details
+  confidenceLevel?: ConfidenceLevel;
+  candidateMatches?: CandidateMatch[];
   matchedProduct?: Product | null;
   proposedCategoryName?: string;
   proposedSubcategoryName?: string;
@@ -83,6 +87,8 @@ export interface EditableReviewLine {
   conflictDetails?: string;
   warnings?: string[];
   isNewRow?: boolean;
+  actionMode?: 'link_existing' | 'create_new' | 'unlinked';
+  newProductDisplayName?: string;
 }
 
 export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
@@ -275,6 +281,16 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
         const catId = prop?.proposedCategory?.id || null;
         const subcatId = prop?.proposedSubcategory?.id || null;
 
+        const matchedProd = prop?.matchedProduct || null;
+        const initialProdId = line.productId || matchedProd?.id || null;
+
+        let initialActionMode: 'link_existing' | 'create_new' | 'unlinked' = 'unlinked';
+        if (initialProdId) {
+          initialActionMode = 'link_existing';
+        } else if (prop?.proposedNewProduct) {
+          initialActionMode = 'create_new';
+        }
+
         return {
           id: line.id,
           ocrProcessId: line.ocrProcessId,
@@ -285,16 +301,20 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
           lineTotal: line.lineTotal || 0,
           confidence: line.confidence || 80,
           reviewStatus: line.reviewStatus || 'pending',
-          productId: line.productId || prop?.matchedProduct?.id || null,
+          productId: initialProdId,
           categoryId: catId,
           subcategoryId: subcatId,
-          matchedProduct: prop?.matchedProduct || null,
+          confidenceLevel: prop?.confidenceLevel || (initialProdId ? 'exact' : 'new_product'),
+          candidateMatches: prop?.candidateMatches || [],
+          matchedProduct: matchedProd,
           proposedCategoryName: prop?.proposedCategory?.name,
           proposedSubcategoryName: prop?.proposedSubcategory?.name,
           hasConflict: prop?.hasConflict || false,
           conflictDetails: prop?.conflictDetails,
           warnings: prop?.warnings || [],
           isNewRow: false,
+          actionMode: initialActionMode,
+          newProductDisplayName: prop?.proposedNewProduct?.displayName || line.description || line.originalText,
         };
       });
 
@@ -457,7 +477,7 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
     }
   };
 
-  // Confirm Review (Mark confirmedByUser: true without creating Expense yet)
+  // Confirm Review (Mark confirmedByUser: true, learn aliases and create products safely)
   const handleConfirmReview = async () => {
     if (!ocrProcess) return;
     setIsSaving(true);
@@ -469,16 +489,7 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
           ? newSupplierName.trim()
           : suppliers.find((s) => s.id === selectedSupplierId)?.name || detectedSupplierName;
 
-      // 1. Update OCRProcess: set confirmedByUser = true
-      await ocrProcessRepository.update(ocrProcess.id, {
-        detectedSupplier: finalSupplierName || null,
-        detectedDate: expenseDate || null,
-        detectedTotal: documentTotal || null,
-        status: 'completed',
-        confirmedByUser: true,
-      });
-
-      // 2. Update OCR receipt lines: set reviewStatus = 'confirmed' or 'modified'
+      // Clean up deleted lines
       const existingDbLines = await ocrReceiptLineRepository.getByOcrProcessId(ocrProcess.id);
       const currentLineIds = new Set(editableLines.map((l) => l.id));
 
@@ -488,55 +499,55 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
         }
       }
 
-      for (const line of editableLines) {
-        const finalStatus: OCRLineReviewStatus =
-          line.reviewStatus === 'modified' ? 'modified' : 'confirmed';
+      // Map line classification decisions
+      const decisions: LineClassificationDecision[] = editableLines.map((line) => {
+        let action: 'link_existing' | 'create_new' | 'unlinked' = line.actionMode || 'unlinked';
 
-        if (line.isNewRow || line.id.startsWith('temp-line-')) {
-          await ocrReceiptLineRepository.create({
-            ocrProcessId: ocrProcess.id,
-            originalText: line.originalText,
-            description: line.description,
-            quantity: line.quantity,
-            unitPrice: line.unitPrice,
-            lineTotal: line.lineTotal,
-            confidence: line.confidence,
-            reviewStatus: finalStatus,
-            productId: line.productId || null,
-          });
-        } else {
-          await ocrReceiptLineRepository.update(line.id, {
-            description: line.description,
-            quantity: line.quantity,
-            unitPrice: line.unitPrice,
-            lineTotal: line.lineTotal,
-            productId: line.productId || null,
-            reviewStatus: finalStatus,
-          });
+        if (line.productId && line.productId !== 'CREATE_NEW') {
+          action = 'link_existing';
+        } else if (line.productId === 'CREATE_NEW' || action === 'create_new') {
+          action = 'create_new';
         }
-      }
 
-      // 3. Update Session status to 'reviewed'
+        return {
+          lineId: line.id,
+          originalText: line.originalText,
+          description: line.description,
+          quantity: line.quantity,
+          unitPrice: line.unitPrice,
+          lineTotal: line.lineTotal,
+          confidence: line.confidence,
+          action,
+          productId: action === 'link_existing' ? line.productId : null,
+          newProductDetails:
+            action === 'create_new'
+              ? {
+                  displayName: line.newProductDisplayName || line.description,
+                  categoryId: line.categoryId || null,
+                  subcategoryId: line.subcategoryId || null,
+                }
+              : undefined,
+          categoryId: line.categoryId || null,
+          subcategoryId: line.subcategoryId || null,
+        };
+      });
+
+      await productClassificationService.confirmReceiptClassifications({
+        ocrProcessId: ocrProcess.id,
+        supplierId: selectedSupplierId === 'new' ? null : selectedSupplierId,
+        supplierName: finalSupplierName,
+        expenseDate,
+        documentTotal,
+        decisions,
+      });
+
+      // Update Session status to 'reviewed'
       if (session) {
         await documentSessionRepository.update(session.id, {
           status: 'reviewed',
         });
       }
 
-      // 4. Audit Log Entry
-      await auditLogRepository.create({
-        entityType: 'ocrProcess',
-        entityId: ocrProcess.id,
-        action: 'update',
-        newValues: {
-          confirmedByUser: true,
-          supplierName: finalSupplierName,
-          total: documentTotal,
-          linesCount: editableLines.length,
-        },
-      });
-
-      // NO EXPENSE / EXPENSEITEM CREATED HERE AS PER STRICT REQUIREMENT
       if (onReviewConfirmed) {
         onReviewConfirmed(ocrProcess.id);
       }
@@ -884,11 +895,36 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
                               # {idx + 1} • Testo OCR: "{line.originalText}"
                             </span>
 
-                            <div className="flex items-center gap-2">
-                              {line.matchedProduct && (
+                            <div className="flex items-center gap-2 flex-wrap">
+                              {/* Confidence Level Badge */}
+                              {line.confidenceLevel === 'exact' && (
                                 <span className="inline-flex items-center gap-1 text-[10px] font-bold text-emerald-700 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950/50 px-2 py-0.5 rounded-md border border-emerald-200 dark:border-emerald-800">
                                   <Package className="w-3 h-3 text-emerald-500" />
-                                  Match: {line.matchedProduct.displayName}
+                                  Match Esatto (100%)
+                                </span>
+                              )}
+                              {line.confidenceLevel === 'high_confidence' && (
+                                <span className="inline-flex items-center gap-1 text-[10px] font-bold text-indigo-700 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-950/50 px-2 py-0.5 rounded-md border border-indigo-200 dark:border-indigo-800">
+                                  <Package className="w-3 h-3 text-indigo-500" />
+                                  Alta Confidenza ({line.confidence}%)
+                                </span>
+                              )}
+                              {line.confidenceLevel === 'possible' && (
+                                <span className="inline-flex items-center gap-1 text-[10px] font-bold text-sky-700 dark:text-sky-300 bg-sky-50 dark:bg-sky-950/50 px-2 py-0.5 rounded-md border border-sky-200 dark:border-sky-800">
+                                  <Package className="w-3 h-3 text-sky-500" />
+                                  Possibile Match ({line.confidence}%)
+                                </span>
+                              )}
+                              {line.confidenceLevel === 'new_product' && (
+                                <span className="inline-flex items-center gap-1 text-[10px] font-bold text-purple-700 dark:text-purple-300 bg-purple-50 dark:bg-purple-950/50 px-2 py-0.5 rounded-md border border-purple-200 dark:border-purple-800">
+                                  <Plus className="w-3 h-3 text-purple-500" />
+                                  Proposto come Nuovo Prodotto
+                                </span>
+                              )}
+                              {line.confidenceLevel === 'unresolved' && (
+                                <span className="inline-flex items-center gap-1 text-[10px] font-bold text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-950/50 px-2 py-0.5 rounded-md border border-amber-200 dark:border-amber-800">
+                                  <AlertTriangle className="w-3 h-3 text-amber-500" />
+                                  Da Verificare
                                 </span>
                               )}
 
@@ -904,7 +940,7 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
                               <button
                                 type="button"
                                 onClick={() => handleDeleteLine(line.id)}
-                                className="p-1 text-slate-400 hover:text-rose-600 dark:hover:text-rose-400 rounded-md"
+                                className="p-1 text-slate-400 hover:text-rose-600 dark:hover:text-rose-400 rounded-md ml-auto"
                                 title="Elimina riga"
                               >
                                 <Trash2 className="w-3.5 h-3.5" />
@@ -917,7 +953,7 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
                             {/* Descrizione (5 cols) */}
                             <div className="sm:col-span-5">
                               <label className="block text-[10px] font-semibold text-slate-500 mb-0.5">
-                                Descrizione Articolo
+                                Descrizione Articolo (da scontrino)
                               </label>
                               <input
                                 type="text"
@@ -979,17 +1015,58 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
                                 <Package className="w-3 h-3 text-indigo-500" /> Prodotto Associato
                               </label>
                               <select
-                                value={line.productId || ''}
-                                onChange={(e) => handleLineChange(line.id, 'productId', e.target.value || null)}
+                                value={line.productId || (line.actionMode === 'create_new' ? 'CREATE_NEW' : '')}
+                                onChange={(e) => {
+                                  const val = e.target.value;
+                                  if (val === 'CREATE_NEW') {
+                                    handleLineChange(line.id, 'productId', null);
+                                    handleLineChange(line.id, 'actionMode', 'create_new');
+                                  } else if (val) {
+                                    handleLineChange(line.id, 'productId', val);
+                                    handleLineChange(line.id, 'actionMode', 'link_existing');
+                                  } else {
+                                    handleLineChange(line.id, 'productId', null);
+                                    handleLineChange(line.id, 'actionMode', 'unlinked');
+                                  }
+                                }}
                                 className="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl px-2.5 py-1.5 font-medium text-slate-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-indigo-500"
                               >
-                                <option value="">Nessun prodotto (Nuova voce provvisoria)</option>
-                                {products.map((p) => (
-                                  <option key={p.id} value={p.id}>
-                                    {p.displayName} {p.brand ? `(${p.brand})` : ''}
-                                  </option>
-                                ))}
+                                <option value="">Nessun prodotto (Incollegato / Provvisorio)</option>
+                                <option value="CREATE_NEW">➕ Crea nuovo prodotto nel catalogo</option>
+                                {line.candidateMatches && line.candidateMatches.length > 0 && (
+                                  <optgroup label="Candidati consigliati dall'algoritmo">
+                                    {line.candidateMatches.map((c) => (
+                                      <option key={c.product.id} value={c.product.id}>
+                                        {c.product.displayName} ({c.score}% match)
+                                      </option>
+                                    ))}
+                                  </optgroup>
+                                )}
+                                <optgroup label="Tutti i prodotti in catalogo">
+                                  {products.map((p) => (
+                                    <option key={p.id} value={p.id}>
+                                      {p.displayName} {p.brand ? `(${p.brand})` : ''}
+                                    </option>
+                                  ))}
+                                </optgroup>
                               </select>
+
+                              {line.actionMode === 'create_new' && (
+                                <div className="mt-2 p-2 bg-purple-50/70 dark:bg-purple-950/30 border border-purple-200 dark:border-purple-800 rounded-xl space-y-1">
+                                  <label className="block text-[10px] font-bold text-purple-800 dark:text-purple-300">
+                                    Nome da salvare in catalogo:
+                                  </label>
+                                  <input
+                                    type="text"
+                                    value={line.newProductDisplayName || line.description}
+                                    onChange={(e) => handleLineChange(line.id, 'newProductDisplayName', e.target.value)}
+                                    className="w-full bg-white dark:bg-slate-900 border border-purple-300 dark:border-purple-700 rounded-lg px-2 py-1 text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-purple-500 font-semibold"
+                                  />
+                                  <span className="block text-[10px] text-purple-600 dark:text-purple-400 italic">
+                                    Verrà creato nel catalogo solo alla conferma, evitando duplicati.
+                                  </span>
+                                </div>
+                              )}
                             </div>
 
                             {/* Category Selector */}

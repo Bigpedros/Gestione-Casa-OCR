@@ -1039,6 +1039,35 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
                             </span>
 
                             <div className="flex items-center gap-2 flex-wrap">
+                              {/* Suspicious Line Badge */}
+                              {(line.unitPrice === 0 || (line.warnings && line.warnings.includes('prezzo_riga_non_rilevato'))) && (
+                                <span className="inline-flex items-center gap-1 text-[10px] font-bold text-amber-800 dark:text-amber-200 bg-amber-100 dark:bg-amber-900/60 px-2 py-0.5 rounded-md border border-amber-300 dark:border-amber-700">
+                                  <AlertTriangle className="w-3 h-3 text-amber-600" />
+                                  Riga Sospetta (Prezzo Mancante)
+                                </span>
+                              )}
+
+                              {/* Discount / Promo Badge */}
+                              {(line.lineTotal < 0 || /SCONTO|PROMO|ABBUONO|COUPON|BUONO/i.test(line.description) || (line.warnings && line.warnings.includes('DISCOUNT_LINE'))) && (
+                                <span className="inline-flex items-center gap-1 text-[10px] font-bold text-teal-800 dark:text-teal-200 bg-teal-50 dark:bg-teal-950/60 px-2 py-0.5 rounded-md border border-teal-200 dark:border-teal-800">
+                                  Sconto / Promozione
+                                </span>
+                              )}
+
+                              {/* Negative Amount / Return Badge */}
+                              {(line.lineTotal < 0 || /RESO|STORNO|RESTITUITO/i.test(line.description)) && (
+                                <span className="inline-flex items-center gap-1 text-[10px] font-bold text-rose-800 dark:text-rose-200 bg-rose-50 dark:bg-rose-950/60 px-2 py-0.5 rounded-md border border-rose-200 dark:border-rose-800">
+                                  Reso / Storno (Importo Negativo)
+                                </span>
+                              )}
+
+                              {/* Unclassified Badge */}
+                              {(!line.categoryId || line.categoryId === 'cat-unclassified' || line.proposedCategoryName?.toLowerCase().includes('classificare')) && (
+                                <span className="inline-flex items-center gap-1 text-[10px] font-bold text-slate-700 dark:text-slate-300 bg-slate-100 dark:bg-slate-800 px-2 py-0.5 rounded-md border border-slate-300 dark:border-slate-700">
+                                  Da Classificare
+                                </span>
+                              )}
+
                               {/* Confidence Level Badge */}
                               {line.confidenceLevel === 'exact' && (
                                 <span className="inline-flex items-center gap-1 text-[10px] font-bold text-emerald-700 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950/50 px-2 py-0.5 rounded-md border border-emerald-200 dark:border-emerald-800">

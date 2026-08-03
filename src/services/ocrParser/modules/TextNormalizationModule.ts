@@ -45,7 +45,7 @@ export class TextNormalizationModule {
     let normalizedLines = text
       .split(/\r?\n/)
       .map((line) => line.trim().replace(/[ \t]+/g, ' '))
-      .filter((line) => line.length > 0);
+      .filter((line) => line.length > 0 && !/^[*=\-_.~#]+$/.test(line));
 
     // 5. Rimozione intestazioni/piè di pagina identici duplicati su scontrini lunghi o multipagina
     const deDuplicatedLines = this.deduplicateRepeatedHeaders(normalizedLines);
@@ -67,11 +67,20 @@ export class TextNormalizationModule {
   }
 
   /**
-   * Converte una stringa numerica italiana (es. "24,50", "1.234,56", "24.50") in un numero float valido.
+   * Converte una stringa numerica italiana (es. "24,50", "1.234,56", "24.50", "-2,50", "2,50-") in un numero float valido.
    */
   public static parseItalianNumber(valStr: string): number | null {
     if (!valStr) return null;
     let s = valStr.trim().replace(/€/g, '').replace(/\s+/g, '');
+
+    let isNegative = false;
+    if (s.endsWith('-')) {
+      isNegative = true;
+      s = s.slice(0, -1);
+    } else if (s.startsWith('-')) {
+      isNegative = true;
+      s = s.slice(1);
+    }
 
     // Correzione OCR mirata nei numeri (es. O/o -> 0, I/l/i -> 1, S/s -> 5, B -> 8)
     s = s.replace(/^[Oo]/, '0').replace(/^[Ii|l]/, '1');
@@ -91,7 +100,8 @@ export class TextNormalizationModule {
     }
 
     const n = parseFloat(s);
-    return isNaN(n) ? null : n;
+    if (isNaN(n)) return null;
+    return isNegative ? -Math.abs(n) : n;
   }
 
   private static deduplicateRepeatedHeaders(lines: string[]): string[] {

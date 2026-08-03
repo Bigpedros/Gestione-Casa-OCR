@@ -66,8 +66,9 @@ export class ReceiptConsistencyValidator {
 
     // 5. Coerenza Quantità x Prezzo Unitario vs Totale Riga
     for (const line of draft.lines) {
-      if (line.quantity > 0 && line.unitPrice > 0 && line.lineTotal !== 0) {
-        const expectedLineTotal = Math.round(line.quantity * line.unitPrice * 100) / 100;
+      if (line.quantity > 0 && line.unitPrice > 0 && line.lineTotal !== 0 && !line.isNegative) {
+        const disc = line.discount || 0;
+        const expectedLineTotal = Math.round((line.quantity * line.unitPrice - disc) * 100) / 100;
         const lineDiff = Math.abs(Math.abs(line.lineTotal) - expectedLineTotal);
 
         if (lineDiff > MONEY_TOLERANCE) {
@@ -75,7 +76,7 @@ export class ReceiptConsistencyValidator {
           line.warnings.push('QTY_PRICE_MISMATCH');
           warnings.push({
             code: 'QTY_PRICE_MISMATCH',
-            message: `Riga "${line.normalizedDescription}": Quantità (${line.quantity}) x Prezzo (${line.unitPrice.toFixed(2)} €) non corrisponde al totale riga (${line.lineTotal.toFixed(2)} €)`,
+            message: `Riga "${line.normalizedDescription}": Quantità (${line.quantity}) x Prezzo (${line.unitPrice.toFixed(2)} €) - Sconto (${disc.toFixed(2)} €) non corrisponde al totale riga (${line.lineTotal.toFixed(2)} €)`,
             severity: 'low',
             field: 'lines',
           });

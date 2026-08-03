@@ -354,6 +354,10 @@ export class ProductClassificationService {
     const proposedBrand = lineFp.brand;
     const proposedUom = lineFp.unitOfMeasure;
 
+    const isAdjustmentOrDiscountLine =
+      line.lineTotal < 0 ||
+      /SCONTO|ABBUONO|PROMO|PROMOZIONE|COUPON|BUONO|ARROTONDAMENTO|RESO|STORNO|RESTITUITO/i.test(line.description || line.originalText);
+
     return {
       lineId: line.id,
       originalDescription: line.originalText,
@@ -363,23 +367,25 @@ export class ProductClassificationService {
       matchedProduct: null,
       matchedAlias: null,
       confidence: topCandidate ? topCandidate.score : 0,
-      confidenceLevel,
+      confidenceLevel: isAdjustmentOrDiscountLine ? 'unresolved' : confidenceLevel,
       matchType: 'none',
       proposedCategory: defaultUnclassifiedCat,
       proposedSubcategory: null,
-      proposedNewProduct: {
-        normalizedName: normDesc,
-        displayName: line.description || line.originalText,
-        brand: proposedBrand,
-        barcode: lineFp.barcode,
-        unitOfMeasure: proposedUom,
-        categoryId: defaultUnclassifiedCat.id,
-        subcategoryId: null,
-        suggestedCategoryName: 'Da classificare',
-        reason: topCandidate
-          ? `Punteggio del candidato più simile insufficiente (${topCandidate.score}%)`
-          : 'Nessuna corrispondenza trovata nel catalogo prodotti',
-      },
+      proposedNewProduct: isAdjustmentOrDiscountLine
+        ? null
+        : {
+            normalizedName: normDesc,
+            displayName: line.description || line.originalText,
+            brand: proposedBrand,
+            barcode: lineFp.barcode,
+            unitOfMeasure: proposedUom,
+            categoryId: defaultUnclassifiedCat.id,
+            subcategoryId: null,
+            suggestedCategoryName: 'Da classificare',
+            reason: topCandidate
+              ? `Punteggio del candidato più simile insufficiente (${topCandidate.score}%)`
+              : 'Nessuna corrispondenza trovata nel catalogo prodotti',
+          },
       candidateMatches: uniqueCandidates,
       hasConflict,
       conflictType,

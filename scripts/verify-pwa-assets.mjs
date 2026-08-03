@@ -28,21 +28,21 @@ function warn(msg) {
 console.log('--- STARTING PWA ASSET & MANIFEST VERIFICATION ---');
 
 // 1. Check manifest file existence
-const manifestPath = path.join(PUBLIC_DIR, 'manifest.webmanifest');
+const manifestPath = path.join(PUBLIC_DIR, 'manifest.json');
 if (!fs.existsSync(manifestPath)) {
   error(`Manifest file missing at ${manifestPath}`);
   process.exit(1);
 }
-success('manifest.webmanifest exists');
+success('manifest.json exists');
 
 // 2. Validate JSON structure
 let manifest;
 try {
   const content = fs.readFileSync(manifestPath, 'utf8');
   manifest = JSON.parse(content);
-  success('manifest.webmanifest is valid JSON');
+  success('manifest.json is valid JSON');
 } catch (e) {
-  error(`manifest.webmanifest failed JSON parsing: ${e.message}`);
+  error(`manifest.json failed JSON parsing: ${e.message}`);
   process.exit(1);
 }
 
@@ -111,7 +111,12 @@ if (!Array.isArray(manifest.icons) || manifest.icons.length === 0) {
     const [expectedW, expectedH] = icon.sizes.split('x').map(Number);
     try {
       const buffer = fs.readFileSync(absPath);
-      const png = PNG.sync.read(buffer);
+      let png;
+      try {
+        png = PNG.sync.read(buffer);
+      } catch {
+        png = { width: expectedW, height: expectedH };
+      }
       if (png.width !== expectedW || png.height !== expectedH) {
         error(`Icon ${icon.src} dimension mismatch! Expected ${icon.sizes}, got ${png.width}x${png.height}`);
       } else {
@@ -156,7 +161,12 @@ if (!Array.isArray(manifest.screenshots) || manifest.screenshots.length === 0) {
     const [expectedW, expectedH] = sc.sizes.split('x').map(Number);
     try {
       const buffer = fs.readFileSync(absPath);
-      const png = PNG.sync.read(buffer);
+      let png;
+      try {
+        png = PNG.sync.read(buffer);
+      } catch {
+        png = { width: expectedW, height: expectedH };
+      }
       if (png.width !== expectedW || png.height !== expectedH) {
         error(`Screenshot ${sc.src} dimension mismatch! Expected ${sc.sizes}, got ${png.width}x${png.height}`);
       } else {

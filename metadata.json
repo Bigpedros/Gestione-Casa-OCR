@@ -1,6 +1,6 @@
 {
   "name": "Gestione Casa",
-  "description": "PWA local-first per la gestione economica della casa e del nucleo familiare.",
+  "description": "PWA local-first per la gestione economica della casa e del nucleo familiare, con acquisizione e revisione OCR di scontrini e documenti.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

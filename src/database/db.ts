@@ -55,7 +55,7 @@ export class GestioneCasaDatabase extends Dexie {
   documentPageSegments!: EntityTable<DocumentPageSegment, 'id'>;
 
   constructor() {
-    super('gestioneCasaOCR');
+    super('gestioneCasa');
 
     this.version(2).stores({
       settings: 'id, userMode',

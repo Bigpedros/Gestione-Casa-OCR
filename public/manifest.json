@@ -1,8 +1,8 @@
 {
- "id": "/gestione-casa-ocr",
+  "id": "/",
   "name": "Gestione Casa",
   "short_name": "Gestione Casa",
- "description": "PWA local-first per la gestione economica della casa e del nucleo familiare, con acquisizione e revisione OCR di scontrini e documenti.",
+  "description": "PWA local-first per la gestione economica della casa e del nucleo familiare.",
   "lang": "it-IT",
   "dir": "ltr",
   "start_url": "/",

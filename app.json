@@ -1,7 +1,7 @@
 {
   "app": {
-    "name": "Gestione Casa",
-    "shortName": "Gestione Casa",
+    "name": "Gestione Casa OCR",
+    "shortName": "Casa OCR",
     "version": "1.0.0",
     "description": "PWA local-first per la gestione economica della casa e del nucleo familiare, con acquisizione e revisione OCR di scontrini e documenti.",
     "repository": "Gestione-Casa-OCR",

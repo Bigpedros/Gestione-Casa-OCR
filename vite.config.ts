@@ -17,7 +17,7 @@ export default defineConfig({
         'icons/apple-touch-icon.png',
         'icons/*.png',
         'screenshots/*.png',
-        'manifest.webmanifest',
+        'manifest.json',
         'robots.txt'
       ],
       manifest: false,

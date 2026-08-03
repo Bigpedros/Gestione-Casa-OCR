@@ -133,6 +133,7 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('debitCard');
   const [editableLines, setEditableLines] = useState<EditableReviewLine[]>([]);
   const [existingExpense, setExistingExpense] = useState<Expense | null>(null);
+  const [isDiscrepancyApproved, setIsDiscrepancyApproved] = useState<boolean>(false);
 
   // Load database entities & initialize review draft
   const loadReviewData = useCallback(async () => {
@@ -658,6 +659,7 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
         documentTotal,
         decisions,
         deletedLineIds,
+        allowDiscrepancy: isDiscrepancyApproved,
       });
 
       setExistingExpense(createdExp);
@@ -968,6 +970,31 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
                     </select>
                   </div>
                 </div>
+
+                {/* Discrepancy Alert Box */}
+                {documentTotal > 0 &&
+                  editableLines.length > 0 &&
+                  Math.abs(documentTotal - Math.round(editableLines.reduce((s, l) => s + (l.lineTotal || 0), 0) * 100) / 100) > 0.01 && (
+                    <div className="p-3 bg-amber-50 dark:bg-amber-950/40 rounded-2xl border border-amber-200 dark:border-amber-800 text-xs text-amber-900 dark:text-amber-200 space-y-2 mt-3">
+                      <div className="flex items-center gap-2 font-bold">
+                        <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+                        <span>Discrepanza Rilevata negli Importi</span>
+                      </div>
+                      <p className="text-[11px] leading-relaxed">
+                        Il totale dello scontrino (€ {documentTotal.toFixed(2)}) differisce dalla somma delle righe (€ {(Math.round(editableLines.reduce((s, l) => s + (l.lineTotal || 0), 0) * 100) / 100).toFixed(2)}).
+                        Differenza: € {Math.abs(documentTotal - Math.round(editableLines.reduce((s, l) => s + (l.lineTotal || 0), 0) * 100) / 100).toFixed(2)}.
+                      </p>
+                      <label className="flex items-center gap-2 pt-1 font-semibold cursor-pointer text-amber-950 dark:text-amber-100">
+                        <input
+                          type="checkbox"
+                          checked={isDiscrepancyApproved}
+                          onChange={(e) => setIsDiscrepancyApproved(e.target.checked)}
+                          className="rounded text-amber-600 focus:ring-amber-500 w-4 h-4"
+                        />
+                        <span>Confermo la discrepanza e approvo il totale dello scontrino</span>
+                      </label>
+                    </div>
+                  )}
               </div>
 
               {/* Line Items Table Box */}

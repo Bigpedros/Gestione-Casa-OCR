@@ -841,13 +841,27 @@ export class ProductClassificationService {
         const competenceYear = isNaN(d.getFullYear()) ? new Date().getFullYear() : d.getFullYear();
         const competenceMonth = isNaN(d.getMonth()) ? new Date().getMonth() + 1 : d.getMonth() + 1;
 
-        const lineTotalSum = linesToImport.reduce((sum, line) => sum + (line.lineTotal || 0), 0);
+        const lineTotalSum = Math.round(linesToImport.reduce((sum, line) => sum + (line.lineTotal || 0), 0) * 100) / 100;
         const totalAmount =
           typeof paramDocumentTotal === 'number' && paramDocumentTotal > 0
-            ? paramDocumentTotal
+            ? Math.round(paramDocumentTotal * 100) / 100
             : typeof ocrProc.detectedTotal === 'number' && ocrProc.detectedTotal > 0
-            ? ocrProc.detectedTotal
-            : Math.round(lineTotalSum * 100) / 100;
+            ? Math.round(ocrProc.detectedTotal * 100) / 100
+            : lineTotalSum;
+
+        // Punto 12 (Sezione 6): Blocco in caso di discrepanza non approvata
+        if (
+          linesToImport.length > 0 &&
+          totalAmount > 0 &&
+          lineTotalSum > 0 &&
+          Math.abs(totalAmount - lineTotalSum) > 0.01 &&
+          !params.allowDiscrepancy
+        ) {
+          const diff = Math.abs(totalAmount - lineTotalSum).toFixed(2);
+          throw new Error(
+            `Discrepanza di € ${diff} tra il totale del documento (€ ${totalAmount.toFixed(2)}) e la somma delle righe (€ ${lineTotalSum.toFixed(2)}). Conferma la discrepanza o modifica gli importi per proseguire.`
+          );
+        }
 
         // Categorie
         const allCategories = await categoryRepository.getAll();
@@ -916,21 +930,29 @@ export class ProductClassificationService {
           } as any,
         };
 
-        const expenseItems: ExpenseItem[] = linesToImport.map((line, idx) => ({
-          id: `exp-item-${Date.now()}-${idx}-${Math.random().toString(36).substring(2, 7)}`,
-          expenseId,
-          description: line.description || line.originalText,
-          quantity: line.quantity || 1,
-          unitPrice: line.unitPrice || line.lineTotal || 0,
-          total: line.lineTotal || 0,
-          categoryId: mainCategoryId!,
-          subcategoryId: mainSubcategoryId!,
-          classification: 'necessary',
-          classificationSource: line.reviewStatus === 'modified' ? 'userCorrected' : 'automatic',
-          productId: line.productId || null,
-          ocrReceiptLineId: line.id,
-          metadata: { createdAt: now, updatedAt: now, version: 1 },
-        }));
+        const decisionMap = new Map(decisions?.map((d) => [d.lineId || d.originalText, d]));
+
+        const expenseItems: ExpenseItem[] = linesToImport.map((line, idx) => {
+          const dec = decisionMap.get(line.id) || decisionMap.get(line.originalText);
+          const itemCatId = dec?.categoryId || (line as any).categoryId || mainCategoryId!;
+          const itemSubcatId = dec?.subcategoryId || (line as any).subcategoryId || mainSubcategoryId!;
+
+          return {
+            id: `exp-item-${Date.now()}-${idx}-${Math.random().toString(36).substring(2, 7)}`,
+            expenseId,
+            description: line.description || line.originalText,
+            quantity: line.quantity || 1,
+            unitPrice: line.unitPrice || line.lineTotal || 0,
+            total: line.lineTotal || 0,
+            categoryId: itemCatId,
+            subcategoryId: itemSubcatId,
+            classification: 'necessary',
+            classificationSource: line.reviewStatus === 'modified' ? 'userCorrected' : 'automatic',
+            productId: line.productId || null,
+            ocrReceiptLineId: line.id,
+            metadata: { createdAt: now, updatedAt: now, version: 1 },
+          };
+        });
 
         // Scrittura spesa e righe
         await db.expenses.add(expense);

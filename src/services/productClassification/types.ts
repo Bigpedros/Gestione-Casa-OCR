@@ -157,4 +157,5 @@ export interface CreateAccountingRegistrationParams {
   documentTotal?: number | null;
   decisions?: LineClassificationDecision[];
   deletedLineIds?: EntityId[];
+  allowDiscrepancy?: boolean;
 }

@@ -1,0 +1,97 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gestione-casa.local/schema/v2/seed-categories.json",
+  "title": "Categorie iniziali",
+  "type": "array",
+  "default": [
+    {
+      "name": "Alimentazione",
+      "subcategories": [
+        "Supermercato",
+        "Panetteria",
+        "Macelleria",
+        "Frutta e verdura",
+        "Ristoranti e bar"
+      ]
+    },
+    {
+      "name": "Casa",
+      "subcategories": [
+        "Affitto o mutuo",
+        "Condominio",
+        "Utenze",
+        "Manutenzione",
+        "Arredamento",
+        "Pulizia"
+      ]
+    },
+    {
+      "name": "Trasporti",
+      "subcategories": [
+        "Carburante",
+        "Trasporto pubblico",
+        "Manutenzione veicolo",
+        "Assicurazione",
+        "Pedaggi e parcheggi"
+      ]
+    },
+    {
+      "name": "Salute",
+      "subcategories": [
+        "Farmaci",
+        "Visite mediche",
+        "Esami",
+        "Dentista",
+        "Occhiali e lenti"
+      ]
+    },
+    {
+      "name": "Tecnologia",
+      "subcategories": [
+        "Internet",
+        "Telefonia",
+        "Hardware",
+        "Software",
+        "Abbonamenti digitali"
+      ]
+    },
+    {
+      "name": "Famiglia",
+      "subcategories": [
+        "Scuola",
+        "Bambini",
+        "Abbigliamento",
+        "Tempo libero",
+        "Regali",
+        "Animali domestici"
+      ]
+    },
+    {
+      "name": "Banca e finanza",
+      "subcategories": [
+        "Commissioni bancarie",
+        "Imposte",
+        "Assicurazioni",
+        "Debiti",
+        "Interessi"
+      ]
+    },
+    {
+      "name": "Progetti",
+      "subcategories": [
+        "Acquisti progetto",
+        "Quote progetto",
+        "Materiali",
+        "Servizi"
+      ]
+    },
+    {
+      "name": "Varie",
+      "subcategories": [
+        "Spese impreviste",
+        "Beneficenza",
+        "Altro"
+      ]
+    }
+  ]
+}

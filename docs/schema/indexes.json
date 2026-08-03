@@ -1,0 +1,80 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gestione-casa.local/schema/v2/indexes.json",
+  "title": "Indici Dexie",
+  "type": "object",
+  "default": {
+    "contributors": [
+      "id",
+      "name",
+      "active"
+    ],
+    "income": [
+      "id",
+      "contributorId",
+      "month",
+      "status",
+      "[month+status]"
+    ],
+    "expenses": [
+      "id",
+      "date",
+      "categoryId",
+      "classification",
+      "status",
+      "supplierId",
+      "projectId"
+    ],
+    "expenseItems": [
+      "id",
+      "expenseId"
+    ],
+    "categories": [
+      "id",
+      "parentId",
+      "name",
+      "active"
+    ],
+    "suppliers": [
+      "id",
+      "name",
+      "status"
+    ],
+    "fixedExpenses": [
+      "id",
+      "status",
+      "frequency"
+    ],
+    "savingPlans": [
+      "id",
+      "status"
+    ],
+    "projects": [
+      "id",
+      "status",
+      "deadline"
+    ],
+    "attachments": [
+      "id",
+      "entityType",
+      "entityId",
+      "deletedAt"
+    ],
+    "reports": [
+      "id",
+      "month",
+      "status"
+    ],
+    "extraBudget": [
+      "id",
+      "month",
+      "status"
+    ],
+    "auditLog": [
+      "id",
+      "entityType",
+      "entityId",
+      "timestamp"
+    ]
+  }
+}

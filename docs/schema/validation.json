@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gestione-casa.local/schema/v2/validation.json",
+  "title": "Validazioni comuni",
+  "type": "object",
+  "properties": {
+    "money": {
+      "type": "number",
+      "minimum": 0,
+      "multipleOf": 0.01
+    },
+    "month": {
+      "type": "string",
+      "pattern": "^\\d{4}-(0[1-9]|1[0-2])$"
+    },
+    "uuid": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "maxContributors": {
+      "const": 3
+    },
+    "maxActiveProjects": {
+      "const": 3
+    }
+  }
+}

@@ -1,0 +1,409 @@
+import { describe, it, expect, beforeEach } from 'vitest';
+import { db } from '../database/db';
+import {
+  productRepository,
+  productAliasRepository,
+  supplierRepository,
+  ocrProcessRepository,
+  ocrReceiptLineRepository,
+  categoryRepository,
+} from '../repositories';
+import { productClassificationService } from '../services/productClassification';
+import { seedInitialCategoriesAndSettings } from '../database/seed/seedCategories';
+
+describe('Sistema di Classificazione Automatica Prodotti OCR (TEST-PRODUCT-CLASSIFICATION)', () => {
+  beforeEach(async () => {
+    // Pulizia e reset del database di test per garantire test isolati
+    await db.products.clear();
+    await db.productAliases.clear();
+    await db.suppliers.clear();
+    await db.ocrProcesses.clear();
+    await db.ocrReceiptLines.clear();
+    await db.expenses.clear();
+    await db.expenseItems.clear();
+
+    // Seeding delle categorie di base per il test
+    await seedInitialCategoriesAndSettings();
+  });
+
+  it('1. Riconosce un prodotto già noto tramite nome esatto o normalizzato', async () => {
+    const categories = await categoryRepository.getAll();
+    const foodCategory = categories.find((c) => c.code === 'CAT_FOOD') || categories[0];
+
+    // Crea un prodotto noto in catalogo
+    const product = await productRepository.create({
+      normalizedName: 'LATTE PARZIALMENTE SCREMATO',
+      displayName: 'Latte Parzialmente Scremato 1L',
+      brand: 'PARMALAT',
+      categoryId: foodCategory.id,
+    });
+
+    // Crea processo OCR e riga corrispondente
+    const ocrProc = await ocrProcessRepository.create({
+      attachmentId: 'att-1',
+      status: 'completed',
+      rawText: 'CONAD\nLATTE PARZIALMENTE SCREMATO 1.50',
+      confirmationRequired: true,
+      confirmedByUser: false,
+    });
+
+    await ocrReceiptLineRepository.create({
+      ocrProcessId: ocrProc.id,
+      originalText: 'LATTE PARZIALMENTE SCREMATO 1,50',
+      description: 'LATTE PARZIALMENTE SCREMATO',
+      quantity: 1,
+      unitPrice: 1.5,
+      lineTotal: 1.5,
+      confidence: 90,
+      reviewStatus: 'pending',
+    });
+
+    const proposal = await productClassificationService.classifyReceiptLines(ocrProc.id);
+
+    expect(proposal.knownProductCount).toBe(1);
+    expect(proposal.lineProposals.length).toBe(1);
+
+    const lineProp = proposal.lineProposals[0];
+    expect(lineProp.matchedProduct?.id).toBe(product.id);
+    expect(lineProp.confidence).toBeGreaterThanOrEqual(85);
+    expect(lineProp.proposedCategory?.id).toBe(foodCategory.id);
+    expect(lineProp.proposedNewProduct).toBeNull();
+  });
+
+  it('2. Associa alias differenti allo stesso prodotto (es. LATTE UHT PS -> Latte Parzialmente Scremato)', async () => {
+    const categories = await categoryRepository.getAll();
+    const foodCat = categories[0];
+
+    const product = await productRepository.create({
+      normalizedName: 'LATTE PARZIALMENTE SCREMATO',
+      displayName: 'Latte Parzialmente Scremato UHT 1L',
+      brand: 'PARMALAT',
+      categoryId: foodCat.id,
+    });
+
+    // Crea alias per il prodotto
+    await productAliasRepository.create({
+      productId: product.id,
+      originalText: 'LATTE UHT PS',
+      normalizedText: 'LATTE UHT PS',
+      confidence: 95,
+      confirmedByUser: true,
+    });
+
+    const ocrProc = await ocrProcessRepository.create({
+      attachmentId: 'att-2',
+      status: 'completed',
+      confirmationRequired: true,
+      confirmedByUser: false,
+    });
+
+    await ocrReceiptLineRepository.create({
+      ocrProcessId: ocrProc.id,
+      originalText: 'LATTE UHT PS €1.20',
+      description: 'LATTE UHT PS',
+      quantity: 1,
+      unitPrice: 1.2,
+      lineTotal: 1.2,
+      confidence: 88,
+      reviewStatus: 'pending',
+    });
+
+    const proposal = await productClassificationService.classifyReceiptLines(ocrProc.id);
+
+    expect(proposal.lineProposals.length).toBe(1);
+    const lineProp = proposal.lineProposals[0];
+    expect(lineProp.matchedProduct?.id).toBe(product.id);
+    expect(lineProp.matchedAlias?.originalText).toBe('LATTE UHT PS');
+    expect(lineProp.confidence).toBeGreaterThanOrEqual(90);
+  });
+
+  it('3. Riconosce codici EAN / GTIN con massima priorità (100% confidenza)', async () => {
+    const product = await productRepository.create({
+      normalizedName: 'PASTA SPAGHETTI 500G',
+      displayName: 'Spaghetti n.5 Barilla 500g',
+      barcode: '8076809513722',
+    });
+
+    const ocrProc = await ocrProcessRepository.create({
+      attachmentId: 'att-3',
+      status: 'completed',
+      confirmationRequired: true,
+      confirmedByUser: false,
+    });
+
+    await ocrReceiptLineRepository.create({
+      ocrProcessId: ocrProc.id,
+      originalText: 'BARILLA SPAGHETTI 8076809513722 0.99',
+      description: 'BARILLA SPAGHETTI 8076809513722',
+      quantity: 1,
+      unitPrice: 0.99,
+      lineTotal: 0.99,
+      confidence: 95,
+      reviewStatus: 'pending',
+    });
+
+    const proposal = await productClassificationService.classifyReceiptLines(ocrProc.id);
+    const lineProp = proposal.lineProposals[0];
+
+    expect(lineProp.matchedProduct?.id).toBe(product.id);
+    expect(lineProp.matchType).toBe('exact_barcode');
+    expect(lineProp.confidence).toBe(100);
+  });
+
+  it('4. Resilienza agli errori OCR e refusi tramite Product Fingerprint', async () => {
+    const product = await productRepository.create({
+      normalizedName: 'BISCOTTI GOCCIOTOLE PAVESI 500G',
+      displayName: 'Gocciole Pavesi Chocolate 500g',
+      brand: 'PAVESI',
+    });
+
+    const ocrProc = await ocrProcessRepository.create({
+      attachmentId: 'att-4',
+      status: 'completed',
+      confirmationRequired: true,
+      confirmedByUser: false,
+    });
+
+    // Riga OCR con refuso (es. "GOCOTOLE" invece di "GOCCIOTOLE")
+    await ocrReceiptLineRepository.create({
+      ocrProcessId: ocrProc.id,
+      originalText: 'BISCOTTI GOCOTOLE PAVESI 500G 2.49',
+      description: 'BISCOTTI GOCOTOLE PAVESI 500G',
+      quantity: 1,
+      unitPrice: 2.49,
+      lineTotal: 2.49,
+      confidence: 80,
+      reviewStatus: 'pending',
+    });
+
+    const proposal = await productClassificationService.classifyReceiptLines(ocrProc.id);
+    const lineProp = proposal.lineProposals[0];
+
+    expect(lineProp.matchedProduct?.id).toBe(product.id);
+    expect(lineProp.confidence).toBeGreaterThanOrEqual(60);
+  });
+
+  it('5. Propone un nuovo prodotto provvisorio senza aggiungerlo alla tabella Product se sconosciuto', async () => {
+    const ocrProc = await ocrProcessRepository.create({
+      attachmentId: 'att-5',
+      status: 'completed',
+      confirmationRequired: true,
+      confirmedByUser: false,
+    });
+
+    await ocrReceiptLineRepository.create({
+      ocrProcessId: ocrProc.id,
+      originalText: 'INVENTO OCCHIALI DA SOLE XYZ 49.90',
+      description: 'INVENTO OCCHIALI DA SOLE XYZ',
+      quantity: 1,
+      unitPrice: 49.9,
+      lineTotal: 49.9,
+      confidence: 85,
+      reviewStatus: 'pending',
+    });
+
+    const proposal = await productClassificationService.classifyReceiptLines(ocrProc.id);
+
+    expect(proposal.newProductCount).toBe(1);
+    const lineProp = proposal.lineProposals[0];
+
+    expect(lineProp.matchedProduct).toBeNull();
+    expect(lineProp.proposedNewProduct).not.toBeNull();
+    expect(lineProp.proposedNewProduct?.displayName).toContain('INVENTO OCCHIALI DA SOLE XYZ');
+    expect(lineProp.proposedCategory?.isDefaultUnclassified).toBe(true);
+
+    // TASSATIVO: Nessun record aggiunto alla tabella db.products
+    const allDbProducts = await productRepository.getAll();
+    expect(allDbProducts.length).toBe(0);
+  });
+
+  it('6. Propone un nuovo fornitore provvisorio senza modificare la tabella Supplier se sconosciuto', async () => {
+    const ocrProc = await ocrProcessRepository.create({
+      attachmentId: 'att-6',
+      status: 'completed',
+      detectedSupplier: 'SUPERMERCATO NUOVO INESISTENTE SRL',
+      confirmationRequired: true,
+      confirmedByUser: false,
+    });
+
+    const proposal = await productClassificationService.classifyReceiptLines(ocrProc.id);
+
+    expect(proposal.supplierProposal.isNewSupplier).toBe(true);
+    expect(proposal.supplierProposal.proposedNewSupplier?.name).toBe('SUPERMERCATO NUOVO INESISTENTE SRL');
+
+    // TASSATIVO: La tabella Supplier rimane vuota
+    const suppliers = await supplierRepository.getAll();
+    expect(suppliers.length).toBe(0);
+  });
+
+  it('7. Riconosce il fornitore se già presente e usa la sua categoria predefinita se il prodotto non ne ha una', async () => {
+    const categories = await categoryRepository.getAll();
+    const healthCat = categories.find((c) => c.code === 'CAT_HEALTH') || categories[0];
+
+    const supplier = await supplierRepository.create({
+      name: 'FARMACIA CENTRALE',
+      aliases: ['FARMACIA CENTRALE SRL'],
+      defaultCategoryId: healthCat.id,
+      status: 'confirmed',
+    });
+
+    const productWithoutCategory = await productRepository.create({
+      normalizedName: 'ASPIRINA 500MG 10 COMPRESSE',
+      displayName: 'Aspirina 500mg 10 Cpr',
+      categoryId: null,
+    });
+
+    const ocrProc = await ocrProcessRepository.create({
+      attachmentId: 'att-7',
+      status: 'completed',
+      detectedSupplier: 'FARMACIA CENTRALE',
+      confirmationRequired: true,
+      confirmedByUser: false,
+    });
+
+    await ocrReceiptLineRepository.create({
+      ocrProcessId: ocrProc.id,
+      originalText: 'ASPIRINA 500MG 10 COMPRESSE 5.50',
+      description: 'ASPIRINA 500MG 10 COMPRESSE',
+      quantity: 1,
+      unitPrice: 5.5,
+      lineTotal: 5.5,
+      confidence: 90,
+      reviewStatus: 'pending',
+    });
+
+    const proposal = await productClassificationService.classifyReceiptLines(ocrProc.id);
+
+    expect(proposal.supplierProposal.isNewSupplier).toBe(false);
+    expect(proposal.supplierProposal.matchedSupplier?.id).toBe(supplier.id);
+
+    const lineProp = proposal.lineProposals[0];
+    expect(lineProp.matchedProduct?.id).toBe(productWithoutCategory.id);
+    // Ereditata dal fornitore
+    expect(lineProp.proposedCategory?.id).toBe(healthCat.id);
+  });
+
+  it('8. Gestisce i conflitti per prodotti ambigui e descrizioni molto brevi', async () => {
+    // Crea due prodotti molto simili
+    await productRepository.create({
+      normalizedName: 'LATTE FRESCO PARZIALMENTE SCREMATO 1L',
+      displayName: 'Latte Fresco P.S. 1L',
+    });
+
+    await productRepository.create({
+      normalizedName: 'LATTE UHT PARZIALMENTE SCREMATO 1L',
+      displayName: 'Latte UHT P.S. 1L',
+    });
+
+    const ocrProc = await ocrProcessRepository.create({
+      attachmentId: 'att-8',
+      status: 'completed',
+      confirmationRequired: true,
+      confirmedByUser: false,
+    });
+
+    // Riga 1: Descrizione generica ambigua
+    await ocrReceiptLineRepository.create({
+      ocrProcessId: ocrProc.id,
+      originalText: 'LATTE PARZIALMENTE SCREMATO 1L 1.30',
+      description: 'LATTE PARZIALMENTE SCREMATO 1L',
+      quantity: 1,
+      unitPrice: 1.3,
+      lineTotal: 1.3,
+      confidence: 85,
+      reviewStatus: 'pending',
+    });
+
+    // Riga 2: Descrizione troppo corta ("P.S.")
+    await ocrReceiptLineRepository.create({
+      ocrProcessId: ocrProc.id,
+      originalText: 'P.S. 1.20',
+      description: 'P.S.',
+      quantity: 1,
+      unitPrice: 1.2,
+      lineTotal: 1.2,
+      confidence: 70,
+      reviewStatus: 'pending',
+    });
+
+    const proposal = await productClassificationService.classifyReceiptLines(ocrProc.id);
+
+    expect(proposal.conflictCount).toBeGreaterThan(0);
+    const shortLineProp = proposal.lineProposals.find((l) => l.originalDescription === 'P.S. 1.20');
+    expect(shortLineProp?.hasConflict).toBe(true);
+    expect(shortLineProp?.conflictType).toBe('short_description');
+  });
+
+  it('9. Idempotenza: eseguire la classificazione più volte produce il medesimo risultato senza duplicati', async () => {
+    await productRepository.create({
+      normalizedName: 'PASTA PENNE RIGATE 500G',
+      displayName: 'Penne Rigate 500g',
+    });
+
+    const ocrProc = await ocrProcessRepository.create({
+      attachmentId: 'att-9',
+      status: 'completed',
+      detectedSupplier: 'SUPERMERCATO TEST',
+      confirmationRequired: true,
+      confirmedByUser: false,
+    });
+
+    await ocrReceiptLineRepository.create({
+      ocrProcessId: ocrProc.id,
+      originalText: 'PASTA PENNE RIGATE 500G 0.89',
+      description: 'PASTA PENNE RIGATE 500G',
+      quantity: 1,
+      unitPrice: 0.89,
+      lineTotal: 0.89,
+      confidence: 90,
+      reviewStatus: 'pending',
+    });
+
+    // Prima esecuzione
+    const prop1 = await productClassificationService.classifyReceiptLines(ocrProc.id);
+
+    // Seconda esecuzione
+    const prop2 = await productClassificationService.classifyReceiptLines(ocrProc.id);
+
+    expect(prop1.lineProposals.length).toBe(prop2.lineProposals.length);
+    expect(prop1.lineProposals[0].confidence).toBe(prop2.lineProposals[0].confidence);
+    expect(prop1.lineProposals[0].matchedProduct?.id).toBe(prop2.lineProposals[0].matchedProduct?.id);
+
+    // Verifica assenza di duplicazioni nel DB
+    const productsCount = await db.products.count();
+    const aliasesCount = await db.productAliases.count();
+    const suppliersCount = await db.suppliers.count();
+
+    expect(productsCount).toBe(1);
+    expect(aliasesCount).toBe(0);
+    expect(suppliersCount).toBe(0);
+  });
+
+  it('10. TASSATIVO: Nessuna entità Expense o ExpenseItem viene creata', async () => {
+    const ocrProc = await ocrProcessRepository.create({
+      attachmentId: 'att-10',
+      status: 'completed',
+      confirmationRequired: true,
+      confirmedByUser: false,
+    });
+
+    await ocrReceiptLineRepository.create({
+      ocrProcessId: ocrProc.id,
+      originalText: 'PANE FRESCO 2.50',
+      description: 'PANE FRESCO',
+      quantity: 1,
+      unitPrice: 2.5,
+      lineTotal: 2.5,
+      confidence: 95,
+      reviewStatus: 'pending',
+    });
+
+    await productClassificationService.classifyReceiptLines(ocrProc.id);
+
+    const expenses = await db.expenses.toArray();
+    const expenseItems = await db.expenseItems.toArray();
+
+    expect(expenses.length).toBe(0);
+    expect(expenseItems.length).toBe(0);
+  });
+});

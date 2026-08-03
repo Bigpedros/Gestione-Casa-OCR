@@ -1,0 +1,62 @@
+{
+  "app": {
+    "name": "Gestione Casa",
+    "shortName": "Gestione Casa",
+    "version": "1.0.0",
+    "description": "PWA local-first per la gestione economica della casa e del nucleo familiare.",
+    "repository": "gestione-casa",
+    "database": "gestioneCasa",
+    "language": "it-IT",
+    "currency": "EUR",
+    "mode": "local-first"
+  },
+  "settings": {
+    "userMode": "family",
+    "maxContributors": 3,
+    "maxProjects": 3,
+    "theme": "system",
+    "reportClosing": "automatic",
+    "attachmentRetentionMonths": 6
+  },
+  "budget": {
+    "type": "prudential",
+    "source": "manualContributorIncome",
+    "includePaidExpenses": true,
+    "includeNotifiedPlannedExpenses": true,
+    "includeSavingPlans": true,
+    "includeProjectQuotas": true,
+    "extraBudget": {
+      "enabled": true,
+      "carryForward": true,
+      "usableOnlyForDeficit": true,
+      "usableForProjects": false,
+      "usableForVoluntaryExpenses": false
+    }
+  },
+  "contributors": {
+    "minimum": 1,
+    "maximum": 3
+  },
+  "projects": {
+    "maximumActive": 3,
+    "monthlyQuotaCalculation": "automatic",
+    "purchaseCreatesExpense": true
+  },
+  "navigation": {
+    "main": [
+      "Home",
+      "Entrate",
+      "Uscite",
+      "Progetti",
+      "Report"
+    ],
+    "secondary": [
+      "Spese Fisse",
+      "Risparmi",
+      "Fornitori",
+      "Allegati",
+      "Backup",
+      "Impostazioni"
+    ]
+  }
+}

@@ -1,11 +1,69 @@
-<div align="center">
+# Gestione Casa — Progressive Web App (PWA)
 
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
+**Gestione Casa** è un'applicazione web PWA local-first sviluppata per la gestione contabile ed economica integrata del nucleo familiare.
 
-  <h1>Built with AI Studio</h2>
+## 📌 Caratteristiche Principali
 
-  <p>The fastest path from prompt to production with Gemini.</p>
+- **Local-First & Offline Ready:** Funziona completamente offline nel browser. I dati risiedono esclusivamente nel dispositivo tramite **IndexedDB** (`Dexie.js`).
+- **Nessuna dipendenza Cloud/API:** Nessun tracciamento, nessun servizio cloud esterno, nessuna registrazione o login richiesto.
+- **Budget Prudenziale Automazione:**
+  - `Bilancio Prudenziale = Entrate Incassate Effettive - Spese Pagate - Spese Pianificate Notificate - Quote Risparmio - Quote Progetti`.
+- **Extra Budget Riservato:**
+  - Riservato unicamente alla copertura automatica di futuri deficit di cassa.
+  - Non può essere alimentato arbitrariamente né finanziare spese volontarie o progetti.
+- **Limite Progetti Attivi:** Massimo 3 progetti attivi contemporaneamente.
+- **Nucleo Familiare:** Gestione fino a un massimo di 3 contributori.
+- **Reportistica & Backup:** Generazione report mensili (provvisori e definitivi), esportazione PDF e backup/ripristino completo in formato JSON.
 
-  <a href="https://aistudio.google.com/apps">Start building</a>
+---
 
-</div>
+## 🏗️ Architettura del Software
+
+L'architettura segue una struttura modulare e stratificata:
+
+```text
+src/
+├── app/               # Configurazione router, provider e rotte
+├── components/        # Componenti UI riutilizzabili e layout (Header, Sidebar, BottomNav)
+├── config/            # Configurazione app, navigazione e feature flags
+├── database/          # Configurazione Dexie (gestioneCasa DB) e seed dati
+├── features/          # Pagine e moduli applicativi (Home, Income, Expenses, Projects, Reports, ecc.)
+├── hooks/             # Custom React Hooks
+├── repositories/      # Strato Data Access (interfaccia diretta con Dexie)
+├── schemas/           # Schemi di validazione Zod
+├── services/          # Logica di business (Budget, Extra Budget, Projects, Reports, Backup)
+├── types/             # Tipi e interfacce TypeScript
+└── utils/             # Formattatori e utility
+```
+
+---
+
+## 🛠️ Requisiti e Installazione
+
+### Prerequisites
+- Node.js >= 18.0.0
+- npm >= 9.0.0
+
+### Comandi Disponibili
+
+```bash
+# Avvio ambiente di sviluppo
+npm run dev
+
+# Verifica tipi TypeScript
+npm run typecheck
+
+# Linter ed ESLint
+npm run lint
+
+# Esecuzione test di unità e regole di business
+npm run test
+
+# Build di produzione
+npm run build
+```
+
+---
+
+## ⚖️ Licenza e Privacy
+Sviluppato per uso personale e familiare. Rispetta la privacy al 100% conservando ogni dato in locale sul dispositivo dell'utente.

@@ -1,0 +1,24 @@
+{
+  "library": "lucide-react",
+  "sizes": {
+    "sm": "16px",
+    "md": "20px",
+    "lg": "24px",
+    "xl": "32px"
+  },
+  "strokeWidth": 2,
+  "mappings": {
+    "home": "Home",
+    "income": "TrendingUp / ArrowUpCircle",
+    "expense": "TrendingDown / ArrowDownCircle",
+    "reports": "PieChart / BarChart3",
+    "settings": "Settings",
+    "add": "Plus",
+    "notifications": "Bell",
+    "menu": "Menu",
+    "house": "Home",
+    "receipt": "FileText",
+    "cart": "ShoppingBag",
+    "tag": "Tag"
+  }
+}

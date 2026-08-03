@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gestione-casa.local/schema/v2/schema.json",
+  "title": "Gestione Casa - Schema dati",
+  "description": "Schema logico e di validazione per la PWA local-first Gestione Casa.",
+  "type": "object",
+  "schemaVersion": "2.0.0",
+  "additionalProperties": false,
+  "properties": {
+    "database": {
+      "$ref": "./database.json"
+    },
+    "entities": {
+      "$ref": "./entities.json"
+    },
+    "relations": {
+      "$ref": "./relations.json"
+    },
+    "validation": {
+      "$ref": "./validation.json"
+    },
+    "businessRules": {
+      "$ref": "./business-rules.json"
+    },
+    "computedFields": {
+      "$ref": "./computed-fields.json"
+    },
+    "enums": {
+      "$ref": "./enums.json"
+    },
+    "indexes": {
+      "$ref": "./indexes.json"
+    },
+    "reports": {
+      "$ref": "./reports.json"
+    },
+    "seedCategories": {
+      "$ref": "./seed-categories.json"
+    }
+  }
+}

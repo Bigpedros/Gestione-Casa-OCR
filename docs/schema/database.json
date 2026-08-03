@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gestione-casa.local/schema/v2/database.json",
+  "title": "Database IndexedDB/Dexie",
+  "type": "object",
+  "properties": {
+    "engine": {
+      "const": "IndexedDB"
+    },
+    "library": {
+      "const": "Dexie"
+    },
+    "databaseName": {
+      "const": "gestioneCasa"
+    },
+    "databaseVersion": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "localFirst": {
+      "const": true
+    }
+  },
+  "required": [
+    "engine",
+    "library",
+    "databaseName",
+    "databaseVersion",
+    "localFirst"
+  ],
+  "default": {
+    "engine": "IndexedDB",
+    "library": "Dexie",
+    "databaseName": "gestioneCasa",
+    "databaseVersion": 2,
+    "localFirst": true
+  }
+}

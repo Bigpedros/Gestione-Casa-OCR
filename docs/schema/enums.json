@@ -1,0 +1,71 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gestione-casa.local/schema/v2/enums.json",
+  "title": "Enumerazioni",
+  "$defs": {
+    "expenseStatus": {
+      "enum": [
+        "draft",
+        "planned",
+        "paid",
+        "cancelled"
+      ]
+    },
+    "incomeStatus": {
+      "enum": [
+        "planned",
+        "received",
+        "cancelled"
+      ]
+    },
+    "fixedExpenseStatus": {
+      "enum": [
+        "active",
+        "suspended",
+        "terminated"
+      ]
+    },
+    "savingStatus": {
+      "enum": [
+        "active",
+        "completed",
+        "suspended",
+        "cancelled"
+      ]
+    },
+    "projectStatus": {
+      "enum": [
+        "active",
+        "completed",
+        "cancelled"
+      ]
+    },
+    "reportStatus": {
+      "enum": [
+        "provisional",
+        "final"
+      ]
+    },
+    "extraBudgetStatus": {
+      "enum": [
+        "accumulated",
+        "used",
+        "exhausted"
+      ]
+    },
+    "supplierStatus": {
+      "enum": [
+        "new",
+        "confirmed",
+        "merged"
+      ]
+    },
+    "expenseClassification": {
+      "enum": [
+        "necessary",
+        "voluntary",
+        "toEvaluate"
+      ]
+    }
+  }
+}

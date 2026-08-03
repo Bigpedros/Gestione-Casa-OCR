@@ -1,0 +1,55 @@
+export const colors = {
+  brand: {
+    primary: '#4F46E5',
+    primaryLight: '#6366F1',
+    primaryDark: '#4338CA',
+    primarySubtle: '#EEF2FF',
+    accent: '#38BDF8',
+  },
+  semantic: {
+    income: '#10B981',
+    incomeBg: '#ECFDF5',
+    incomeBorder: '#A7F3D0',
+    incomeText: '#059669',
+    
+    expense: '#F43F5E',
+    expenseBg: '#FFE4E6',
+    expenseBorder: '#FECDD3',
+    expenseText: '#DC2626',
+    
+    savings: '#3B82F6',
+    savingsBg: '#EFF6FF',
+    savingsBorder: '#BFDBFE',
+    savingsText: '#2563EB',
+    
+    warning: '#F59E0B',
+    warningBg: '#FFFBEB',
+    warningBorder: '#FDE68A',
+    warningText: '#D97706',
+    
+    purple: '#8B5CF6',
+    purpleBg: '#F5F3FF',
+    purpleBorder: '#DDD6FE',
+    purpleText: '#7C3AED',
+  },
+  categories: {
+    essenziali: '#F43F5E',
+    gestioneCasa: '#3B82F6',
+    altreSpese: '#F97316',
+    voluttuarie: '#8B5CF6',
+    alimentari: '#F59E0B',
+    trasporti: '#3B82F6',
+    tempoLibero: '#10B981',
+  },
+  neutral: {
+    background: '#F8FAFC',
+    surface: '#FFFFFF',
+    surfaceSubtle: '#F1F5F9',
+    border: '#E2E8F0',
+    borderSubtle: '#F1F5F9',
+    textPrimary: '#0F172A',
+    textSecondary: '#64748B',
+    textSubtle: '#94A3B8',
+    textWhite: '#FFFFFF',
+  },
+} as const;

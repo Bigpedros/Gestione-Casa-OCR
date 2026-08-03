@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gestione-casa.local/schema/v2/computed-fields.json",
+  "title": "Campi calcolati",
+  "type": "object",
+  "properties": {
+    "monthlyIncomeTotal": {
+      "const": "sum(received income for month)"
+    },
+    "prudentialCommitments": {
+      "const": "paid + notified planned + savings quotas + project quotas"
+    },
+    "monthlyBalance": {
+      "const": "monthlyIncomeTotal - prudentialCommitments"
+    },
+    "surplus": {
+      "const": "max(monthlyBalance, 0)"
+    },
+    "deficit": {
+      "const": "max(-monthlyBalance, 0)"
+    },
+    "extraBudgetUsed": {
+      "const": "min(openingExtraBudget, deficit)"
+    },
+    "remainingDeficit": {
+      "const": "max(deficit - extraBudgetUsed, 0)"
+    },
+    "closingExtraBudget": {
+      "const": "openingExtraBudget + surplus - extraBudgetUsed"
+    }
+  }
+}

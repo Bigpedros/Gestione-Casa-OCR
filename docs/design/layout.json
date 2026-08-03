@@ -1,0 +1,12 @@
+{
+  "containerMaxWidth": "1280px",
+  "sidebarWidth": "280px",
+  "headerHeight": "64px",
+  "bottomNavHeight": "72px",
+  "grid": {
+    "columnsMobile": 1,
+    "columnsTablet": 2,
+    "columnsDesktop": 3,
+    "gap": "20px"
+  }
+}

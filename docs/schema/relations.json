@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gestione-casa.local/schema/v2/relations.json",
+  "title": "Relazioni",
+  "type": "array",
+  "default": [
+    {
+      "from": "income",
+      "field": "contributorId",
+      "to": "contributors",
+      "onDelete": "restrict"
+    },
+    {
+      "from": "expenseItems",
+      "field": "expenseId",
+      "to": "expenses",
+      "onDelete": "cascade"
+    },
+    {
+      "from": "expenses",
+      "field": "categoryId",
+      "to": "categories",
+      "onDelete": "restrict"
+    },
+    {
+      "from": "expenses",
+      "field": "supplierId",
+      "to": "suppliers",
+      "onDelete": "set-null"
+    },
+    {
+      "from": "expenses",
+      "field": "projectId",
+      "to": "projects",
+      "onDelete": "set-null"
+    }
+  ]
+}

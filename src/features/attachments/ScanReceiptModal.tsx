@@ -305,6 +305,14 @@ export const ScanReceiptModal: React.FC<ScanReceiptModalProps> = ({
 
         const fileHash = await computeFileHash(file);
 
+        // Check if another active session already exists for this document
+        const activeExistingSession = await documentSessionRepository.findActiveSessionByFileHash(fileHash, session.id);
+        if (activeExistingSession) {
+          setErrorMsg(`Documento "${file.name}" è già in lavorazione nella sessione attiva (${activeExistingSession.id}). Impossibile creare una sessione duplicata.`);
+          duplicateCount++;
+          continue;
+        }
+
         // Duplicate check in current session
         const existingHash = await documentPageSegmentRepository.getByHash(session.id, fileHash);
         if (existingHash) {

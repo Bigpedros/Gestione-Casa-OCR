@@ -21,6 +21,7 @@ import type {
   DocumentPageSegment,
   DocumentProcessingMode,
   OCRReceiptLine,
+  RecordMetadata,
   Product,
   ProductAlias,
 } from '../types';
@@ -705,28 +706,31 @@ export const ocrReceiptLineRepository = {
   getByOcrProcessId: (ocrProcessId: string) =>
     db.ocrReceiptLines.where('ocrProcessId').equals(ocrProcessId).toArray(),
   getById: (id: string) => db.ocrReceiptLines.get(id),
-  create: async (data: Omit<OCRReceiptLine, 'id' | 'metadata'>) => {
+  create: async (data: Omit<OCRReceiptLine, 'id' | 'metadata'> & { metadata?: Record<string, any> }) => {
     const id = `ocr-line-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
     const now = new Date().toISOString();
     const item: OCRReceiptLine = {
       ...data,
       id,
-      metadata: { createdAt: now, updatedAt: now, version: 1 },
+      metadata: { createdAt: now, updatedAt: now, version: 1, ...(data.metadata || {}) },
     };
     await db.ocrReceiptLines.add(item);
     return item;
   },
-  bulkCreate: async (lines: Array<Omit<OCRReceiptLine, 'id' | 'metadata'>>) => {
+  bulkCreate: async (lines: Array<Omit<OCRReceiptLine, 'id' | 'metadata'> & { metadata?: Record<string, any> }>) => {
     const now = new Date().toISOString();
     const items: OCRReceiptLine[] = lines.map((line, index) => ({
       ...line,
       id: `ocr-line-${Date.now()}-${index}-${Math.random().toString(36).substring(2, 7)}`,
-      metadata: { createdAt: now, updatedAt: now, version: 1 },
+      metadata: { createdAt: now, updatedAt: now, version: 1, ...(line.metadata || {}) },
     }));
     await db.ocrReceiptLines.bulkAdd(items);
     return items;
   },
-  update: async (id: string, updates: Partial<OCRReceiptLine>) => {
+  update: async (
+    id: string,
+    updates: Partial<Omit<OCRReceiptLine, 'metadata'>> & { metadata?: Partial<RecordMetadata> & Record<string, any> }
+  ) => {
     const existing = await db.ocrReceiptLines.get(id);
     if (!existing) throw new Error('Linea OCR non trovata');
     const now = new Date().toISOString();
@@ -735,6 +739,7 @@ export const ocrReceiptLineRepository = {
       ...updates,
       metadata: {
         ...existing.metadata,
+        ...(updates.metadata || {}),
         updatedAt: now,
         version: existing.metadata.version + 1,
       },
@@ -779,6 +784,23 @@ export const documentSessionRepository = {
     return drafts.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
   },
   getById: (id: string) => db.documentSessions.get(id),
+  findActiveSessionByFileHash: async (fileHash: string, excludeSessionId?: string): Promise<DocumentSession | null> => {
+    if (!fileHash) return null;
+    const segments = await db.documentPageSegments.where('fileHash').equals(fileHash).toArray();
+    for (const seg of segments) {
+      if (excludeSessionId && seg.sessionId === excludeSessionId) continue;
+      const sess = await db.documentSessions.get(seg.sessionId);
+      if (
+        sess &&
+        sess.status !== 'reviewed' &&
+        sess.status !== 'failed' &&
+        (sess.status as string) !== 'cancelled'
+      ) {
+        return sess;
+      }
+    }
+    return null;
+  },
   create: async (
     data: Omit<DocumentSession, 'id' | 'createdAt' | 'updatedAt' | 'pageCount' | 'processingMode'> & {
       pageCount?: number;

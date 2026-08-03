@@ -119,6 +119,10 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
   // Mobile layout tab state ('image' vs 'data')
   const [activeMobileTab, setActiveMobileTab] = useState<'image' | 'data'>('data');
 
+  // Review Lines Navigation Filter state
+  type LineFilterMode = 'all' | 'error' | 'unclassified' | 'modified' | 'discounts' | 'returns';
+  const [activeLineFilter, setActiveLineFilter] = useState<LineFilterMode>('all');
+
   // Image Viewer State
   const [activeSegmentIndex, setActiveSegmentIndex] = useState<number>(0);
   const [zoomLevel, setZoomLevel] = useState<number>(1);
@@ -303,18 +307,24 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
 
       const reviewLines: EditableReviewLine[] = dbLines.map((line) => {
         const prop = proposalMap.get(line.id);
-        const catId = prop?.proposedCategory?.id || null;
-        const subcatId = prop?.proposedSubcategory?.id || null;
+        const savedMeta = (line.metadata as Record<string, any>) || {};
+
+        const catId = savedMeta.categoryId !== undefined ? savedMeta.categoryId : (prop?.proposedCategory?.id || null);
+        const subcatId = savedMeta.subcategoryId !== undefined ? savedMeta.subcategoryId : (prop?.proposedSubcategory?.id || null);
 
         const matchedProd = prop?.matchedProduct || null;
         const initialProdId = line.productId || matchedProd?.id || null;
 
-        let initialActionMode: 'link_existing' | 'create_new' | 'unlinked' = 'unlinked';
-        if (initialProdId) {
-          initialActionMode = 'link_existing';
-        } else if (prop?.proposedNewProduct) {
-          initialActionMode = 'create_new';
+        let initialActionMode: 'link_existing' | 'create_new' | 'unlinked' = savedMeta.actionMode || 'unlinked';
+        if (!savedMeta.actionMode) {
+          if (initialProdId) {
+            initialActionMode = 'link_existing';
+          } else if (prop?.proposedNewProduct) {
+            initialActionMode = 'create_new';
+          }
         }
+
+        const savedNewProductName = savedMeta.newProductDisplayName || prop?.proposedNewProduct?.displayName || line.description || line.originalText;
 
         return {
           id: line.id,
@@ -339,7 +349,7 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
           warnings: prop?.warnings || [],
           isNewRow: false,
           actionMode: initialActionMode,
-          newProductDisplayName: prop?.proposedNewProduct?.displayName || line.description || line.originalText,
+          newProductDisplayName: savedNewProductName,
         };
       });
 
@@ -362,7 +372,7 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
     }
   }, [isOpen, loadReviewData]);
 
-  // Calculations & Validation checks
+  // Calculations & Navigation Filter groups (Punto 14.5)
   const calculatedSumLines = editableLines.reduce(
     (acc, line) => acc + (line.lineTotal > 0 ? line.lineTotal : line.quantity * line.unitPrice),
     0
@@ -371,6 +381,47 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
   const roundedSumLines = Math.round(calculatedSumLines * 100) / 100;
   const roundedDocTotal = Math.round(documentTotal * 100) / 100;
   const hasTotalDiscrepancy = Math.abs(roundedSumLines - roundedDocTotal) > 0.01;
+
+  const linesWithError = editableLines.filter(
+    (l) =>
+      !l.categoryId ||
+      l.categoryId === 'cat-unclassified' ||
+      l.quantity <= 0 ||
+      (l.unitPrice <= 0 && l.lineTotal <= 0 && l.lineTotal >= 0) ||
+      l.hasConflict ||
+      (l.warnings && l.warnings.length > 0)
+  );
+
+  const linesUnclassified = editableLines.filter(
+    (l) => !l.categoryId || l.categoryId === 'cat-unclassified' || l.proposedCategoryName?.toLowerCase().includes('classificare')
+  );
+
+  const linesModified = editableLines.filter((l) => l.reviewStatus === 'modified' || l.isNewRow);
+
+  const linesDiscounts = editableLines.filter(
+    (l) => l.lineTotal < 0 || /SCONTO|PROMO|ABBUONO|COUPON|BUONO/i.test(l.description) || (l.warnings && l.warnings.includes('DISCOUNT_LINE'))
+  );
+
+  const linesReturns = editableLines.filter(
+    (l) => l.lineTotal < 0 || /RESO|STORNO|RESTITUITO/i.test(l.description)
+  );
+
+  const visibleLines = (() => {
+    switch (activeLineFilter) {
+      case 'error':
+        return linesWithError;
+      case 'unclassified':
+        return linesUnclassified;
+      case 'modified':
+        return linesModified;
+      case 'discounts':
+        return linesDiscounts;
+      case 'returns':
+        return linesReturns;
+      default:
+        return editableLines;
+    }
+  })();
 
   // Handlers for Form Edits
   const handleLineChange = (
@@ -453,15 +504,23 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
       const existingDbLines = await ocrReceiptLineRepository.getByOcrProcessId(ocrProcess.id);
       const currentLineIds = new Set(editableLines.map((l) => l.id));
 
-      // Remove lines deleted in review form
-      for (const dbLine of existingDbLines) {
-        if (!currentLineIds.has(dbLine.id)) {
-          await ocrReceiptLineRepository.delete(dbLine.id);
-        }
+      // Remove lines deleted in review form (batch deletion)
+      const idsToDelete = existingDbLines
+        .filter((dbLine) => !currentLineIds.has(dbLine.id))
+        .map((l) => l.id);
+      if (idsToDelete.length > 0) {
+        await db.ocrReceiptLines.bulkDelete(idsToDelete);
       }
 
-      // Upsert current lines
+      // Upsert current lines with category & subcategory metadata
       for (const line of editableLines) {
+        const lineMetadata = {
+          categoryId: line.categoryId || null,
+          subcategoryId: line.subcategoryId || null,
+          actionMode: line.actionMode || null,
+          newProductDisplayName: line.newProductDisplayName || null,
+        };
+
         if (line.isNewRow || line.id.startsWith('temp-line-')) {
           await ocrReceiptLineRepository.create({
             ocrProcessId: ocrProcess.id,
@@ -473,8 +532,10 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
             confidence: line.confidence,
             reviewStatus: 'modified',
             productId: line.productId || null,
+            metadata: lineMetadata,
           });
         } else {
+          const existingLine = existingDbLines.find((l) => l.id === line.id);
           await ocrReceiptLineRepository.update(line.id, {
             description: line.description,
             quantity: line.quantity,
@@ -482,6 +543,10 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
             lineTotal: line.lineTotal,
             productId: line.productId || null,
             reviewStatus: line.reviewStatus,
+            metadata: {
+              ...((existingLine?.metadata as Record<string, any>) || {}),
+              ...lineMetadata,
+            },
           });
         }
       }
@@ -572,11 +637,82 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
     }
   };
 
+  // Punto 14.4: Validazione Finale prima della conferma definitiva
+  const getFinalValidationErrors = (): string[] => {
+    const errors: string[] = [];
+
+    // 1. Campi obbligatori
+    if (!expenseDate || !/^\d{4}-\d{2}-\d{2}$/.test(expenseDate)) {
+      errors.push('Data acquisto mancante o non valida (formato AAAA-MM-GG).');
+    }
+
+    const finalSupplierName =
+      selectedSupplierId === 'new'
+        ? newSupplierName.trim()
+        : suppliers.find((s) => s.id === selectedSupplierId)?.name || detectedSupplierName;
+    if (!finalSupplierName || finalSupplierName.trim().length === 0) {
+      errors.push('Fornitore non specificato: inserisci il nome del fornitore.');
+    }
+
+    if (documentTotal === undefined || documentTotal === null || isNaN(documentTotal) || documentTotal <= 0) {
+      errors.push('Totale scontrino non valido (deve essere un importo maggiore di 0 €).');
+    }
+
+    if (!editableLines || editableLines.length === 0) {
+      errors.push('Il documento non contiene alcuna riga articolo.');
+    }
+
+    // 2. Quadratura
+    if (hasTotalDiscrepancy && !isDiscrepancyApproved) {
+      errors.push(
+        `Discrepanza sul totale scontrino non approvata: somma righe (€ ${roundedSumLines.toFixed(
+          2
+        )}) ≠ totale scontrino (€ ${roundedDocTotal.toFixed(
+          2
+        )}). Spunta "Confermo la discrepanza sul totale" per proseguire.`
+      );
+    }
+
+    // 3. Prodotti non classificati / Categorie mancanti & Importi incoerenti
+    editableLines.forEach((line, index) => {
+      const lineName = line.description?.trim() || line.originalText?.trim() || `Riga #${index + 1}`;
+
+      if (!line.description || line.description.trim().length === 0) {
+        errors.push(`Riga #${index + 1}: descrizione articolo mancante.`);
+      }
+
+      if (!line.categoryId || line.categoryId === 'cat-unclassified') {
+        errors.push(`"${lineName}": categoria mancante. Seleziona una categoria valida prima di confermare.`);
+      }
+
+      if (line.quantity <= 0) {
+        errors.push(`"${lineName}": quantità non valida (${line.quantity}).`);
+      }
+
+      const isDiscountOrReturn =
+        line.lineTotal < 0 ||
+        /SCONTO|PROMO|ABBUONO|COUPON|BUONO|RESO|STORNO/i.test(line.description || '');
+
+      if (!isDiscountOrReturn && line.unitPrice <= 0 && line.lineTotal <= 0) {
+        errors.push(`"${lineName}": importo riga non valido (prezzo unitario e totale <= 0).`);
+      }
+    });
+
+    return errors;
+  };
+
   // Confirm Review (Mark confirmedByUser: true, learn aliases and create products safely)
   const handleConfirmReview = async () => {
     if (!ocrProcess) return;
     setIsSaving(true);
     setErrorMessage(null);
+
+    const valErrors = getFinalValidationErrors();
+    if (valErrors.length > 0) {
+      setIsSaving(false);
+      setErrorMessage(`Impossibile confermare la revisione (${valErrors.length} errore/i da correggere):\n• ${valErrors.join('\n• ')}`);
+      return;
+    }
 
     try {
       await executeConfirmClassifications();
@@ -597,6 +733,13 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
     if (!ocrProcess) return;
     setIsSaving(true);
     setErrorMessage(null);
+
+    const valErrors = getFinalValidationErrors();
+    if (valErrors.length > 0) {
+      setIsSaving(false);
+      setErrorMessage(`Impossibile registrare la spesa in contabilità (${valErrors.length} errore/i da correggere):\n• ${valErrors.join('\n• ')}`);
+      return;
+    }
 
     try {
       const finalSupplierName =
@@ -999,30 +1142,109 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
 
               {/* Line Items Table Box */}
               <div className="p-4 bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 space-y-3 shadow-xs">
-                <div className="flex items-center justify-between pb-2 border-b border-slate-100 dark:border-slate-800">
-                  <div className="flex items-center gap-2">
+                <div className="flex flex-col space-y-2 pb-2 border-b border-slate-100 dark:border-slate-800">
+                  <div className="flex items-center justify-between">
                     <h4 className="font-bold text-xs uppercase tracking-wider text-slate-500 dark:text-slate-400">
                       Righe Scontrino & Classificazione Prodotti ({editableLines.length})
                     </h4>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={handleAddLine}
+                      icon={<Plus className="w-3.5 h-3.5" />}
+                    >
+                      Aggiungi Riga
+                    </Button>
                   </div>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    onClick={handleAddLine}
-                    icon={<Plus className="w-3.5 h-3.5" />}
-                  >
-                    Aggiungi Riga
-                  </Button>
+
+                  {/* Navigation Filter Bar (Punto 14.5) */}
+                  <div className="flex flex-wrap items-center gap-1.5 pt-1 text-xs">
+                    <button
+                      type="button"
+                      onClick={() => setActiveLineFilter('all')}
+                      className={`px-2.5 py-1 rounded-lg font-semibold transition-colors ${
+                        activeLineFilter === 'all'
+                          ? 'bg-indigo-600 text-white'
+                          : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-700'
+                      }`}
+                    >
+                      Tutte ({editableLines.length})
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setActiveLineFilter('error')}
+                      className={`px-2.5 py-1 rounded-lg font-semibold transition-colors flex items-center gap-1 ${
+                        activeLineFilter === 'error'
+                          ? 'bg-rose-600 text-white'
+                          : 'bg-rose-50 dark:bg-rose-950/40 text-rose-700 dark:text-rose-300 hover:bg-rose-100'
+                      }`}
+                    >
+                      <span>Errore / Sospette</span>
+                      <span className="px-1.5 py-0.2 text-[10px] bg-rose-200 dark:bg-rose-900 rounded-full font-bold">{linesWithError.length}</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setActiveLineFilter('unclassified')}
+                      className={`px-2.5 py-1 rounded-lg font-semibold transition-colors flex items-center gap-1 ${
+                        activeLineFilter === 'unclassified'
+                          ? 'bg-amber-600 text-white'
+                          : 'bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-300 hover:bg-amber-100'
+                      }`}
+                    >
+                      <span>Non Classificate</span>
+                      <span className="px-1.5 py-0.2 text-[10px] bg-amber-200 dark:bg-amber-900 rounded-full font-bold">{linesUnclassified.length}</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setActiveLineFilter('modified')}
+                      className={`px-2.5 py-1 rounded-lg font-semibold transition-colors flex items-center gap-1 ${
+                        activeLineFilter === 'modified'
+                          ? 'bg-purple-600 text-white'
+                          : 'bg-purple-50 dark:bg-purple-950/40 text-purple-700 dark:text-purple-300 hover:bg-purple-100'
+                      }`}
+                    >
+                      <span>Modificate</span>
+                      <span className="px-1.5 py-0.2 text-[10px] bg-purple-200 dark:bg-purple-900 rounded-full font-bold">{linesModified.length}</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setActiveLineFilter('discounts')}
+                      className={`px-2.5 py-1 rounded-lg font-semibold transition-colors flex items-center gap-1 ${
+                        activeLineFilter === 'discounts'
+                          ? 'bg-teal-600 text-white'
+                          : 'bg-teal-50 dark:bg-teal-950/40 text-teal-700 dark:text-teal-300 hover:bg-teal-100'
+                      }`}
+                    >
+                      <span>Sconti</span>
+                      <span className="px-1.5 py-0.2 text-[10px] bg-teal-200 dark:bg-teal-900 rounded-full font-bold">{linesDiscounts.length}</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setActiveLineFilter('returns')}
+                      className={`px-2.5 py-1 rounded-lg font-semibold transition-colors flex items-center gap-1 ${
+                        activeLineFilter === 'returns'
+                          ? 'bg-sky-600 text-white'
+                          : 'bg-sky-50 dark:bg-sky-950/40 text-sky-700 dark:text-sky-300 hover:bg-sky-100'
+                      }`}
+                    >
+                      <span>Resi</span>
+                      <span className="px-1.5 py-0.2 text-[10px] bg-sky-200 dark:bg-sky-900 rounded-full font-bold">{linesReturns.length}</span>
+                    </button>
+                  </div>
                 </div>
 
                 {editableLines.length === 0 ? (
                   <div className="py-8 text-center text-xs text-slate-400">
                     Nessuna riga rilevata. Clicca "+ Aggiungi Riga" per inserire manualmente un articolo.
                   </div>
+                ) : visibleLines.length === 0 ? (
+                  <div className="py-8 text-center text-xs text-slate-400">
+                    Nessuna riga trovata per il filtro selezionato ({activeLineFilter}).
+                  </div>
                 ) : (
                   <div className="space-y-3">
-                    {editableLines.map((line, idx) => {
+                    {visibleLines.map((line, idx) => {
                       return (
                         <div
                           key={line.id}

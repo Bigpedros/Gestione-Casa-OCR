@@ -3,6 +3,7 @@ import type {
   Contributor,
   IncomeEntry,
   Expense,
+  ExpenseItem,
   FixedExpense,
   FixedExpenseOccurrence,
   SavingPlan,
@@ -163,6 +164,47 @@ export const expenseRepository = {
     return updated;
   },
   delete: (id: string) => db.expenses.delete(id),
+};
+
+export const expenseItemRepository = {
+  getAll: () => db.expenseItems.toArray(),
+  getByExpenseId: (expenseId: string) =>
+    db.expenseItems.where('expenseId').equals(expenseId).toArray(),
+  getById: (id: string) => db.expenseItems.get(id),
+  create: async (data: Omit<ExpenseItem, 'id' | 'metadata'>) => {
+    const id = `exp-item-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+    const now = new Date().toISOString();
+    const item: ExpenseItem = {
+      ...data,
+      id,
+      metadata: { createdAt: now, updatedAt: now, version: 1 },
+    };
+    await db.expenseItems.add(item);
+    return item;
+  },
+  bulkCreate: async (items: Array<Omit<ExpenseItem, 'id' | 'metadata'>>) => {
+    const now = new Date().toISOString();
+    const formattedItems: ExpenseItem[] = items.map((item, index) => ({
+      ...item,
+      id: `exp-item-${Date.now()}-${index}-${Math.random().toString(36).substring(2, 7)}`,
+      metadata: { createdAt: now, updatedAt: now, version: 1 },
+    }));
+    await db.expenseItems.bulkAdd(formattedItems);
+    return formattedItems;
+  },
+  update: async (id: string, updates: Partial<ExpenseItem>) => {
+    const existing = await db.expenseItems.get(id);
+    if (!existing) throw new Error(`ExpenseItem ${id} non trovato`);
+    const now = new Date().toISOString();
+    const updated: ExpenseItem = {
+      ...existing,
+      ...updates,
+      metadata: { ...existing.metadata, updatedAt: now, version: existing.metadata.version + 1 },
+    };
+    await db.expenseItems.put(updated);
+    return updated;
+  },
+  delete: (id: string) => db.expenseItems.delete(id),
 };
 
 export const fixedExpenseRepository = {

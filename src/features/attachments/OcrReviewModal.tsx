@@ -24,6 +24,7 @@ import {
   CreditCard,
   Info,
 } from 'lucide-react';
+import { db } from '../../database/db';
 import {
   documentSessionRepository,
   documentPageSegmentRepository,
@@ -47,6 +48,7 @@ import type {
   PaymentMethod,
   OCRLineReviewStatus,
   Attachment,
+  Expense,
 } from '../../types';
 import type {
   ReceiptClassificationProposal,
@@ -130,6 +132,7 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
   const [documentTotal, setDocumentTotal] = useState<number>(0);
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('debitCard');
   const [editableLines, setEditableLines] = useState<EditableReviewLine[]>([]);
+  const [existingExpense, setExistingExpense] = useState<Expense | null>(null);
 
   // Load database entities & initialize review draft
   const loadReviewData = useCallback(async () => {
@@ -235,6 +238,27 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
       setProducts(allProducts);
       setCategories(allCategories);
       setParentCategories(allCategories.filter((c) => c.level === 1));
+
+      // Check if existing expense is already linked
+      let foundExp: Expense | null = null;
+      if (activeSession?.expenseId) {
+        foundExp = (await db.expenses.get(activeSession.expenseId)) || null;
+      }
+      if (!foundExp && activeOcrProcess?.expenseId) {
+        foundExp = (await db.expenses.get(activeOcrProcess.expenseId)) || null;
+      }
+      if (!foundExp) {
+        const allExp = await db.expenses.toArray();
+        foundExp =
+          allExp.find((e) => {
+            const m = e.metadata as Record<string, any> | undefined;
+            return (
+              m?.ocrProcessId === activeOcrProcess.id ||
+              (activeSession?.id && m?.documentSessionId === activeSession.id)
+            );
+          }) || null;
+      }
+      setExistingExpense(foundExp);
 
       // 5. Initialize Editable Form Fields
       const detSup = activeOcrProcess.detectedSupplier || proposal?.supplierProposal.detectedName || '';
@@ -477,6 +501,76 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
     }
   };
 
+  const executeConfirmClassifications = async () => {
+    if (!ocrProcess) return;
+
+    const finalSupplierName =
+      selectedSupplierId === 'new'
+        ? newSupplierName.trim()
+        : suppliers.find((s) => s.id === selectedSupplierId)?.name || detectedSupplierName;
+
+    // Identify deleted lines to be removed inside the atomic confirmation transaction
+    const existingDbLines = await ocrReceiptLineRepository.getByOcrProcessId(ocrProcess.id);
+    const currentLineIds = new Set(editableLines.map((l) => l.id));
+    const deletedLineIds: string[] = [];
+
+    for (const dbLine of existingDbLines) {
+      if (!currentLineIds.has(dbLine.id)) {
+        deletedLineIds.push(dbLine.id);
+      }
+    }
+
+    // Map line classification decisions
+    const decisions: LineClassificationDecision[] = editableLines.map((line) => {
+      let action: 'link_existing' | 'create_new' | 'unlinked' = line.actionMode || 'unlinked';
+
+      if (line.productId && line.productId !== 'CREATE_NEW') {
+        action = 'link_existing';
+      } else if (line.productId === 'CREATE_NEW' || action === 'create_new') {
+        action = 'create_new';
+      }
+
+      return {
+        lineId: line.id,
+        originalText: line.originalText,
+        description: line.description,
+        quantity: line.quantity,
+        unitPrice: line.unitPrice,
+        lineTotal: line.lineTotal,
+        confidence: line.confidence,
+        action,
+        productId: action === 'link_existing' ? line.productId : null,
+        newProductDetails:
+          action === 'create_new'
+            ? {
+                displayName: line.newProductDisplayName || line.description,
+                categoryId: line.categoryId || null,
+                subcategoryId: line.subcategoryId || null,
+              }
+            : undefined,
+        categoryId: line.categoryId || null,
+        subcategoryId: line.subcategoryId || null,
+      };
+    });
+
+    await productClassificationService.confirmReceiptClassifications({
+      ocrProcessId: ocrProcess.id,
+      supplierId: selectedSupplierId === 'new' ? null : selectedSupplierId,
+      supplierName: finalSupplierName,
+      expenseDate,
+      documentTotal,
+      decisions,
+      deletedLineIds,
+    });
+
+    // Update Session status to 'reviewed'
+    if (session) {
+      await documentSessionRepository.update(session.id, {
+        status: 'reviewed',
+      });
+    }
+  };
+
   // Confirm Review (Mark confirmedByUser: true, learn aliases and create products safely)
   const handleConfirmReview = async () => {
     if (!ocrProcess) return;
@@ -484,71 +578,7 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
     setErrorMessage(null);
 
     try {
-      const finalSupplierName =
-        selectedSupplierId === 'new'
-          ? newSupplierName.trim()
-          : suppliers.find((s) => s.id === selectedSupplierId)?.name || detectedSupplierName;
-
-      // Identify deleted lines to be removed inside the atomic confirmation transaction
-      const existingDbLines = await ocrReceiptLineRepository.getByOcrProcessId(ocrProcess.id);
-      const currentLineIds = new Set(editableLines.map((l) => l.id));
-      const deletedLineIds: string[] = [];
-
-      for (const dbLine of existingDbLines) {
-        if (!currentLineIds.has(dbLine.id)) {
-          deletedLineIds.push(dbLine.id);
-        }
-      }
-
-      // Map line classification decisions
-      const decisions: LineClassificationDecision[] = editableLines.map((line) => {
-        let action: 'link_existing' | 'create_new' | 'unlinked' = line.actionMode || 'unlinked';
-
-        if (line.productId && line.productId !== 'CREATE_NEW') {
-          action = 'link_existing';
-        } else if (line.productId === 'CREATE_NEW' || action === 'create_new') {
-          action = 'create_new';
-        }
-
-        return {
-          lineId: line.id,
-          originalText: line.originalText,
-          description: line.description,
-          quantity: line.quantity,
-          unitPrice: line.unitPrice,
-          lineTotal: line.lineTotal,
-          confidence: line.confidence,
-          action,
-          productId: action === 'link_existing' ? line.productId : null,
-          newProductDetails:
-            action === 'create_new'
-              ? {
-                  displayName: line.newProductDisplayName || line.description,
-                  categoryId: line.categoryId || null,
-                  subcategoryId: line.subcategoryId || null,
-                }
-              : undefined,
-          categoryId: line.categoryId || null,
-          subcategoryId: line.subcategoryId || null,
-        };
-      });
-
-      await productClassificationService.confirmReceiptClassifications({
-        ocrProcessId: ocrProcess.id,
-        supplierId: selectedSupplierId === 'new' ? null : selectedSupplierId,
-        supplierName: finalSupplierName,
-        expenseDate,
-        documentTotal,
-        decisions,
-        deletedLineIds,
-      });
-
-      // Update Session status to 'reviewed'
-      if (session) {
-        await documentSessionRepository.update(session.id, {
-          status: 'reviewed',
-        });
-      }
+      await executeConfirmClassifications();
 
       if (onReviewConfirmed) {
         onReviewConfirmed(ocrProcess.id);
@@ -556,6 +586,37 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
       onClose();
     } catch (err: any) {
       setErrorMessage(err?.message || 'Errore durante la conferma della revisione');
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  // Punto 10: Creation of Accounting Registration (Expense) from confirmed OCR session
+  const handleCreateAccountingRegistration = async () => {
+    if (!ocrProcess) return;
+    setIsSaving(true);
+    setErrorMessage(null);
+
+    try {
+      // Step 1: Execute confirmation of classifications if not already done
+      await executeConfirmClassifications();
+
+      // Step 2: Create accounting registration (Expense + ExpenseItems)
+      const createdExp = await productClassificationService.createAccountingRegistration({
+        ocrProcessId: ocrProcess.id,
+        sessionId: session?.id,
+      });
+
+      setExistingExpense(createdExp);
+      setFeedbackMessage('Registrazione contabile (Spesa) creata con successo!');
+      if (onReviewConfirmed) {
+        onReviewConfirmed(ocrProcess.id);
+      }
+      setTimeout(() => {
+        onClose();
+      }, 800);
+    } catch (err: any) {
+      setErrorMessage(err?.message || 'Errore durante la creazione della registrazione contabile');
     } finally {
       setIsSaving(false);
     }
@@ -1097,16 +1158,29 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
                 )}
               </div>
 
-              {/* Offline Protection Notice */}
-              <div className="p-3 bg-slate-50 dark:bg-slate-800/50 rounded-2xl border border-slate-200 dark:border-slate-800 text-xs text-slate-600 dark:text-slate-400 flex items-start gap-2.5">
-                <Info className="w-4 h-4 text-indigo-500 shrink-0 mt-0.5" />
-                <div>
-                  <span className="font-bold text-slate-800 dark:text-slate-200 block mb-0.5">
-                    Modalità Revisione Senza Scritture Contabili Defentive
-                  </span>
-                  La conferma della revisione convalida i dati estratti dall'OCR ed aggiorna lo stato della sessione a "reviewed", ma <strong>NON crea alcuna Spesa o Movimento di Bilancio</strong> fino alla successiva registrazione esplicita.
+              {/* Existing Expense Notice */}
+              {existingExpense ? (
+                <div className="p-3 bg-emerald-50 dark:bg-emerald-950/40 rounded-2xl border border-emerald-200 dark:border-emerald-800 text-xs text-emerald-800 dark:text-emerald-300 flex items-center gap-2.5">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                  <div>
+                    <span className="font-bold block">
+                      Registrazione contabile già effettuata
+                    </span>
+                    Spesa registrata il {existingExpense.expenseDate} per l'importo di {existingExpense.amount} €.
+                  </div>
                 </div>
-              </div>
+              ) : (
+                /* Offline Protection Notice */
+                <div className="p-3 bg-slate-50 dark:bg-slate-800/50 rounded-2xl border border-slate-200 dark:border-slate-800 text-xs text-slate-600 dark:text-slate-400 flex items-start gap-2.5">
+                  <Info className="w-4 h-4 text-indigo-500 shrink-0 mt-0.5" />
+                  <div>
+                    <span className="font-bold text-slate-800 dark:text-slate-200 block mb-0.5">
+                      Modalità Revisione & Registrazione Contabile
+                    </span>
+                    La <strong>Conferma revisione dati</strong> convalida i dati estratti dall'OCR. Utilizza <strong>Crea Registrazione Contabile</strong> per generare direttamente la Spesa reale a bilancio.
+                  </div>
+                </div>
+              )}
             </div>
           </div>
 
@@ -1118,35 +1192,64 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
               onClick={onClose}
               disabled={isSaving}
             >
-              Annulla
+              Chiudi
             </Button>
 
-            <div className="flex items-center gap-3 w-full sm:w-auto justify-end">
-              <Button
-                type="button"
-                variant="ghost"
-                onClick={handleSaveDraft}
-                disabled={isSaving}
-                icon={<Save className="w-4 h-4 text-slate-600 dark:text-slate-300" />}
-              >
-                Salva bozza revisionata
-              </Button>
+            <div className="flex flex-wrap items-center gap-3 w-full sm:w-auto justify-end">
+              {!existingExpense && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  onClick={handleSaveDraft}
+                  disabled={isSaving}
+                  icon={<Save className="w-4 h-4 text-slate-600 dark:text-slate-300" />}
+                >
+                  Salva bozza
+                </Button>
+              )}
 
               <Button
                 type="button"
-                variant="emerald"
+                variant="secondary"
                 onClick={handleConfirmReview}
                 disabled={isSaving}
                 icon={
                   isSaving ? (
                     <RefreshCw className="w-4 h-4 animate-spin" />
                   ) : (
-                    <Check className="w-4 h-4" />
+                    <Check className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
                   )
                 }
               >
-                <span>{isSaving ? 'Salvataggio...' : 'Conferma revisione dati'}</span>
+                Conferma revisione dati
               </Button>
+
+              {existingExpense ? (
+                <Button
+                  type="button"
+                  variant="secondary"
+                  disabled={true}
+                  icon={<CheckCircle2 className="w-4 h-4 text-emerald-500" />}
+                >
+                  Registrazione già creata
+                </Button>
+              ) : (
+                <Button
+                  type="button"
+                  variant="emerald"
+                  onClick={handleCreateAccountingRegistration}
+                  disabled={isSaving}
+                  icon={
+                    isSaving ? (
+                      <RefreshCw className="w-4 h-4 animate-spin" />
+                    ) : (
+                      <Sparkles className="w-4 h-4" />
+                    )
+                  }
+                >
+                  <span>{isSaving ? 'Registrazione in corso...' : 'Crea Registrazione Contabile'}</span>
+                </Button>
+              )}
             </div>
           </div>
         </div>

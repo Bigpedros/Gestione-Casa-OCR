@@ -7,6 +7,7 @@ import {
   ocrProcessRepository,
   ocrReceiptLineRepository,
   categoryRepository,
+  documentSessionRepository,
 } from '../repositories';
 import { productClassificationService } from '../services/productClassification';
 import { seedInitialCategoriesAndSettings } from '../database/seed/seedCategories';
@@ -746,5 +747,232 @@ describe('Sistema di Classificazione Automatica Prodotti OCR (TEST-PRODUCT-CLASS
     // Verifico che NON sono state create Expense
     const expenses = await db.expenses.toArray();
     expect(expenses.length).toBe(0);
+  });
+
+  describe('Punto 10: Creazione Controllata della Registrazione Contabile (Expense)', () => {
+    it('17. Punto 10: Impedisce la creazione della registrazione se il processo OCR non è stato confermato dall\'utente', async () => {
+      const ocrProc = await ocrProcessRepository.create({
+        attachmentId: 'att-17',
+        status: 'completed',
+        confirmationRequired: true,
+        confirmedByUser: false, // Non ancora confermato
+      });
+
+      await ocrReceiptLineRepository.create({
+        ocrProcessId: ocrProc.id,
+        originalText: 'MOZZARELLA 2.50',
+        description: 'MOZZARELLA',
+        quantity: 1,
+        unitPrice: 2.5,
+        lineTotal: 2.5,
+        confidence: 90,
+        reviewStatus: 'pending',
+      });
+
+      // Tentativo di creazione senza conferma previa
+      await expect(
+        productClassificationService.createAccountingRegistration({
+          ocrProcessId: ocrProc.id,
+        })
+      ).rejects.toThrow(/revisione OCR non è stata ancora confermata/i);
+
+      // Verifico che nessuna Spesa o riga di spesa sia stata creata
+      const expenses = await db.expenses.toArray();
+      const expenseItems = await db.expenseItems.toArray();
+      expect(expenses.length).toBe(0);
+      expect(expenseItems.length).toBe(0);
+    });
+
+    it('18. Punto 10: Crea atomicamente Expense e ExpenseItems da una sessione OCR confermata', async () => {
+      const categories = await categoryRepository.getAll();
+      const foodCat = categories[0];
+
+      // 1. Crea fornitore e prodotto
+      const supplier = await supplierRepository.create({
+        name: 'SUPERMERCATO CONAD',
+        aliases: [],
+        status: 'confirmed',
+      });
+
+      const product = await productRepository.create({
+        displayName: 'Latte Fresco 1L',
+        normalizedName: 'LATTE FRESCO 1L',
+        categoryId: foodCat.id,
+      });
+
+      // 2. Crea sessione e processo OCR
+      const ocrProc = await ocrProcessRepository.create({
+        attachmentId: 'att-18',
+        status: 'completed',
+        detectedSupplier: 'SUPERMERCATO CONAD',
+        detectedDate: '2026-08-01',
+        detectedTotal: 4.5,
+        confirmationRequired: true,
+        confirmedByUser: false,
+      });
+
+      const session = await documentSessionRepository.create({
+        documentType: 'receipt',
+        sourceMode: 'singleImage',
+        processingMode: 'singleReceipt',
+        pageCount: 1,
+        status: 'ready_for_review',
+        ocrProcessId: ocrProc.id,
+        metadata: { title: 'Scontrino Conad', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), version: 1 },
+      });
+
+      const line1 = await ocrReceiptLineRepository.create({
+        ocrProcessId: ocrProc.id,
+        originalText: 'LATTE FRESCO 1.50',
+        description: 'LATTE FRESCO 1L',
+        quantity: 1,
+        unitPrice: 1.5,
+        lineTotal: 1.5,
+        confidence: 95,
+        reviewStatus: 'pending',
+      });
+
+      const line2 = await ocrReceiptLineRepository.create({
+        ocrProcessId: ocrProc.id,
+        originalText: 'PANE BIANCO 3.00',
+        description: 'PANE BIANCO',
+        quantity: 1,
+        unitPrice: 3.0,
+        lineTotal: 3.0,
+        confidence: 90,
+        reviewStatus: 'pending',
+      });
+
+      // 3. Esegue la conferma delle classificazioni (Punto 9)
+      await productClassificationService.confirmReceiptClassifications({
+        ocrProcessId: ocrProc.id,
+        supplierName: 'SUPERMERCATO CONAD',
+        expenseDate: '2026-08-01',
+        documentTotal: 4.5,
+        decisions: [
+          {
+            lineId: line1.id,
+            originalText: line1.originalText,
+            description: line1.description,
+            quantity: 1,
+            unitPrice: 1.5,
+            lineTotal: 1.5,
+            action: 'link_existing',
+            productId: product.id,
+            categoryId: foodCat.id,
+          },
+          {
+            lineId: line2.id,
+            originalText: line2.originalText,
+            description: line2.description,
+            quantity: 1,
+            unitPrice: 3.0,
+            lineTotal: 3.0,
+            action: 'create_new',
+            newProductDetails: { displayName: 'Pane Bianco' },
+            categoryId: foodCat.id,
+          },
+        ],
+      });
+
+      // 4. Esegue la creazione della registrazione contabile (Punto 10)
+      const createdExpense = await productClassificationService.createAccountingRegistration({
+        ocrProcessId: ocrProc.id,
+        sessionId: session.id,
+      });
+
+      expect(createdExpense).toBeDefined();
+      expect(createdExpense.amount).toBe(4.5);
+      expect(createdExpense.entryMode).toBe('receipt');
+      expect(createdExpense.supplierId).toBe(supplier.id);
+      expect(createdExpense.expenseDate).toBe('2026-08-01');
+
+      // Verifico ExpenseItems creati
+      const items = await db.expenseItems.where('expenseId').equals(createdExpense.id).toArray();
+      expect(items.length).toBe(2);
+
+      const item1 = items.find((i) => i.description === 'LATTE FRESCO 1L');
+      expect(item1).toBeDefined();
+      expect(item1?.productId).toBe(product.id);
+      expect(item1?.total).toBe(1.5);
+
+      const item2 = items.find((i) => i.description === 'PANE BIANCO');
+      expect(item2).toBeDefined();
+      expect(item2?.total).toBe(3.0);
+
+      // Verifico che DocumentSession e OCRProcess siano stati aggiornati con l'expenseId e status 'completed'
+      const updatedSession = await db.documentSessions.get(session.id);
+      expect(updatedSession?.status).toBe('completed');
+      expect(updatedSession?.expenseId).toBe(createdExpense.id);
+
+      const updatedProc = await ocrProcessRepository.getById(ocrProc.id);
+      expect(updatedProc?.status).toBe('completed');
+      expect(updatedProc?.expenseId).toBe(createdExpense.id);
+
+      // Verifico AuditLog
+      const logs = await db.auditLogs.toArray();
+      const expenseLog = logs.find((l) => l.entityType === 'expense' && l.entityId === createdExpense.id);
+      expect(expenseLog).toBeDefined();
+      expect(expenseLog?.action).toBe('create');
+      expect((expenseLog?.newValues as any)?.importedLinesCount).toBe(2);
+    });
+
+    it('19. Punto 10: Idempotenza della creazione contabile (nessuna doppia registrazione)', async () => {
+      const ocrProc = await ocrProcessRepository.create({
+        attachmentId: 'att-19',
+        status: 'completed',
+        detectedSupplier: 'SUPERMERCATO TEST',
+        detectedDate: '2026-08-02',
+        detectedTotal: 10.0,
+        confirmationRequired: true,
+        confirmedByUser: true, // Già confermato dall'utente
+      });
+
+      const session = await documentSessionRepository.create({
+        documentType: 'receipt',
+        sourceMode: 'singleImage',
+        processingMode: 'singleReceipt',
+        pageCount: 1,
+        status: 'reviewed',
+        ocrProcessId: ocrProc.id,
+        metadata: { title: 'Scontrino Test', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), version: 1 },
+      });
+
+      await ocrReceiptLineRepository.create({
+        ocrProcessId: ocrProc.id,
+        originalText: 'ARTICOLO TEST 10.00',
+        description: 'ARTICOLO TEST',
+        quantity: 1,
+        unitPrice: 10.0,
+        lineTotal: 10.0,
+        confidence: 90,
+        reviewStatus: 'confirmed',
+      });
+
+      // Prima chiamata
+      const exp1 = await productClassificationService.createAccountingRegistration({
+        ocrProcessId: ocrProc.id,
+        sessionId: session.id,
+      });
+
+      const countAfterFirst = (await db.expenses.toArray()).length;
+      const itemsCountAfterFirst = (await db.expenseItems.toArray()).length;
+      expect(countAfterFirst).toBe(1);
+      expect(itemsCountAfterFirst).toBe(1);
+
+      // Seconda chiamata
+      const exp2 = await productClassificationService.createAccountingRegistration({
+        ocrProcessId: ocrProc.id,
+        sessionId: session.id,
+      });
+
+      expect(exp2.id).toBe(exp1.id);
+
+      const countAfterSecond = (await db.expenses.toArray()).length;
+      const itemsCountAfterSecond = (await db.expenseItems.toArray()).length;
+
+      expect(countAfterSecond).toBe(1); // Nessuna seconda Expense creata
+      expect(itemsCountAfterSecond).toBe(1); // Nessuna seconda ExpenseItem creata
+    });
   });
 });

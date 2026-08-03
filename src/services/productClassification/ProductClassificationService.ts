@@ -7,8 +7,9 @@ import {
   supplierRepository,
   categoryRepository,
   auditLogRepository,
+  documentSessionRepository,
 } from '../../repositories';
-import type { Product, ProductAlias, Supplier, OCRReceiptLine, Category } from '../../types';
+import type { Product, ProductAlias, Supplier, OCRReceiptLine, Category, Expense, ExpenseItem } from '../../types';
 import { ProductFingerprintService } from './ProductFingerprint';
 import type {
   ReceiptClassificationProposal,
@@ -18,6 +19,7 @@ import type {
   ProposedCategoryInfo,
   ConfidenceLevel,
   ConfirmReceiptClassificationParams,
+  CreateAccountingRegistrationParams,
 } from './types';
 
 export class ProductClassificationService {
@@ -568,6 +570,254 @@ export class ProductClassificationService {
     );
 
     return { updatedLinesCount, createdProductsCount, createdAliasesCount };
+  }
+
+  /**
+   * PUNTO 10: Trasforma un processo OCR / DocumentSession confermato in una Expense e ExpenseItems reali.
+   * L'operazione è atomica (transazione Dexie) e idempotente (non crea duplicati se richiamata più volte).
+   */
+  public async createAccountingRegistration(
+    params: CreateAccountingRegistrationParams
+  ): Promise<Expense> {
+    const { ocrProcessId, sessionId, paymentMethod = 'cash', notes } = params;
+
+    // 1. Carica il processo OCR
+    const ocrProc = await ocrProcessRepository.getById(ocrProcessId);
+    if (!ocrProc) {
+      throw new Error(`Processo OCR ${ocrProcessId} non trovato`);
+    }
+
+    // Carica eventuale DocumentSession collegata
+    let session = sessionId ? await documentSessionRepository.getById(sessionId) : null;
+    if (!session && ocrProc.id) {
+      const allSessions = await documentSessionRepository.getAll();
+      session = allSessions.find((s) => s.ocrProcessId === ocrProc.id) || null;
+    }
+
+    // 2. Controllo PRECONDIZIONI (Punto 10 - Sezione 1)
+    if (!ocrProc.confirmedByUser) {
+      throw new Error(
+        `Impossibile creare la registrazione contabile: la revisione OCR non è stata ancora confermata dall'utente`
+      );
+    }
+
+    if (
+      session &&
+      session.status !== 'ready_for_review' &&
+      session.status !== 'reviewed' &&
+      session.status !== 'completed'
+    ) {
+      throw new Error(
+        `Impossibile creare la registrazione contabile: la sessione ${session.id} si trova nello stato non consentito '${session.status}'`
+      );
+    }
+
+    // 3. Controllo ANTI-DUPLICAZIONE / IDEMPOTENZA (Punto 10 - Sezione 5)
+    if (session?.expenseId) {
+      const existing = await db.expenses.get(session.expenseId);
+      if (existing) {
+        return existing;
+      }
+    }
+
+    if (ocrProc.expenseId) {
+      const existing = await db.expenses.get(ocrProc.expenseId);
+      if (existing) {
+        return existing;
+      }
+    }
+
+    const allExpenses = await db.expenses.toArray();
+    const existingByMeta = allExpenses.find((e) => {
+      const m = e.metadata as Record<string, any> | undefined;
+      return (
+        m?.ocrProcessId === ocrProc.id ||
+        (session?.id && m?.documentSessionId === session.id)
+      );
+    });
+
+    if (existingByMeta) {
+      return existingByMeta;
+    }
+
+    // 4. Carica le righe scontrino confermate
+    const ocrLines = await ocrReceiptLineRepository.getByOcrProcessId(ocrProc.id);
+    const confirmedLines = ocrLines.filter((l) => l.reviewStatus === 'confirmed');
+    const linesToImport = confirmedLines.length > 0 ? confirmedLines : ocrLines;
+
+    // 5. Fornitore e date
+    let supplierId: string | null = null;
+    let supplierName: string = ocrProc.detectedSupplier || 'Fornitore scontrino';
+
+    if (ocrProc.detectedSupplier) {
+      const matchedSup = await supplierRepository.getByNameOrAlias(ocrProc.detectedSupplier);
+      if (matchedSup) {
+        supplierId = matchedSup.id;
+        supplierName = matchedSup.name;
+      }
+    }
+
+    const expenseDate = ocrProc.detectedDate || new Date().toISOString().substring(0, 10);
+    const d = new Date(expenseDate);
+    const competenceYear = isNaN(d.getFullYear()) ? new Date().getFullYear() : d.getFullYear();
+    const competenceMonth = isNaN(d.getMonth()) ? new Date().getMonth() + 1 : d.getMonth() + 1;
+
+    // Calcolo totale
+    const lineTotalSum = linesToImport.reduce((sum, line) => sum + (line.lineTotal || 0), 0);
+    const totalAmount =
+      typeof ocrProc.detectedTotal === 'number' && ocrProc.detectedTotal > 0
+        ? ocrProc.detectedTotal
+        : Math.round(lineTotalSum * 100) / 100;
+
+    // Categoria e Sottocategoria
+    const allCategories = await categoryRepository.getAll();
+    let mainCategoryId = params.categoryId || null;
+    let mainSubcategoryId = params.subcategoryId || null;
+
+    if (!mainCategoryId) {
+      if (supplierId) {
+        const sup = await supplierRepository.getById(supplierId);
+        if (sup?.defaultCategoryId) {
+          mainCategoryId = sup.defaultCategoryId;
+          mainSubcategoryId = sup.defaultSubcategoryId || null;
+        }
+      }
+      if (!mainCategoryId) {
+        for (const line of linesToImport) {
+          if (line.productId) {
+            const prod = await productRepository.getById(line.productId);
+            if (prod?.categoryId) {
+              mainCategoryId = prod.categoryId;
+              mainSubcategoryId = prod.subcategoryId || null;
+              break;
+            }
+          }
+        }
+      }
+      if (!mainCategoryId) {
+        const defaultCat =
+          allCategories.find((c) => c.code === 'CAT_FOOD' || c.code === 'CAT_MISC') || allCategories[0];
+        mainCategoryId = defaultCat?.id || 'cat-food';
+      }
+    }
+
+    if (!mainSubcategoryId) {
+      const subs = await categoryRepository.getSubcategories(mainCategoryId);
+      mainSubcategoryId = subs[0]?.id || mainCategoryId;
+    }
+
+    const expenseId = `exp-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+    const now = new Date().toISOString();
+
+    const expense: Expense = {
+      id: expenseId,
+      entryMode: 'receipt',
+      supplierId,
+      description: `Scontrino ${supplierName}`,
+      amount: totalAmount,
+      expenseDate,
+      paymentDate: expenseDate,
+      competenceMonth,
+      competenceYear,
+      categoryId: mainCategoryId,
+      subcategoryId: mainSubcategoryId,
+      paymentMethod,
+      status: 'paid',
+      classification: 'necessary',
+      notified: false,
+      notes: notes || undefined,
+      metadata: {
+        createdAt: now,
+        updatedAt: now,
+        version: 1,
+        documentSessionId: session?.id || null,
+        ocrProcessId: ocrProc.id,
+        origin: 'OCR',
+      } as any,
+    };
+
+    const expenseItems: ExpenseItem[] = linesToImport.map((line, idx) => ({
+      id: `exp-item-${Date.now()}-${idx}-${Math.random().toString(36).substring(2, 7)}`,
+      expenseId,
+      description: line.description || line.originalText,
+      quantity: line.quantity || 1,
+      unitPrice: line.unitPrice || line.lineTotal || 0,
+      total: line.lineTotal || 0,
+      categoryId: mainCategoryId!,
+      subcategoryId: mainSubcategoryId!,
+      classification: 'necessary',
+      classificationSource: line.reviewStatus === 'modified' ? 'userCorrected' : 'automatic',
+      productId: line.productId || null,
+      ocrReceiptLineId: line.id,
+      metadata: { createdAt: now, updatedAt: now, version: 1 },
+    }));
+
+    let createdExpense: Expense | null = null;
+
+    // Transazione atomica Dexie
+    await db.transaction(
+      'rw',
+      [
+        db.expenses,
+        db.expenseItems,
+        db.documentSessions,
+        db.ocrProcesses,
+        db.auditLogs,
+      ],
+      async () => {
+        // Re-check idempotenza
+        if (session?.id) {
+          const sInDb = await db.documentSessions.get(session.id);
+          if (sInDb?.expenseId) {
+            const expInDb = await db.expenses.get(sInDb.expenseId);
+            if (expInDb) {
+              createdExpense = expInDb;
+              return;
+            }
+          }
+        }
+
+        await db.expenses.add(expense);
+
+        if (expenseItems.length > 0) {
+          await db.expenseItems.bulkAdd(expenseItems);
+        }
+
+        if (session?.id) {
+          await db.documentSessions.update(session.id, {
+            status: 'completed',
+            expenseId: expense.id,
+            updatedAt: now,
+          });
+        }
+
+        await db.ocrProcesses.update(ocrProc.id, {
+          expenseId: expense.id,
+          status: 'completed',
+        });
+
+        await db.auditLogs.add({
+          id: `audit-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+          entityType: 'expense',
+          entityId: expense.id,
+          action: 'create',
+          newValues: {
+            expenseId: expense.id,
+            documentSessionId: session?.id || null,
+            ocrProcessId: ocrProc.id,
+            importedLinesCount: expenseItems.length,
+            amount: expense.amount,
+            supplierId: expense.supplierId || null,
+            origin: 'OCR',
+          },
+          timestamp: now,
+        });
+
+        createdExpense = expense;
+      }
+    );
+
+    return createdExpense || expense;
   }
 }
 

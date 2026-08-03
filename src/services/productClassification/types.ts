@@ -1,4 +1,4 @@
-import type { Product, ProductAlias, Supplier, EntityId, MoneyAmount } from '../../types';
+import type { Product, ProductAlias, Supplier, EntityId, MoneyAmount, PaymentMethod } from '../../types';
 
 export interface ProductFingerprintData {
   rawDescription: string;
@@ -142,4 +142,13 @@ export interface ConfirmReceiptClassificationParams {
   documentTotal?: number | null;
   decisions: LineClassificationDecision[];
   deletedLineIds?: EntityId[];
+}
+
+export interface CreateAccountingRegistrationParams {
+  ocrProcessId: EntityId;
+  sessionId?: EntityId | null;
+  paymentMethod?: PaymentMethod;
+  categoryId?: EntityId | null;
+  subcategoryId?: EntityId | null;
+  notes?: string;
 }

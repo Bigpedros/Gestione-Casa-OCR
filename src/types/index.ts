@@ -162,6 +162,9 @@ export interface ExpenseItem {
   subcategoryId: EntityId;
   classification: ExpenseClassification;
   classificationSource: 'manual' | 'automatic' | 'userCorrected';
+  productId?: EntityId | null;
+  unitOfMeasure?: string | null;
+  ocrReceiptLineId?: EntityId | null;
   notes?: string;
   metadata: RecordMetadata;
 }
@@ -317,6 +320,7 @@ export interface OCRProcess {
   confirmedByUser: boolean;
   processedAt?: ISODateTime | null;
   errorMessage?: string | null;
+  expenseId?: EntityId | null;
   metadata: RecordMetadata;
 }
 

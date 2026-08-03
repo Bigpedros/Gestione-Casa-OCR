@@ -404,11 +404,15 @@ export class ProductClassificationService {
     await db.transaction(
       'rw',
       [
+        db.categories,
+        db.documentSessions,
+        db.ocrProcesses,
+        db.ocrReceiptLines,
         db.products,
         db.productAliases,
-        db.ocrReceiptLines,
-        db.ocrProcesses,
         db.suppliers,
+        db.expenses,
+        db.expenseItems,
         db.auditLogs,
       ],
       async () => {
@@ -573,13 +577,23 @@ export class ProductClassificationService {
   }
 
   /**
-   * PUNTO 10: Trasforma un processo OCR / DocumentSession confermato in una Expense e ExpenseItems reali.
-   * L'operazione è atomica (transazione Dexie) e idempotente (non crea duplicati se richiamata più volte).
+   * PUNTO 11: Salvataggio Atomico dell'intero fascicolo OCR (Expense, ExpenseItems, Products, Aliases, Session, Process).
+   * L'operazione è rigorosamente atomica (singola transazione Dexie a 9 tabelle) e completamente idempotente.
    */
   public async createAccountingRegistration(
     params: CreateAccountingRegistrationParams
   ): Promise<Expense> {
-    const { ocrProcessId, sessionId, paymentMethod = 'cash', notes } = params;
+    const {
+      ocrProcessId,
+      sessionId,
+      paymentMethod = 'cash',
+      notes,
+      supplierName: paramSupplierName,
+      expenseDate: paramExpenseDate,
+      documentTotal: paramDocumentTotal,
+      decisions,
+      deletedLineIds,
+    } = params;
 
     // 1. Carica il processo OCR
     const ocrProc = await ocrProcessRepository.getById(ocrProcessId);
@@ -594,8 +608,8 @@ export class ProductClassificationService {
       session = allSessions.find((s) => s.ocrProcessId === ocrProc.id) || null;
     }
 
-    // 2. Controllo PRECONDIZIONI (Punto 10 - Sezione 1)
-    if (!ocrProc.confirmedByUser) {
+    // 2. PRECONDIZIONI & IDEMPOTENZA (Punto 11 - Sezione 3)
+    if (!ocrProc.confirmedByUser && (!decisions || decisions.length === 0)) {
       throw new Error(
         `Impossibile creare la registrazione contabile: la revisione OCR non è stata ancora confermata dall'utente`
       );
@@ -612,19 +626,15 @@ export class ProductClassificationService {
       );
     }
 
-    // 3. Controllo ANTI-DUPLICAZIONE / IDEMPOTENZA (Punto 10 - Sezione 5)
+    // 3. CONTROLLO ANTI-DUPLICAZIONE / IDEMPOTENZA (Punto 11 - Sezione 3)
     if (session?.expenseId) {
       const existing = await db.expenses.get(session.expenseId);
-      if (existing) {
-        return existing;
-      }
+      if (existing) return existing;
     }
 
     if (ocrProc.expenseId) {
       const existing = await db.expenses.get(ocrProc.expenseId);
-      if (existing) {
-        return existing;
-      }
+      if (existing) return existing;
     }
 
     const allExpenses = await db.expenses.toArray();
@@ -635,137 +645,47 @@ export class ProductClassificationService {
         (session?.id && m?.documentSessionId === session.id)
       );
     });
+    if (existingByMeta) return existingByMeta;
 
-    if (existingByMeta) {
-      return existingByMeta;
-    }
-
-    // 4. Carica le righe scontrino confermate
-    const ocrLines = await ocrReceiptLineRepository.getByOcrProcessId(ocrProc.id);
-    const confirmedLines = ocrLines.filter((l) => l.reviewStatus === 'confirmed');
-    const linesToImport = confirmedLines.length > 0 ? confirmedLines : ocrLines;
-
-    // 5. Fornitore e date
-    let supplierId: string | null = null;
-    let supplierName: string = ocrProc.detectedSupplier || 'Fornitore scontrino';
-
-    if (ocrProc.detectedSupplier) {
-      const matchedSup = await supplierRepository.getByNameOrAlias(ocrProc.detectedSupplier);
-      if (matchedSup) {
-        supplierId = matchedSup.id;
-        supplierName = matchedSup.name;
+    // Controllo AuditLog per prevenzione doppio salvataggio
+    const allAuditLogs = await db.auditLogs.toArray();
+    const existingAuditLog = allAuditLogs.find((l) => {
+      if (l.entityType !== 'expense') return false;
+      const nv = l.newValues as Record<string, any> | undefined;
+      return (
+        nv?.ocrProcessId === ocrProc.id ||
+        (session?.id && nv?.documentSessionId === session.id)
+      );
+    });
+    if (existingAuditLog) {
+      const expId = existingAuditLog.entityId || (existingAuditLog.newValues as any)?.expenseId;
+      if (expId) {
+        const existing = await db.expenses.get(expId);
+        if (existing) return existing;
       }
     }
 
-    const expenseDate = ocrProc.detectedDate || new Date().toISOString().substring(0, 10);
-    const d = new Date(expenseDate);
-    const competenceYear = isNaN(d.getFullYear()) ? new Date().getFullYear() : d.getFullYear();
-    const competenceMonth = isNaN(d.getMonth()) ? new Date().getMonth() + 1 : d.getMonth() + 1;
-
-    // Calcolo totale
-    const lineTotalSum = linesToImport.reduce((sum, line) => sum + (line.lineTotal || 0), 0);
-    const totalAmount =
-      typeof ocrProc.detectedTotal === 'number' && ocrProc.detectedTotal > 0
-        ? ocrProc.detectedTotal
-        : Math.round(lineTotalSum * 100) / 100;
-
-    // Categoria e Sottocategoria
-    const allCategories = await categoryRepository.getAll();
-    let mainCategoryId = params.categoryId || null;
-    let mainSubcategoryId = params.subcategoryId || null;
-
-    if (!mainCategoryId) {
-      if (supplierId) {
-        const sup = await supplierRepository.getById(supplierId);
-        if (sup?.defaultCategoryId) {
-          mainCategoryId = sup.defaultCategoryId;
-          mainSubcategoryId = sup.defaultSubcategoryId || null;
-        }
-      }
-      if (!mainCategoryId) {
-        for (const line of linesToImport) {
-          if (line.productId) {
-            const prod = await productRepository.getById(line.productId);
-            if (prod?.categoryId) {
-              mainCategoryId = prod.categoryId;
-              mainSubcategoryId = prod.subcategoryId || null;
-              break;
-            }
-          }
-        }
-      }
-      if (!mainCategoryId) {
-        const defaultCat =
-          allCategories.find((c) => c.code === 'CAT_FOOD' || c.code === 'CAT_MISC') || allCategories[0];
-        mainCategoryId = defaultCat?.id || 'cat-food';
-      }
-    }
-
-    if (!mainSubcategoryId) {
-      const subs = await categoryRepository.getSubcategories(mainCategoryId);
-      mainSubcategoryId = subs[0]?.id || mainCategoryId;
-    }
-
-    const expenseId = `exp-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
-    const now = new Date().toISOString();
-
-    const expense: Expense = {
-      id: expenseId,
-      entryMode: 'receipt',
-      supplierId,
-      description: `Scontrino ${supplierName}`,
-      amount: totalAmount,
-      expenseDate,
-      paymentDate: expenseDate,
-      competenceMonth,
-      competenceYear,
-      categoryId: mainCategoryId,
-      subcategoryId: mainSubcategoryId,
-      paymentMethod,
-      status: 'paid',
-      classification: 'necessary',
-      notified: false,
-      notes: notes || undefined,
-      metadata: {
-        createdAt: now,
-        updatedAt: now,
-        version: 1,
-        documentSessionId: session?.id || null,
-        ocrProcessId: ocrProc.id,
-        origin: 'OCR',
-      } as any,
-    };
-
-    const expenseItems: ExpenseItem[] = linesToImport.map((line, idx) => ({
-      id: `exp-item-${Date.now()}-${idx}-${Math.random().toString(36).substring(2, 7)}`,
-      expenseId,
-      description: line.description || line.originalText,
-      quantity: line.quantity || 1,
-      unitPrice: line.unitPrice || line.lineTotal || 0,
-      total: line.lineTotal || 0,
-      categoryId: mainCategoryId!,
-      subcategoryId: mainSubcategoryId!,
-      classification: 'necessary',
-      classificationSource: line.reviewStatus === 'modified' ? 'userCorrected' : 'automatic',
-      productId: line.productId || null,
-      ocrReceiptLineId: line.id,
-      metadata: { createdAt: now, updatedAt: now, version: 1 },
-    }));
-
+    let createdProductsCount = 0;
+    let createdAliasesCount = 0;
     let createdExpense: Expense | null = null;
 
-    // Transazione atomica Dexie
+    // 4. UNICA TRANSAZIONE ATOMICA SU TUTTE LE TABELLE (Punto 11 - Sezione 1 & 2)
     await db.transaction(
       'rw',
       [
-        db.expenses,
-        db.expenseItems,
+        db.categories,
         db.documentSessions,
         db.ocrProcesses,
+        db.ocrReceiptLines,
+        db.products,
+        db.productAliases,
+        db.suppliers,
+        db.expenses,
+        db.expenseItems,
         db.auditLogs,
       ],
       async () => {
-        // Re-check idempotenza
+        // Re-check atomico idempotenza dentro la transazione
         if (session?.id) {
           const sInDb = await db.documentSessions.get(session.id);
           if (sInDb?.expenseId) {
@@ -776,13 +696,250 @@ export class ProductClassificationService {
             }
           }
         }
+        const procInDb = await db.ocrProcesses.get(ocrProc.id);
+        if (procInDb?.expenseId) {
+          const expInDb = await db.expenses.get(procInDb.expenseId);
+          if (expInDb) {
+            createdExpense = expInDb;
+            return;
+          }
+        }
 
+        // Fornitore e dati generali
+        let supplierId: string | null = params.supplierId || null;
+        const effectiveSupplierName = paramSupplierName || ocrProc.detectedSupplier || 'Fornitore scontrino';
+
+        if (effectiveSupplierName && (!supplierId || supplierId === 'new')) {
+          const supMatch = await supplierRepository.getByNameOrAlias(effectiveSupplierName);
+          if (supMatch) {
+            supplierId = supMatch.id;
+          } else if (effectiveSupplierName.trim()) {
+            const newSup = await supplierRepository.create({
+              name: effectiveSupplierName.trim(),
+              aliases: [],
+              status: 'confirmed',
+            });
+            supplierId = newSup.id;
+          }
+        }
+
+        // Cancellazione righe eliminati
+        if (deletedLineIds && deletedLineIds.length > 0) {
+          for (const lineId of deletedLineIds) {
+            if (!lineId.startsWith('temp-line-')) {
+              await ocrReceiptLineRepository.delete(lineId);
+            }
+          }
+        }
+
+        // Elaborazione decisioni di classificazione se fornite integratamente
+        if (decisions && decisions.length > 0) {
+          for (const decision of decisions) {
+            const rawDesc = decision.description || decision.originalText;
+            const normText = ProductFingerprintService.normalizeText(rawDesc);
+            const cleanNormName = ProductFingerprintService.computeCleanNormalizedName(rawDesc);
+
+            let finalProductId: string | null = null;
+
+            if (decision.action === 'link_existing' && decision.productId) {
+              finalProductId = decision.productId;
+
+              const existingAliases = await productAliasRepository.getByProduct(finalProductId);
+              const aliasExists = existingAliases.some(
+                (a) => a.normalizedText === normText || a.originalText.toUpperCase().trim() === rawDesc.toUpperCase().trim()
+              );
+
+              if (!aliasExists && normText.length > 1) {
+                await productAliasRepository.create({
+                  productId: finalProductId,
+                  originalText: decision.originalText || decision.description,
+                  normalizedText: normText,
+                  supplierId: supplierId || null,
+                  confidence: 100,
+                  confirmedByUser: true,
+                });
+                createdAliasesCount++;
+              }
+            } else if (decision.action === 'create_new') {
+              const existingProduct = await productRepository.getByNormalizedName(cleanNormName);
+
+              if (existingProduct) {
+                finalProductId = existingProduct.id;
+              } else {
+                const details = decision.newProductDetails;
+                const newProd = await productRepository.create({
+                  displayName: details?.displayName || decision.description,
+                  normalizedName: cleanNormName,
+                  brand: details?.brand || ProductFingerprintService.extractBrand(rawDesc) || null,
+                  barcode: details?.barcode || ProductFingerprintService.extractBarcode(rawDesc) || null,
+                  unitOfMeasure:
+                    details?.unitOfMeasure ||
+                    ProductFingerprintService.extractUnitOfMeasure(rawDesc).unitOfMeasure ||
+                    null,
+                  categoryId: decision.categoryId || details?.categoryId || null,
+                  subcategoryId: decision.subcategoryId || details?.subcategoryId || null,
+                });
+                finalProductId = newProd.id;
+                createdProductsCount++;
+              }
+
+              const existingAliases = await productAliasRepository.getByProduct(finalProductId);
+              const aliasExists = existingAliases.some(
+                (a) => a.normalizedText === normText || a.originalText.toUpperCase().trim() === rawDesc.toUpperCase().trim()
+              );
+
+              if (!aliasExists && normText.length > 1) {
+                await productAliasRepository.create({
+                  productId: finalProductId,
+                  originalText: decision.originalText || decision.description,
+                  normalizedText: normText,
+                  supplierId: supplierId || null,
+                  confidence: 100,
+                  confirmedByUser: true,
+                });
+                createdAliasesCount++;
+              }
+            }
+
+            if (decision.lineId && !decision.lineId.startsWith('temp-line-')) {
+              await ocrReceiptLineRepository.update(decision.lineId, {
+                description: decision.description,
+                quantity: decision.quantity,
+                unitPrice: decision.unitPrice,
+                lineTotal: decision.lineTotal,
+                productId: finalProductId,
+                reviewStatus: 'confirmed',
+              });
+            } else {
+              await ocrReceiptLineRepository.create({
+                ocrProcessId,
+                originalText: decision.originalText || decision.description,
+                description: decision.description,
+                quantity: decision.quantity,
+                unitPrice: decision.unitPrice,
+                lineTotal: decision.lineTotal,
+                confidence: decision.confidence || 100,
+                reviewStatus: 'confirmed',
+                productId: finalProductId,
+              });
+            }
+          }
+        }
+
+        // Righe scontrino confermate
+        const ocrLines = await ocrReceiptLineRepository.getByOcrProcessId(ocrProc.id);
+        const confirmedLines = ocrLines.filter((l) => l.reviewStatus === 'confirmed');
+        const linesToImport = confirmedLines.length > 0 ? confirmedLines : ocrLines;
+
+        if (!supplierId && effectiveSupplierName) {
+          const matchedSup = await supplierRepository.getByNameOrAlias(effectiveSupplierName);
+          if (matchedSup) supplierId = matchedSup.id;
+        }
+
+        const expenseDate = paramExpenseDate || ocrProc.detectedDate || new Date().toISOString().substring(0, 10);
+        const d = new Date(expenseDate);
+        const competenceYear = isNaN(d.getFullYear()) ? new Date().getFullYear() : d.getFullYear();
+        const competenceMonth = isNaN(d.getMonth()) ? new Date().getMonth() + 1 : d.getMonth() + 1;
+
+        const lineTotalSum = linesToImport.reduce((sum, line) => sum + (line.lineTotal || 0), 0);
+        const totalAmount =
+          typeof paramDocumentTotal === 'number' && paramDocumentTotal > 0
+            ? paramDocumentTotal
+            : typeof ocrProc.detectedTotal === 'number' && ocrProc.detectedTotal > 0
+            ? ocrProc.detectedTotal
+            : Math.round(lineTotalSum * 100) / 100;
+
+        // Categorie
+        const allCategories = await categoryRepository.getAll();
+        let mainCategoryId = params.categoryId || null;
+        let mainSubcategoryId = params.subcategoryId || null;
+
+        if (!mainCategoryId) {
+          if (supplierId) {
+            const sup = await supplierRepository.getById(supplierId);
+            if (sup?.defaultCategoryId) {
+              mainCategoryId = sup.defaultCategoryId;
+              mainSubcategoryId = sup.defaultSubcategoryId || null;
+            }
+          }
+          if (!mainCategoryId) {
+            for (const line of linesToImport) {
+              if (line.productId) {
+                const prod = await productRepository.getById(line.productId);
+                if (prod?.categoryId) {
+                  mainCategoryId = prod.categoryId;
+                  mainSubcategoryId = prod.subcategoryId || null;
+                  break;
+                }
+              }
+            }
+          }
+          if (!mainCategoryId) {
+            const defaultCat =
+              allCategories.find((c) => c.code === 'CAT_FOOD' || c.code === 'CAT_MISC') || allCategories[0];
+            mainCategoryId = defaultCat?.id || 'cat-food';
+          }
+        }
+
+        if (!mainSubcategoryId) {
+          const subs = await categoryRepository.getSubcategories(mainCategoryId);
+          mainSubcategoryId = subs[0]?.id || mainCategoryId;
+        }
+
+        const expenseId = `exp-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+        const now = new Date().toISOString();
+
+        const expense: Expense = {
+          id: expenseId,
+          entryMode: 'receipt',
+          supplierId,
+          description: `Scontrino ${effectiveSupplierName}`,
+          amount: totalAmount,
+          expenseDate,
+          paymentDate: expenseDate,
+          competenceMonth,
+          competenceYear,
+          categoryId: mainCategoryId,
+          subcategoryId: mainSubcategoryId,
+          paymentMethod,
+          status: 'paid',
+          classification: 'necessary',
+          notified: false,
+          notes: notes || undefined,
+          metadata: {
+            createdAt: now,
+            updatedAt: now,
+            version: 1,
+            documentSessionId: session?.id || null,
+            ocrProcessId: ocrProc.id,
+            origin: 'OCR',
+          } as any,
+        };
+
+        const expenseItems: ExpenseItem[] = linesToImport.map((line, idx) => ({
+          id: `exp-item-${Date.now()}-${idx}-${Math.random().toString(36).substring(2, 7)}`,
+          expenseId,
+          description: line.description || line.originalText,
+          quantity: line.quantity || 1,
+          unitPrice: line.unitPrice || line.lineTotal || 0,
+          total: line.lineTotal || 0,
+          categoryId: mainCategoryId!,
+          subcategoryId: mainSubcategoryId!,
+          classification: 'necessary',
+          classificationSource: line.reviewStatus === 'modified' ? 'userCorrected' : 'automatic',
+          productId: line.productId || null,
+          ocrReceiptLineId: line.id,
+          metadata: { createdAt: now, updatedAt: now, version: 1 },
+        }));
+
+        // Scrittura spesa e righe
         await db.expenses.add(expense);
 
         if (expenseItems.length > 0) {
           await db.expenseItems.bulkAdd(expenseItems);
         }
 
+        // Stato definitivo DocumentSession
         if (session?.id) {
           await db.documentSessions.update(session.id, {
             status: 'completed',
@@ -791,11 +948,17 @@ export class ProductClassificationService {
           });
         }
 
+        // Stato definitivo OCRProcess
         await db.ocrProcesses.update(ocrProc.id, {
+          detectedSupplier: effectiveSupplierName,
+          detectedDate: expenseDate,
+          detectedTotal: totalAmount,
           expenseId: expense.id,
           status: 'completed',
+          confirmedByUser: true,
         });
 
+        // Audit Log finale esteso (Punto 11 - Sezione 7)
         await db.auditLogs.add({
           id: `audit-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
           entityType: 'expense',
@@ -806,9 +969,14 @@ export class ProductClassificationService {
             documentSessionId: session?.id || null,
             ocrProcessId: ocrProc.id,
             importedLinesCount: expenseItems.length,
-            amount: expense.amount,
+            createdProductsCount,
+            createdAliasesCount,
             supplierId: expense.supplierId || null,
+            supplierName: effectiveSupplierName,
+            amount: expense.amount,
+            confirmedByUser: true,
             origin: 'OCR',
+            timestamp: now,
           },
           timestamp: now,
         });
@@ -817,7 +985,11 @@ export class ProductClassificationService {
       }
     );
 
-    return createdExpense || expense;
+    if (!createdExpense) {
+      throw new Error('Errore durante la creazione della registrazione contabile: spesa non generata');
+    }
+
+    return createdExpense;
   }
 }
 

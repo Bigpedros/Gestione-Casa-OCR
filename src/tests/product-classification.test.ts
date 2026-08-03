@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { db } from '../database/db';
 import {
   productRepository,
@@ -973,6 +973,274 @@ describe('Sistema di Classificazione Automatica Prodotti OCR (TEST-PRODUCT-CLASS
 
       expect(countAfterSecond).toBe(1); // Nessuna seconda Expense creata
       expect(itemsCountAfterSecond).toBe(1); // Nessuna seconda ExpenseItem creata
+    });
+  });
+
+  describe('Punto 11: Salvataggio Atomico del Fascicolo OCR & Coerenza Database', () => {
+    it('20. Punto 11: Salvataggio atomico integrale in un\'unica chiamata con verifica di tutti i collegamenti e dell\'AuditLog', async () => {
+      const categories = await categoryRepository.getAll();
+      const foodCat = categories[0];
+
+      const ocrProc = await ocrProcessRepository.create({
+        attachmentId: 'att-20',
+        status: 'processing',
+        detectedSupplier: 'ESSELUNGA TORINO',
+        detectedDate: '2026-08-03',
+        detectedTotal: 12.5,
+        confirmationRequired: true,
+        confirmedByUser: false,
+      });
+
+      const session = await documentSessionRepository.create({
+        documentType: 'receipt',
+        sourceMode: 'singleImage',
+        processingMode: 'singleReceipt',
+        pageCount: 1,
+        status: 'ready_for_review',
+        ocrProcessId: ocrProc.id,
+        metadata: { title: 'Scontrino Esselunga', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), version: 1 },
+      });
+
+      const line1 = await ocrReceiptLineRepository.create({
+        ocrProcessId: ocrProc.id,
+        originalText: 'YOGURT GRECO 2.50',
+        description: 'YOGURT GRECO 150G',
+        quantity: 1,
+        unitPrice: 2.5,
+        lineTotal: 2.5,
+        confidence: 90,
+        reviewStatus: 'pending',
+      });
+
+      const line2 = await ocrReceiptLineRepository.create({
+        ocrProcessId: ocrProc.id,
+        originalText: 'OLIO EXTRAVERGINE 10.00',
+        description: 'OLIO EXTRAVERGINE 1L',
+        quantity: 1,
+        unitPrice: 10.0,
+        lineTotal: 10.0,
+        confidence: 95,
+        reviewStatus: 'pending',
+      });
+
+      // Esecuzione unificata atomica del fascicolo OCR
+      const createdExpense = await productClassificationService.createAccountingRegistration({
+        ocrProcessId: ocrProc.id,
+        sessionId: session.id,
+        supplierName: 'ESSELUNGA TORINO',
+        expenseDate: '2026-08-03',
+        documentTotal: 12.5,
+        decisions: [
+          {
+            lineId: line1.id,
+            originalText: line1.originalText,
+            description: line1.description,
+            quantity: 1,
+            unitPrice: 2.5,
+            lineTotal: 2.5,
+            action: 'create_new',
+            newProductDetails: { displayName: 'Yogurt Greco 150g' },
+            categoryId: foodCat.id,
+          },
+          {
+            lineId: line2.id,
+            originalText: line2.originalText,
+            description: line2.description,
+            quantity: 1,
+            unitPrice: 10.0,
+            lineTotal: 10.0,
+            action: 'create_new',
+            newProductDetails: { displayName: 'Olio Extravergine 1L' },
+            categoryId: foodCat.id,
+          },
+        ],
+      });
+
+      expect(createdExpense).toBeDefined();
+      expect(createdExpense.amount).toBe(12.5);
+
+      // Verifico che le entità collegate siano state create correttamente
+      const supplier = await supplierRepository.getByNameOrAlias('ESSELUNGA TORINO');
+      expect(supplier).toBeDefined();
+      expect(createdExpense.supplierId).toBe(supplier?.id);
+
+      const items = await db.expenseItems.where('expenseId').equals(createdExpense.id).toArray();
+      expect(items.length).toBe(2);
+
+      // Verifico collegamenti ExpenseItem -> Product e OCRReceiptLine
+      for (const item of items) {
+        expect(item.ocrReceiptLineId).toBeDefined();
+        expect(item.productId).toBeDefined();
+
+        const lineInDb = await ocrReceiptLineRepository.getById(item.ocrReceiptLineId!);
+        expect(lineInDb).toBeDefined();
+        expect(lineInDb?.productId).toBe(item.productId);
+
+        const prodInDb = await productRepository.getById(item.productId!);
+        expect(prodInDb).toBeDefined();
+
+        // Verifico che sia stato creato il relativo ProductAlias
+        const aliases = await productAliasRepository.getByProduct(item.productId!);
+        expect(aliases.length).toBeGreaterThan(0);
+        expect(aliases[0].productId).toBe(item.productId);
+      }
+
+      // Verifico che DocumentSession e OCRProcess siano stati aggiornati atomicamente
+      const updatedSession = await db.documentSessions.get(session.id);
+      expect(updatedSession?.status).toBe('completed');
+      expect(updatedSession?.expenseId).toBe(createdExpense.id);
+
+      const updatedProc = await ocrProcessRepository.getById(ocrProc.id);
+      expect(updatedProc?.status).toBe('completed');
+      expect(updatedProc?.expenseId).toBe(createdExpense.id);
+      expect(updatedProc?.confirmedByUser).toBe(true);
+
+      // Verifico l'AuditLog finale con tutti i campi
+      const logs = await db.auditLogs.where('entityId').equals(createdExpense.id).toArray();
+      expect(logs.length).toBe(1);
+      const log = logs[0];
+      expect(log.action).toBe('create');
+      const nv = log.newValues as any;
+      expect(nv.importedLinesCount).toBe(2);
+      expect(nv.createdProductsCount).toBe(2);
+      expect(nv.createdAliasesCount).toBe(2);
+      expect(nv.documentSessionId).toBe(session.id);
+      expect(nv.ocrProcessId).toBe(ocrProc.id);
+      expect(nv.confirmedByUser).toBe(true);
+    });
+
+    it('21. Punto 11: Rollback completo di tutte le scritture in caso di errore simulato durante la transazione atomica', async () => {
+      const initialProductsCount = (await db.products.toArray()).length;
+      const initialAliasesCount = (await db.productAliases.toArray()).length;
+      const initialExpensesCount = (await db.expenses.toArray()).length;
+      const initialItemsCount = (await db.expenseItems.toArray()).length;
+
+      const ocrProc = await ocrProcessRepository.create({
+        attachmentId: 'att-21',
+        status: 'completed',
+        detectedSupplier: 'SUPERMERCATO ERRORE',
+        detectedDate: '2026-08-03',
+        detectedTotal: 50.0,
+        confirmationRequired: true,
+        confirmedByUser: true,
+      });
+
+      const session = await documentSessionRepository.create({
+        documentType: 'receipt',
+        sourceMode: 'singleImage',
+        processingMode: 'singleReceipt',
+        pageCount: 1,
+        status: 'ready_for_review',
+        ocrProcessId: ocrProc.id,
+        metadata: { title: 'Scontrino Errore', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), version: 1 },
+      });
+
+      await ocrReceiptLineRepository.create({
+        ocrProcessId: ocrProc.id,
+        originalText: 'PRODOTTO VALIDO 10.00',
+        description: 'PRODOTTO VALIDO',
+        quantity: 1,
+        unitPrice: 10.0,
+        lineTotal: 10.0,
+        confidence: 90,
+        reviewStatus: 'confirmed',
+      });
+
+      // Simulo un errore forzando un repository ad operare su una rimozione invalida o un eccezione dentro la transazione
+      const spy = vi.spyOn(db.expenseItems, 'bulkAdd').mockImplementationOnce(() => {
+        throw new Error('Errore simulato di scrittura DB durante la transazione atomica');
+      });
+
+      await expect(
+        productClassificationService.createAccountingRegistration({
+          ocrProcessId: ocrProc.id,
+          sessionId: session.id,
+        })
+      ).rejects.toThrow();
+
+      spy.mockRestore();
+
+      // Verifico ROLLBACK COMPLETO: nessuna modifica o entità orfana deve essere rimasta sul DB
+      const finalProductsCount = (await db.products.toArray()).length;
+      const finalAliasesCount = (await db.productAliases.toArray()).length;
+      const finalExpensesCount = (await db.expenses.toArray()).length;
+      const finalItemsCount = (await db.expenseItems.toArray()).length;
+
+      expect(finalProductsCount).toBe(initialProductsCount);
+      expect(finalAliasesCount).toBe(initialAliasesCount);
+      expect(finalExpensesCount).toBe(initialExpensesCount);
+      expect(finalItemsCount).toBe(initialItemsCount);
+
+      // Verifico che nè la sessione nè il processo OCR siano rimasti marcati come 'completed' con un expenseId
+      const checkSession = await db.documentSessions.get(session.id);
+      expect(checkSession?.status).toBe('ready_for_review');
+      expect(checkSession?.expenseId).toBeUndefined();
+
+      const checkProc = await db.ocrProcesses.get(ocrProc.id);
+      expect(checkProc?.expenseId).toBeUndefined();
+    });
+
+    it('22. Punto 11: Idempotenza rigorosa e assenza di doppi salvataggi anche con AuditLog o status preesistenti', async () => {
+      const ocrProc = await ocrProcessRepository.create({
+        attachmentId: 'att-22',
+        status: 'completed',
+        detectedSupplier: 'NEGOZIO IDEMPOTENTE',
+        detectedDate: '2026-08-03',
+        detectedTotal: 15.0,
+        confirmationRequired: true,
+        confirmedByUser: true,
+      });
+
+      const session = await documentSessionRepository.create({
+        documentType: 'receipt',
+        sourceMode: 'singleImage',
+        processingMode: 'singleReceipt',
+        pageCount: 1,
+        status: 'reviewed',
+        ocrProcessId: ocrProc.id,
+        metadata: { title: 'Scontrino Idempotenza', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), version: 1 },
+      });
+
+      await ocrReceiptLineRepository.create({
+        ocrProcessId: ocrProc.id,
+        originalText: 'ARTICOLO A 15.00',
+        description: 'ARTICOLO A',
+        quantity: 1,
+        unitPrice: 15.0,
+        lineTotal: 15.0,
+        confidence: 95,
+        reviewStatus: 'confirmed',
+      });
+
+      // Esecuzione 1
+      const exp1 = await productClassificationService.createAccountingRegistration({
+        ocrProcessId: ocrProc.id,
+        sessionId: session.id,
+      });
+
+      // Esecuzione 2 (immediatamente successiva)
+      const exp2 = await productClassificationService.createAccountingRegistration({
+        ocrProcessId: ocrProc.id,
+        sessionId: session.id,
+      });
+
+      // Esecuzione 3 (senza passare il sessionId)
+      const exp3 = await productClassificationService.createAccountingRegistration({
+        ocrProcessId: ocrProc.id,
+      });
+
+      expect(exp1.id).toBe(exp2.id);
+      expect(exp2.id).toBe(exp3.id);
+
+      // Verifico che nel DB esista solo UN record Expense e un solo gruppo di ExpenseItems
+      const allExpensesForProc = (await db.expenses.toArray()).filter((e) => {
+        const m = e.metadata as any;
+        return m?.ocrProcessId === ocrProc.id;
+      });
+      expect(allExpensesForProc.length).toBe(1);
+
+      const itemsCount = (await db.expenseItems.where('expenseId').equals(exp1.id).toArray()).length;
+      expect(itemsCount).toBe(1);
     });
   });
 });

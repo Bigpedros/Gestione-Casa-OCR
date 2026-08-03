@@ -151,4 +151,10 @@ export interface CreateAccountingRegistrationParams {
   categoryId?: EntityId | null;
   subcategoryId?: EntityId | null;
   notes?: string;
+  supplierId?: EntityId | null;
+  supplierName?: string | null;
+  expenseDate?: string | null;
+  documentTotal?: number | null;
+  decisions?: LineClassificationDecision[];
+  deletedLineIds?: EntityId[];
 }

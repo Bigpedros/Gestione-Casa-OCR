@@ -591,20 +591,73 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
     }
   };
 
-  // Punto 10: Creation of Accounting Registration (Expense) from confirmed OCR session
+  // Punto 10 & 11: Creation of Accounting Registration (Expense) from OCR session
   const handleCreateAccountingRegistration = async () => {
     if (!ocrProcess) return;
     setIsSaving(true);
     setErrorMessage(null);
 
     try {
-      // Step 1: Execute confirmation of classifications if not already done
-      await executeConfirmClassifications();
+      const finalSupplierName =
+        selectedSupplierId === 'new'
+          ? newSupplierName.trim()
+          : suppliers.find((s) => s.id === selectedSupplierId)?.name || detectedSupplierName;
 
-      // Step 2: Create accounting registration (Expense + ExpenseItems)
+      // Identify deleted lines to be removed inside the atomic transaction
+      const existingDbLines = await ocrReceiptLineRepository.getByOcrProcessId(ocrProcess.id);
+      const currentLineIds = new Set(editableLines.map((l) => l.id));
+      const deletedLineIds: string[] = [];
+
+      for (const dbLine of existingDbLines) {
+        if (!currentLineIds.has(dbLine.id)) {
+          deletedLineIds.push(dbLine.id);
+        }
+      }
+
+      // Map line classification decisions
+      const decisions: LineClassificationDecision[] = editableLines.map((line) => {
+        let action: 'link_existing' | 'create_new' | 'unlinked' = line.actionMode || 'unlinked';
+
+        if (line.productId && line.productId !== 'CREATE_NEW') {
+          action = 'link_existing';
+        } else if (line.productId === 'CREATE_NEW' || action === 'create_new') {
+          action = 'create_new';
+        }
+
+        return {
+          lineId: line.id,
+          originalText: line.originalText,
+          description: line.description,
+          quantity: line.quantity,
+          unitPrice: line.unitPrice,
+          lineTotal: line.lineTotal,
+          confidence: line.confidence,
+          action,
+          productId: action === 'link_existing' ? line.productId : null,
+          newProductDetails:
+            action === 'create_new'
+              ? {
+                  displayName: line.newProductDisplayName || line.description,
+                  categoryId: line.categoryId || null,
+                  subcategoryId: line.subcategoryId || null,
+                }
+              : undefined,
+          categoryId: line.categoryId || null,
+          subcategoryId: line.subcategoryId || null,
+        };
+      });
+
+      // Passa sia le opzioni della spesa che le decisioni di classificazione per l'esecuzione in un'UNICA TRANSAZIONE ATOMICA
       const createdExp = await productClassificationService.createAccountingRegistration({
         ocrProcessId: ocrProcess.id,
         sessionId: session?.id,
+        paymentMethod,
+        supplierId: selectedSupplierId === 'new' ? null : selectedSupplierId,
+        supplierName: finalSupplierName,
+        expenseDate,
+        documentTotal,
+        decisions,
+        deletedLineIds,
       });
 
       setExistingExpense(createdExp);

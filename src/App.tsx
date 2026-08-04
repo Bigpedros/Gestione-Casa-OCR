@@ -1,8 +1,13 @@
 import { RouterProvider } from 'react-router-dom';
 import { router } from './app/router';
+import { LicenseProvider } from './context/LicenseContext';
 
 export function App() {
-  return <RouterProvider router={router} />;
+  return (
+    <LicenseProvider>
+      <RouterProvider router={router} />
+    </LicenseProvider>
+  );
 }
 
 export default App;

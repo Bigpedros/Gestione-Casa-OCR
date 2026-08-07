@@ -10,4 +10,5 @@ export const ROUTES = {
   ATTACHMENTS: '/attachments',
   BACKUP: '/backup',
   SETTINGS: '/settings',
+  CONTACT: '/settings/contact',
 } as const;

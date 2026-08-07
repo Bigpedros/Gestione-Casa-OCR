@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { Link } from 'react-router-dom';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { contributorRepository, settingsRepository } from '../../repositories';
 import {
@@ -6,7 +7,7 @@ import {
   DashboardCard,
   Button,
 } from '../../components/common';
-import { Settings, CheckCircle2, Plus, Trash2, AlertCircle, Mail, Home } from 'lucide-react';
+import { Settings, CheckCircle2, Plus, Trash2, AlertCircle, Mail, Home, Headphones } from 'lucide-react';
 import type { AppSettings, Contributor, HomeAddress } from '../../types';
 
 export const SettingsPage: React.FC = () => {
@@ -436,6 +437,24 @@ export const SettingsPage: React.FC = () => {
               Salva Contributori
             </Button>
           </div>
+        </div>
+      </DashboardCard>
+
+      {/* Supporto e Contatti */}
+      <DashboardCard
+        title="Supporto e Contatti"
+        badge={<Headphones className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />}
+        subtitle="Invia una richiesta di supporto o contatto al team di Gestione Casa OCR."
+      >
+        <div className="pt-2 flex items-center justify-between">
+          <p className="text-sm text-slate-600 dark:text-slate-400">
+            Hai bisogno di assistenza o vuoi inviare una richiesta di informazioni o licenza?
+          </p>
+          <Link to="/settings/contact">
+            <Button variant="primary" size="sm" icon={<Headphones className="w-4 h-4" />}>
+              Supporto e Contatti
+            </Button>
+          </Link>
         </div>
       </DashboardCard>
 

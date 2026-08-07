@@ -19,6 +19,12 @@ jobs:
           node-version: 20
           cache: 'npm'
 
+      - name: Download and verify Shared SDK TGZ
+        run: |
+          mkdir -p vendor
+          curl -fL "https://github.com/Bigpedros/Gestione-Casa-Shared-SDK/releases/download/v0.3.0/gestione-casa-shared-sdk-0.3.0.tgz" -o vendor/gestione-casa-shared-sdk-0.3.0.tgz
+          echo "12e535719ab784748250f4933c0cb84ae067f8cd1a978b1d78c8d71fce8f6233  vendor/gestione-casa-shared-sdk-0.3.0.tgz" | sha256sum -c -
+
       - name: Install dependencies
         run: npm ci
 

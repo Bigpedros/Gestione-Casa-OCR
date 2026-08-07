@@ -1,4 +1,5 @@
 import Dexie, { type EntityTable } from 'dexie';
+import type { ContactRequestDocument } from '@gestione-casa/shared-sdk/contact-requests';
 import type {
   AppSettings,
   Contributor,
@@ -53,6 +54,7 @@ export class GestioneCasaDatabase extends Dexie {
   productAliases!: EntityTable<ProductAlias, 'id'>;
   documentSessions!: EntityTable<DocumentSession, 'id'>;
   documentPageSegments!: EntityTable<DocumentPageSegment, 'id'>;
+  contactRequests!: EntityTable<ContactRequestDocument, 'id'>;
 
   constructor() {
     super('gestioneCasa');
@@ -100,6 +102,10 @@ export class GestioneCasaDatabase extends Dexie {
     this.version(7).stores({
       documentSessions: 'id, documentType, sourceMode, processingMode, status, createdAt, ocrProcessId, expenseId',
       documentPageSegments: 'id, sessionId, sequenceIndex, attachmentId, fileHash, processingStatus, [sessionId+sequenceIndex], [sessionId+fileHash]',
+    });
+
+    this.version(8).stores({
+      contactRequests: 'id, requestType, status, createdAt, syncStatus',
     });
   }
 }

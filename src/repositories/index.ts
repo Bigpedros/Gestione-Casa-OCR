@@ -1,4 +1,5 @@
 import { db } from '../database/db';
+import { ContactRequestValidator, type ContactRequestDocument } from '@gestione-casa/shared-sdk/contact-requests';
 import type {
   Contributor,
   IncomeEntry,
@@ -990,5 +991,84 @@ export const documentPageSegmentRepository = {
     });
   },
 };
+
+export const contactRequestRepository = {
+  getAll: () => db.contactRequests.toArray(),
+  getById: (id: string) => db.contactRequests.get(id),
+  count: () => db.contactRequests.count(),
+  clear: () => db.contactRequests.clear(),
+
+  create: async (data: ContactRequestDocument): Promise<ContactRequestDocument> => {
+    if (!data || !data.id || typeof data.id !== 'string' || data.id.trim() === '') {
+      throw new Error("L'ID della richiesta di contatto è obbligatorio e non può essere vuoto");
+    }
+
+    const existing = await db.contactRequests.get(data.id);
+    if (existing) {
+      throw new Error(`Richiesta di contatto con ID "${data.id}" già esistente`);
+    }
+
+    if (
+      data.metadata === undefined ||
+      data.metadata === null ||
+      typeof data.metadata !== 'object' ||
+      Array.isArray(data.metadata)
+    ) {
+      throw new Error('I metadata della richiesta sono obbligatori e devono essere un oggetto');
+    }
+
+    const validation = ContactRequestValidator.validate(data);
+    if (!validation.isValid || !validation.value) {
+      const issueDetails = validation.issues.map((i) => `${i.field}: ${i.message}`).join('; ');
+      throw new Error(`Documento ContactRequest non valido: ${issueDetails}`);
+    }
+
+    const docToSave = validation.value;
+    await db.contactRequests.add(docToSave);
+    return docToSave;
+  },
+
+  update: async (id: string, updates: Partial<ContactRequestDocument>): Promise<ContactRequestDocument> => {
+    const existing = await db.contactRequests.get(id);
+    if (!existing) {
+      throw new Error(`Richiesta di contatto "${id}" non trovata`);
+    }
+
+    const nowISO = new Date().toISOString();
+    const createdAtTime = new Date(existing.createdAt).getTime();
+    const nowTime = new Date(nowISO).getTime();
+    const fallbackUpdatedAt = nowTime >= createdAtTime ? nowISO : existing.createdAt;
+
+    const updatedCandidate: ContactRequestDocument = {
+      ...existing,
+      ...updates,
+      id,
+      schemaVersion: 1,
+      updatedAt: updates.updatedAt || fallbackUpdatedAt,
+    };
+
+    if (
+      updatedCandidate.metadata === undefined ||
+      updatedCandidate.metadata === null ||
+      typeof updatedCandidate.metadata !== 'object' ||
+      Array.isArray(updatedCandidate.metadata)
+    ) {
+      throw new Error('I metadata della richiesta sono obbligatori e devono essere un oggetto');
+    }
+
+    const validation = ContactRequestValidator.validate(updatedCandidate);
+    if (!validation.isValid || !validation.value) {
+      const issueDetails = validation.issues.map((i) => `${i.field}: ${i.message}`).join('; ');
+      throw new Error(`Aggiornamento ContactRequest non valido: ${issueDetails}`);
+    }
+
+    const docToSave = validation.value;
+    await db.contactRequests.put(docToSave);
+    return docToSave;
+  },
+
+  delete: (id: string) => db.contactRequests.delete(id),
+};
+
 
 

@@ -21,6 +21,7 @@
     "verify:pwa": "node scripts/verify-pwa-assets.mjs"
   },
   "dependencies": {
+    "@gestione-casa/shared-sdk": "file:vendor/gestione-casa-shared-sdk-0.3.0.tgz",
     "@google/genai": "^2.4.0",
     "@hookform/resolvers": "^5.0.1",
     "@tailwindcss/vite": "^4.1.14",

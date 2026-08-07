@@ -1,3 +1,5 @@
+import type { ContactRequestDocument } from '@gestione-casa/shared-sdk/contact-requests';
+
 export type EntityId = string;
 export type ISODate = string; // YYYY-MM-DD
 export type ISODateTime = string; // ISO 8601
@@ -546,6 +548,7 @@ export interface BackupData {
     productAliases?: ProductAlias[];
     documentSessions?: DocumentSession[];
     documentPageSegments?: DocumentPageSegment[];
+    contactRequests?: ContactRequestDocument[];
   };
 }
 

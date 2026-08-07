@@ -1,4 +1,5 @@
 import { db } from '../database/db';
+import { ContactRequestValidator } from '@gestione-casa/shared-sdk/contact-requests';
 import type { BackupData } from '../types';
 
 export const backupService = {
@@ -36,6 +37,7 @@ export const backupService = {
     const productAliases = await db.productAliases.toArray();
     const documentSessions = await db.documentSessions.toArray();
     const documentPageSegments = await db.documentPageSegments.toArray();
+    const contactRequests = await db.contactRequests.toArray();
 
     const backupPayload: Omit<BackupData, 'checksum'> = {
       appName: 'Gestione Casa',
@@ -67,6 +69,7 @@ export const backupService = {
         productAliases,
         documentSessions,
         documentPageSegments,
+        contactRequests,
       },
     };
 
@@ -100,6 +103,15 @@ export const backupService = {
   },
 
   importBackup: async (backupData: BackupData): Promise<void> => {
+    const contactRequests = backupData.tables.contactRequests ?? [];
+    for (const req of contactRequests) {
+      const validation = ContactRequestValidator.validate(req);
+      if (!validation.isValid || !validation.value) {
+        const issueDetails = validation.issues.map((i) => `${i.field}: ${i.message}`).join('; ');
+        throw new Error(`Ripristino fallito. ContactRequest non valida (${req?.id || 'ID mancante'}): ${issueDetails}`);
+      }
+    }
+
     await db.transaction('rw', db.tables, async () => {
       await Promise.all(db.tables.map((table) => table.clear()));
 
@@ -126,6 +138,7 @@ export const backupService = {
       if (backupData.tables.productAliases) await db.productAliases.bulkAdd(backupData.tables.productAliases);
       if (backupData.tables.documentSessions) await db.documentSessions.bulkAdd(backupData.tables.documentSessions);
       if (backupData.tables.documentPageSegments) await db.documentPageSegments.bulkAdd(backupData.tables.documentPageSegments);
+      if (contactRequests.length > 0) await db.contactRequests.bulkAdd(contactRequests);
     });
   },
 };

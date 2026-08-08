@@ -1,5 +1,9 @@
 import { db } from '../database/db';
-import { ContactRequestValidator, type ContactRequestDocument } from '@gestione-casa/shared-sdk/contact-requests';
+import {
+  ContactRequestValidator,
+  type ContactRequestDocument,
+  type ContactRequestStatus,
+} from '@gestione-casa/shared-sdk/contact-requests';
 import type {
   Contributor,
   IncomeEntry,
@@ -992,6 +996,49 @@ export const documentPageSegmentRepository = {
   },
 };
 
+export type RemoteRecordApplicationStatus =
+  | 'applied'
+  | 'equivalent'
+  | 'conflict'
+  | 'missing_local_record';
+
+export interface ApplyRemoteRecordResult {
+  status: RemoteRecordApplicationStatus;
+  requestId: string;
+  document?: ContactRequestDocument;
+  message?: string;
+}
+
+const TERMINAL_CONTACT_REQUEST_STATUSES: ContactRequestStatus[] = [
+  'converted_to_customer',
+  'rejected',
+  'closed',
+];
+
+function areContactRequestBusinessFieldsEqual(
+  a: ContactRequestDocument,
+  b: ContactRequestDocument
+): boolean {
+  return (
+    a.requestType === b.requestType &&
+    a.status === b.status &&
+    a.displayName === b.displayName &&
+    a.firstName === b.firstName &&
+    (a.lastName ?? null) === (b.lastName ?? null) &&
+    (a.companyName ?? null) === (b.companyName ?? null) &&
+    a.email === b.email &&
+    (a.phone ?? null) === (b.phone ?? null) &&
+    a.preferredContactChannel === b.preferredContactChannel &&
+    a.subject === b.subject &&
+    a.message === b.message &&
+    a.privacyAcceptedAt === b.privacyAcceptedAt &&
+    (a.linkedCustomerId ?? null) === (b.linkedCustomerId ?? null) &&
+    (a.linkedLicenseId ?? null) === (b.linkedLicenseId ?? null) &&
+    (a.reviewedAt ?? null) === (b.reviewedAt ?? null) &&
+    (a.closedAt ?? null) === (b.closedAt ?? null)
+  );
+}
+
 export const contactRequestRepository = {
   getAll: () => db.contactRequests.toArray(),
   getById: (id: string) => db.contactRequests.get(id),
@@ -1028,6 +1075,121 @@ export const contactRequestRepository = {
     await db.contactRequests.update(id, { syncStatus: 'conflict' });
     const updated = await db.contactRequests.get(id);
     return updated!;
+  },
+
+  applyRemoteRecord: async (
+    remoteDoc: ContactRequestDocument
+  ): Promise<ApplyRemoteRecordResult> => {
+    if (!remoteDoc || !remoteDoc.id || typeof remoteDoc.id !== 'string') {
+      throw new Error("L'ID della richiesta remota è obbligatorio");
+    }
+
+    const existing = await db.contactRequests.get(remoteDoc.id);
+    if (!existing) {
+      return {
+        status: 'missing_local_record',
+        requestId: remoteDoc.id,
+        message: `Richiesta locale "${remoteDoc.id}" non trovata. Nessun inserimento automatico.`,
+      };
+    }
+
+    if (areContactRequestBusinessFieldsEqual(existing, remoteDoc)) {
+      if (existing.syncStatus !== 'synced') {
+        await db.contactRequests.update(existing.id, { syncStatus: 'synced' });
+        const updated = await db.contactRequests.get(existing.id);
+        return {
+          status: 'equivalent',
+          requestId: existing.id,
+          document: updated!,
+          message: 'Contenuto business già equivalente. Stato impostato a synced.',
+        };
+      }
+      return {
+        status: 'equivalent',
+        requestId: existing.id,
+        document: existing,
+        message: 'Contenuto business già equivalente e sincronizzato.',
+      };
+    }
+
+    const isRemoteTerminal = TERMINAL_CONTACT_REQUEST_STATUSES.includes(remoteDoc.status);
+
+    if (isRemoteTerminal) {
+      const mergedDoc: ContactRequestDocument = {
+        ...existing,
+        status: remoteDoc.status,
+        linkedCustomerId: remoteDoc.linkedCustomerId ?? null,
+        linkedLicenseId: remoteDoc.linkedLicenseId ?? null,
+        reviewedAt: remoteDoc.reviewedAt ?? null,
+        closedAt: remoteDoc.closedAt ?? null,
+        updatedAt: remoteDoc.updatedAt || new Date().toISOString(),
+        syncStatus: 'synced',
+        sourceDeviceId: existing.sourceDeviceId || remoteDoc.sourceDeviceId,
+        sourceAppVersion: existing.sourceAppVersion || remoteDoc.sourceAppVersion,
+        schemaVersion: 1,
+      };
+
+      const validation = ContactRequestValidator.validate(mergedDoc);
+      if (!validation.isValid || !validation.value) {
+        const issueDetails = validation.issues.map((i) => `${i.field}: ${i.message}`).join('; ');
+        throw new Error(`Ricostruzione documento con stato terminale LM non valida: ${issueDetails}`);
+      }
+
+      const docToSave = validation.value;
+      await db.contactRequests.put(docToSave);
+
+      return {
+        status: 'applied',
+        requestId: existing.id,
+        document: docToSave,
+        message: `Stato terminale LM "${remoteDoc.status}" applicato con successo.`,
+      };
+    }
+
+    const isLocalPendingWithNewerUpdate =
+      existing.syncStatus === 'pending' &&
+      new Date(existing.updatedAt).getTime() > new Date(remoteDoc.updatedAt).getTime();
+
+    if (isLocalPendingWithNewerUpdate) {
+      await db.contactRequests.update(existing.id, { syncStatus: 'conflict' });
+      const conflictDoc = await db.contactRequests.get(existing.id);
+      return {
+        status: 'conflict',
+        requestId: existing.id,
+        document: conflictDoc!,
+        message: 'Conflitto di sincronizzazione: modifiche locali pending più recenti della risposta non terminale LM.',
+      };
+    }
+
+    const mergedDoc: ContactRequestDocument = {
+      ...existing,
+      status: remoteDoc.status,
+      linkedCustomerId: remoteDoc.linkedCustomerId ?? null,
+      linkedLicenseId: remoteDoc.linkedLicenseId ?? null,
+      reviewedAt: remoteDoc.reviewedAt ?? null,
+      closedAt: remoteDoc.closedAt ?? null,
+      updatedAt: remoteDoc.updatedAt || new Date().toISOString(),
+      syncStatus: 'synced',
+      sourceDeviceId: existing.sourceDeviceId || remoteDoc.sourceDeviceId,
+      sourceAppVersion: existing.sourceAppVersion || remoteDoc.sourceAppVersion,
+      schemaVersion: 1,
+    };
+
+    const validation = ContactRequestValidator.validate(mergedDoc);
+    if (!validation.isValid || !validation.value) {
+      const issueDetails = validation.issues.map((i) => `${i.field}: ${i.message}`).join('; ');
+      throw new Error(`Ricostruzione documento con stato LM non valida: ${issueDetails}`);
+    }
+
+    const docToSave = validation.value;
+    await db.contactRequests.put(docToSave);
+
+    return {
+      status: 'applied',
+      requestId: existing.id,
+      document: docToSave,
+      message: `Risposta LM con stato "${remoteDoc.status}" applicata con successo.`,
+    };
   },
 
   create: async (data: ContactRequestDocument): Promise<ContactRequestDocument> => {

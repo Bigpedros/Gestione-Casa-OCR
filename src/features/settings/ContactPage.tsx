@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import {
   ContactRequestValidator,
   createContactRequestExchangeEnvelope,
@@ -12,9 +12,13 @@ import type {
 } from '@gestione-casa/shared-sdk/contact-requests';
 import { contactRequestRepository } from '../../repositories';
 import { getOrCreateDeviceId } from '../../services/deviceService';
+import {
+  importContactRequestSyncResponse,
+  type ImportSyncResponseResult,
+} from '../../services/contactRequestSyncService';
 import { APP_CONFIG } from '../../config/app.config';
 import { PageHeader, DashboardCard, Button } from '../../components/common';
-import { Mail, CheckCircle2, AlertCircle, Download, ExternalLink } from 'lucide-react';
+import { Mail, CheckCircle2, AlertCircle, Download, ExternalLink, Upload } from 'lucide-react';
 
 export const REQUEST_TYPE_OPTIONS: { value: ContactRequestType; label: string }[] = [
   { value: 'information', label: 'Informazioni' },
@@ -45,6 +49,9 @@ export const ContactPage: React.FC = () => {
   const [validationError, setValidationError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [savedRequest, setSavedRequest] = useState<ContactRequestDocument | null>(null);
+
+  const [importResult, setImportResult] = useState<ImportSyncResponseResult | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -170,6 +177,33 @@ export const ContactPage: React.FC = () => {
     setMessage('');
     setPrivacyAccepted(false);
     setValidationError(null);
+  };
+
+  const handleImportFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    try {
+      const text = await file.text();
+      const res = await importContactRequestSyncResponse(text);
+      setImportResult(res);
+      if (res.document) {
+        const updated = await contactRequestRepository.getById(res.document.id);
+        if (updated && savedRequest && savedRequest.id === updated.id) {
+          setSavedRequest(updated);
+        }
+      }
+    } catch (err: unknown) {
+      setImportResult({
+        success: false,
+        status: 'invalid_format',
+        message: (err as Error).message || 'Errore durante la lettura del file.',
+      });
+    } finally {
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
+      }
+    }
   };
 
   return (
@@ -412,6 +446,88 @@ export const ContactPage: React.FC = () => {
           </form>
         </DashboardCard>
       )}
+
+      <DashboardCard
+        title="Importazione Risposta License Manager"
+        subtitle="Importa il file JSON di risposta generato dal License Manager per riconciliare lo stato della richiesta."
+      >
+        <div className="space-y-4 pt-2">
+          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 p-4 bg-slate-50 dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800">
+            <div className="space-y-1">
+              <p className="text-sm font-semibold text-slate-900 dark:text-white">
+                Seleziona il file JSON di risposta (.json)
+              </p>
+              <p className="text-xs text-slate-500 dark:text-slate-400">
+                Lo SDK verificherà la validità dell'inviluppo e aggiornerà lo stato di sincronizzazione locale.
+              </p>
+            </div>
+
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".json,application/json"
+              className="hidden"
+              onChange={handleImportFileChange}
+            />
+
+            <Button
+              type="button"
+              variant="secondary"
+              icon={<Upload className="w-4 h-4" />}
+              onClick={() => fileInputRef.current?.click()}
+            >
+              Importa risposta License Manager
+            </Button>
+          </div>
+
+          {importResult && (
+            <div
+              className={`p-4 rounded-2xl border text-sm space-y-2 ${
+                importResult.status === 'applied'
+                  ? 'bg-emerald-50 border-emerald-200 text-emerald-900 dark:bg-emerald-950/40 dark:border-emerald-800 dark:text-emerald-200'
+                  : importResult.status === 'equivalent'
+                  ? 'bg-blue-50 border-blue-200 text-blue-900 dark:bg-blue-950/40 dark:border-blue-800 dark:text-blue-200'
+                  : importResult.status === 'conflict'
+                  ? 'bg-rose-50 border-rose-200 text-rose-900 dark:bg-rose-950/40 dark:border-rose-800 dark:text-rose-200'
+                  : importResult.status === 'missing_local_record'
+                  ? 'bg-amber-50 border-amber-200 text-amber-900 dark:bg-amber-950/40 dark:border-amber-800 dark:text-amber-200'
+                  : 'bg-rose-50 border-rose-200 text-rose-900 dark:bg-rose-950/40 dark:border-rose-800 dark:text-rose-200'
+              }`}
+            >
+              <div className="flex items-center gap-2 font-semibold">
+                {importResult.status === 'applied' && <CheckCircle2 className="w-5 h-5 text-emerald-600" />}
+                {importResult.status === 'equivalent' && <CheckCircle2 className="w-5 h-5 text-blue-600" />}
+                {importResult.status === 'conflict' && <AlertCircle className="w-5 h-5 text-rose-600" />}
+                {importResult.status === 'missing_local_record' && <AlertCircle className="w-5 h-5 text-amber-600" />}
+                {importResult.status === 'invalid_format' && <AlertCircle className="w-5 h-5 text-rose-600" />}
+                <span>
+                  {importResult.status === 'applied' && 'Risposta applicata con successo'}
+                  {importResult.status === 'equivalent' && 'Già sincronizzata'}
+                  {importResult.status === 'conflict' && 'Conflitto di sincronizzazione'}
+                  {importResult.status === 'missing_local_record' && 'Richiesta locale non trovata'}
+                  {importResult.status === 'invalid_format' && 'File non valido o formato non supportato'}
+                </span>
+              </div>
+
+              <p className="text-xs">{importResult.message}</p>
+
+              {importResult.document && (
+                <div className="pt-2 border-t border-current/10 text-xs space-y-1 font-mono">
+                  <p>ID: <strong>{importResult.document.id}</strong></p>
+                  <p>Stato Business: <strong>{importResult.document.status}</strong></p>
+                  <p>Stato Sincronizzazione: <strong className="uppercase">{importResult.document.syncStatus}</strong></p>
+                  {importResult.document.linkedCustomerId && (
+                    <p>Linked Customer ID: <strong>{importResult.document.linkedCustomerId}</strong></p>
+                  )}
+                  {importResult.document.linkedLicenseId && (
+                    <p>Linked License ID: <strong>{importResult.document.linkedLicenseId}</strong></p>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      </DashboardCard>
     </div>
   );
 };

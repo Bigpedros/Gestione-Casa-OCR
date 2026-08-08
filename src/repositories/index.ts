@@ -998,6 +998,38 @@ export const contactRequestRepository = {
   count: () => db.contactRequests.count(),
   clear: () => db.contactRequests.clear(),
 
+  getBySyncStatus: (status: 'pending' | 'synced' | 'conflict'): Promise<ContactRequestDocument[]> => {
+    return db.contactRequests.where('syncStatus').equals(status).toArray();
+  },
+
+  getPending: (): Promise<ContactRequestDocument[]> => {
+    return contactRequestRepository.getBySyncStatus('pending');
+  },
+
+  getConflicts: (): Promise<ContactRequestDocument[]> => {
+    return contactRequestRepository.getBySyncStatus('conflict');
+  },
+
+  markSynced: async (id: string): Promise<ContactRequestDocument> => {
+    const existing = await db.contactRequests.get(id);
+    if (!existing) {
+      throw new Error(`Richiesta di contatto "${id}" non trovata`);
+    }
+    await db.contactRequests.update(id, { syncStatus: 'synced' });
+    const updated = await db.contactRequests.get(id);
+    return updated!;
+  },
+
+  markConflict: async (id: string): Promise<ContactRequestDocument> => {
+    const existing = await db.contactRequests.get(id);
+    if (!existing) {
+      throw new Error(`Richiesta di contatto "${id}" non trovata`);
+    }
+    await db.contactRequests.update(id, { syncStatus: 'conflict' });
+    const updated = await db.contactRequests.get(id);
+    return updated!;
+  },
+
   create: async (data: ContactRequestDocument): Promise<ContactRequestDocument> => {
     if (!data || !data.id || typeof data.id !== 'string' || data.id.trim() === '') {
       throw new Error("L'ID della richiesta di contatto è obbligatorio e non può essere vuoto");
@@ -1043,6 +1075,7 @@ export const contactRequestRepository = {
       ...existing,
       ...updates,
       id,
+      syncStatus: updates.syncStatus || 'pending',
       schemaVersion: 1,
       updatedAt: updates.updatedAt || fallbackUpdatedAt,
     };

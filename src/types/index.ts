@@ -40,6 +40,7 @@ export interface HomeAddress {
 
 export interface AppSettings {
   id: EntityId;
+  deviceId?: string | null;
   userMode: UserMode;
   contributorsCount: number;
   currency: Currency;

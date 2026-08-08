@@ -11,6 +11,8 @@ import type {
   PreferredContactChannel,
 } from '@gestione-casa/shared-sdk/contact-requests';
 import { contactRequestRepository } from '../../repositories';
+import { getOrCreateDeviceId } from '../../services/deviceService';
+import { APP_CONFIG } from '../../config/app.config';
 import { PageHeader, DashboardCard, Button } from '../../components/common';
 import { Mail, CheckCircle2, AlertCircle, Download, ExternalLink } from 'lucide-react';
 
@@ -64,6 +66,7 @@ export const ContactPage: React.FC = () => {
 
     const nowIso = new Date().toISOString();
     const generatedId = `req_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+    const deviceId = await getOrCreateDeviceId();
 
     const candidateDoc: ContactRequestDocument = {
       id: generatedId,
@@ -86,8 +89,8 @@ export const ContactPage: React.FC = () => {
       updatedAt: nowIso,
       reviewedAt: null,
       closedAt: null,
-      sourceDeviceId: null,
-      sourceAppVersion: '1.0.0',
+      sourceDeviceId: deviceId,
+      sourceAppVersion: APP_CONFIG.version,
       syncStatus: 'pending',
       schemaVersion: 1,
       metadata: {},

@@ -41,7 +41,7 @@ describe('Sottofase 2.3.B.2 - Persistenza Locale ContactRequest & Schema Dexie v
   };
 
   it('TEST 1: Schema Dexie alla versione 8 e presenza tabella contactRequests', () => {
-    expect(db.verno).toBe(8);
+    expect(db.verno).toBeGreaterThanOrEqual(8);
     expect(db.contactRequests).toBeDefined();
     expect(typeof db.contactRequests.toArray).toBe('function');
   });

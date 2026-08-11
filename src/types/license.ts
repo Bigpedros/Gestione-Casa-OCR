@@ -1,3 +1,5 @@
+import type { SignedLicenseDocument } from '@gestione-casa/shared-sdk/activation';
+
 /**
  * Modello Dati e Tipi del Sistema Licenze (Punto 1 Architettura Licenze)
  */
@@ -29,6 +31,22 @@ export interface LicenseRecord {
   lastCheck: string | null;
 }
 
+export interface LocalLicenseState {
+  id: string; // ID identificativo, tipicamente 'current'
+  licenseCode: string;
+  deviceId: string;
+  activationId?: string | null;
+  status: string; // ActivationStatus | LicenseValidationStatus | LicenseStatus
+  licenseType?: string | null;
+  activatedAt?: string | null;
+  expiresAt?: string | null;
+  lastSuccessfulOnlineValidation?: string | null;
+  signedLicenseDocument?: SignedLicenseDocument | null;
+  keyId?: string | null;
+  deactivationStatus?: 'DEACTIVATED' | 'DEACTIVATION_PENDING_CONFIRMATION' | null;
+  updatedAt: string;
+}
+
 export interface LicenseValidationResult {
   isValid: boolean;
   status: LicenseStatus;
@@ -45,3 +63,4 @@ export interface PublicLicenseInfo {
   owner: string;
   isActive: boolean;
 }
+

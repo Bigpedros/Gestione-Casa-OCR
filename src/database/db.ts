@@ -1,5 +1,6 @@
 import Dexie, { type EntityTable } from 'dexie';
 import type { ContactRequestDocument } from '@gestione-casa/shared-sdk/contact-requests';
+import type { LocalLicenseState } from '../types/license';
 import type {
   AppSettings,
   Contributor,
@@ -55,6 +56,7 @@ export class GestioneCasaDatabase extends Dexie {
   documentSessions!: EntityTable<DocumentSession, 'id'>;
   documentPageSegments!: EntityTable<DocumentPageSegment, 'id'>;
   contactRequests!: EntityTable<ContactRequestDocument, 'id'>;
+  localLicenses!: EntityTable<LocalLicenseState, 'id'>;
 
   constructor() {
     super('gestioneCasa');
@@ -106,6 +108,10 @@ export class GestioneCasaDatabase extends Dexie {
 
     this.version(8).stores({
       contactRequests: 'id, requestType, status, createdAt, syncStatus',
+    });
+
+    this.version(9).stores({
+      localLicenses: 'id, status, lastSuccessfulOnlineValidation, updatedAt',
     });
   }
 }

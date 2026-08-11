@@ -4,6 +4,7 @@ import {
   type ContactRequestDocument,
   type ContactRequestStatus,
 } from '@gestione-casa/shared-sdk/contact-requests';
+import type { LocalLicenseState } from '../types/license';
 import type {
   Contributor,
   IncomeEntry,
@@ -1264,6 +1265,33 @@ export const contactRequestRepository = {
 
   delete: (id: string) => db.contactRequests.delete(id),
 };
+
+export const localLicenseRepository = {
+  get: (): Promise<LocalLicenseState | undefined> => db.localLicenses.get('current'),
+  save: async (state: Omit<LocalLicenseState, 'id' | 'updatedAt'> & { id?: string; updatedAt?: string }): Promise<LocalLicenseState> => {
+    const now = new Date().toISOString();
+    const item: LocalLicenseState = {
+      ...state,
+      id: state.id || 'current',
+      updatedAt: state.updatedAt || now,
+    };
+    await db.localLicenses.put(item);
+    return item;
+  },
+  updateValidationTimestamp: async (timestamp: string): Promise<void> => {
+    const existing = await db.localLicenses.get('current');
+    if (existing) {
+      const updated: LocalLicenseState = {
+        ...existing,
+        lastSuccessfulOnlineValidation: timestamp,
+        updatedAt: new Date().toISOString(),
+      };
+      await db.localLicenses.put(updated);
+    }
+  },
+  clear: (): Promise<void> => db.localLicenses.delete('current'),
+};
+
 
 
 

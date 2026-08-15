@@ -261,12 +261,15 @@ export class LicenseActivationService {
       };
     }
 
-    // Gestione stati di revoca/scadenza restituiti dal server
+    // Gestione stati di revoca/scadenza/sospensione/discrepanza restituiti dal server
     if (
       response.status === 'LICENSE_REVOKED' ||
       response.status === 'LICENSE_EXPIRED' ||
+      (response.status as string) === 'LICENSE_SUSPENDED' ||
       response.status === 'DEVICE_MISMATCH' ||
-      response.status === 'LICENSE_NOT_FOUND'
+      response.status === 'LICENSE_NOT_FOUND' ||
+      response.status === 'INVALID_PRODUCT' ||
+      (response.status as string) === 'INVALID_DEVICE'
     ) {
       const updatedState: LocalLicenseState = {
         ...localState,
@@ -428,6 +431,33 @@ export class LicenseActivationService {
         isValid: false,
         status: 'LICENSE_EXPIRED',
         message: 'La licenza risulta scaduta. Accesso offline non autorizzato.',
+        localState,
+      };
+    }
+
+    if (normStatus === 'device_mismatch' || normStatus === 'invalid_device') {
+      return {
+        isValid: false,
+        status: 'DEVICE_MISMATCH',
+        message: 'Discrepanza dispositivo rilevata dal server. Accesso offline non autorizzato.',
+        localState,
+      };
+    }
+
+    if (normStatus === 'license_not_found') {
+      return {
+        isValid: false,
+        status: 'LICENSE_NOT_FOUND',
+        message: 'Licenza non trovata sul server. Accesso offline non autorizzato.',
+        localState,
+      };
+    }
+
+    if (normStatus === 'invalid_product' || normStatus === 'activation_limit_reached' || normStatus === 'invalid_request') {
+      return {
+        isValid: false,
+        status: 'INVALID_STATE',
+        message: `Stato licenza non valido (${localState.status}). Accesso offline non autorizzato.`,
         localState,
       };
     }

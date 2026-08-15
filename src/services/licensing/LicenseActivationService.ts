@@ -1,4 +1,5 @@
 import { LicenseValidator } from '@gestione-casa/shared-sdk/licensing';
+import { validateValidationReceiptBinding } from '@gestione-casa/shared-sdk/activation';
 import type { LocalLicenseState } from '../../types/license';
 import { localLicenseRepository } from '../../repositories';
 import { getOrCreateDeviceId } from '../deviceService';
@@ -20,6 +21,37 @@ export interface DeactivationOperationResult {
   status: string;
   confirmedOnServer: boolean;
   message?: string;
+}
+
+export type OfflineValidationStatus =
+  | 'VALID_OFFLINE'
+  | 'LICENSE_NOT_FOUND'
+  | 'INVALID_LICENSE_SIGNATURE'
+  | 'RECEIPT_MISSING'
+  | 'INVALID_RECEIPT_SIGNATURE'
+  | 'INVALID_BINDING'
+  | 'DEVICE_MISMATCH'
+  | 'OFFLINE_WINDOW_EXPIRED'
+  | 'LICENSE_EXPIRED'
+  | 'LICENSE_REVOKED'
+  | 'LICENSE_DEACTIVATED'
+  | 'LICENSE_SUSPENDED'
+  | 'CLOCK_TAMPERING_DETECTED'
+  | 'INVALID_STATE';
+
+export interface OfflineValidationResult {
+  isValid: boolean;
+  status: OfflineValidationStatus;
+  message?: string;
+  effectiveUntil?: string | null;
+  issues?: string[];
+  localState?: LocalLicenseState | null;
+}
+
+export interface OfflineValidationOptions {
+  now?: Date | string;
+  state?: LocalLicenseState | null;
+  publicKey?: string;
 }
 
 export class LicenseActivationService {
@@ -328,6 +360,324 @@ export class LicenseActivationService {
       status: response.status || 'SERVER_ERROR',
       confirmedOnServer: false,
       message: response.message || 'Disattivazione non confermata dal server.',
+    };
+  }
+
+  /**
+   * Esegue la validazione offline locale della licenza persistita.
+   * Verifica crittografica rigorosa e fail-closed:
+   * 1. Presenza licenza locale
+   * 2. Documento SignedLicenseDocument presente e firma Ed25519 valida
+   * 3. Ricevuta SignedValidationReceipt presente e firma Ed25519 valida
+   * 4. Binding crittografico receipt ↔ licenza ↔ device (Shared SDK)
+   * 5. Finestra offlineValidUntil firmata dal server non scaduta
+   * 6. Scadenza licenza (licenseExpiresAt / expiresAt) non superata e calcolo effectiveUntil = min(offlineValidUntil, licenseExpiresAt)
+   * 7. Nessun rollback temporale dell'orologio (now >= lastSuccessfulOnlineValidation e now >= receipt.validatedAt)
+   * 8. Stato licenza non revocato/disattivato/scaduto/sospeso
+   */
+  async validateOfflineLicense(
+    options?: OfflineValidationOptions
+  ): Promise<OfflineValidationResult> {
+    const localState =
+      options?.state !== undefined ? options.state : await localLicenseRepository.get();
+
+    if (!localState || !localState.licenseCode) {
+      return {
+        isValid: false,
+        status: 'LICENSE_NOT_FOUND',
+        message: 'Nessuna licenza presente localmente per la validazione offline.',
+        localState: null,
+      };
+    }
+
+    const normStatus = (localState.status || '').toLowerCase();
+
+    // 1. Controllo preliminare sullo stato locale di disattivazione / revoca / scadenza esplicita
+    if (
+      localState.deactivationStatus === 'DEACTIVATED' ||
+      normStatus === 'deactivated'
+    ) {
+      return {
+        isValid: false,
+        status: 'LICENSE_DEACTIVATED',
+        message: 'La licenza risulta disattivata. Accesso offline non autorizzato.',
+        localState,
+      };
+    }
+
+    if (normStatus === 'license_revoked' || normStatus === 'revoked') {
+      return {
+        isValid: false,
+        status: 'LICENSE_REVOKED',
+        message: 'La licenza risulta revocata. Accesso offline non autorizzato.',
+        localState,
+      };
+    }
+
+    if (normStatus === 'license_suspended' || normStatus === 'suspended') {
+      return {
+        isValid: false,
+        status: 'LICENSE_SUSPENDED',
+        message: 'La licenza risulta sospesa. Accesso offline non autorizzato.',
+        localState,
+      };
+    }
+
+    if (normStatus === 'license_expired' || normStatus === 'expired') {
+      return {
+        isValid: false,
+        status: 'LICENSE_EXPIRED',
+        message: 'La licenza risulta scaduta. Accesso offline non autorizzato.',
+        localState,
+      };
+    }
+
+    // 2. Controllo presenza e firma digitale della licenza firmata (SignedLicenseDocument)
+    const signedDoc = localState.signedLicenseDocument;
+    if (!signedDoc || !signedDoc.license) {
+      return {
+        isValid: false,
+        status: 'INVALID_LICENSE_SIGNATURE',
+        message: 'Documento di licenza firmato assente o non valido.',
+        localState,
+      };
+    }
+
+    const licenseSigCheck = await licenseSignatureVerifier.verifySignedLicense(
+      signedDoc,
+      options?.publicKey
+    );
+    if (!licenseSigCheck.isValid) {
+      return {
+        isValid: false,
+        status: 'INVALID_LICENSE_SIGNATURE',
+        message: `Firma digitale della licenza non valida: ${licenseSigCheck.error}`,
+        localState,
+      };
+    }
+
+    // Controllo stato interno al LicenseDocument
+    const licDocStatus = ((signedDoc.license as any).status || '').toLowerCase();
+    if (licDocStatus === 'revoked') {
+      return {
+        isValid: false,
+        status: 'LICENSE_REVOKED',
+        message: 'La licenza firmata contiene uno stato revocato.',
+        localState,
+      };
+    }
+    if (licDocStatus === 'deactivated') {
+      return {
+        isValid: false,
+        status: 'LICENSE_DEACTIVATED',
+        message: 'La licenza firmata contiene uno stato disattivato.',
+        localState,
+      };
+    }
+    if (licDocStatus === 'suspended') {
+      return {
+        isValid: false,
+        status: 'LICENSE_SUSPENDED',
+        message: 'La licenza firmata contiene uno stato sospeso.',
+        localState,
+      };
+    }
+    if (licDocStatus === 'expired') {
+      return {
+        isValid: false,
+        status: 'LICENSE_EXPIRED',
+        message: 'La licenza firmata contiene uno stato scaduto.',
+        localState,
+      };
+    }
+
+    // 3. Controllo presenza e firma della ricevuta di validazione (SignedValidationReceipt)
+    const signedReceipt = localState.signedValidationReceipt;
+    if (!signedReceipt || !signedReceipt.receipt) {
+      return {
+        isValid: false,
+        status: 'RECEIPT_MISSING',
+        message: 'Ricevuta di validazione firmata assente. Accesso offline non autorizzato.',
+        localState,
+      };
+    }
+
+    const receiptSigCheck = await licenseSignatureVerifier.verifySignedValidationReceipt(
+      signedReceipt,
+      options?.publicKey
+    );
+    if (!receiptSigCheck.isValid) {
+      return {
+        isValid: false,
+        status: 'INVALID_RECEIPT_SIGNATURE',
+        message: `Firma digitale della ricevuta di validazione non valida: ${receiptSigCheck.error}`,
+        localState,
+      };
+    }
+
+    const receipt = signedReceipt.receipt;
+    const license = signedDoc.license;
+
+    // 4. Binding crittografico receipt ↔ licenza ↔ device tramite Shared SDK 0.5.1
+    const bindingResult = validateValidationReceiptBinding(
+      receipt,
+      license,
+      localState.deviceId
+    );
+
+    if (!bindingResult.isValid) {
+      const isDeviceMismatch = (bindingResult.issues || []).some(
+        (issue) => issue.field === 'deviceId' || issue.code === 'INVALID_DEVICE'
+      );
+      return {
+        isValid: false,
+        status: isDeviceMismatch ? 'DEVICE_MISMATCH' : 'INVALID_BINDING',
+        message: `Binding crittografico fallito: ${bindingResult.issues?.map((i) => i.message).join('; ') || 'invalido'}`,
+        issues: bindingResult.issues?.map((i) => `${i.field}: ${i.message}`),
+        localState,
+      };
+    }
+
+    // Verifica aggiuntiva corrispondenza deviceId locale se presente nella licenza
+    if (license.deviceId && license.deviceId !== localState.deviceId) {
+      return {
+        isValid: false,
+        status: 'DEVICE_MISMATCH',
+        message: `Il Device ID della licenza (${license.deviceId}) non corrisponde al device locale (${localState.deviceId}).`,
+        localState,
+      };
+    }
+
+    // 5. Controllo temporale e anti-tampering (Clock rollback)
+    const now = options?.now
+      ? typeof options.now === 'string'
+        ? new Date(options.now)
+        : options.now
+      : new Date();
+    const nowMs = now.getTime();
+
+    if (isNaN(nowMs)) {
+      return {
+        isValid: false,
+        status: 'INVALID_STATE',
+        message: 'Data corrente non valida per la verifica temporale.',
+        localState,
+      };
+    }
+
+    // Controllo rollback rispetto a lastSuccessfulOnlineValidation
+    if (localState.lastSuccessfulOnlineValidation) {
+      const lastOnlineMs = new Date(localState.lastSuccessfulOnlineValidation).getTime();
+      if (!isNaN(lastOnlineMs) && nowMs < lastOnlineMs) {
+        return {
+          isValid: false,
+          status: 'CLOCK_TAMPERING_DETECTED',
+          message:
+            'Rilevato arretramento dell\'orologio di sistema rispetto all\'ultima validazione online certificata.',
+          localState,
+        };
+      }
+    }
+
+    // Controllo rollback rispetto a receipt.validatedAt
+    if (receipt.validatedAt) {
+      const validatedAtMs = new Date(receipt.validatedAt).getTime();
+      if (!isNaN(validatedAtMs) && nowMs < validatedAtMs) {
+        return {
+          isValid: false,
+          status: 'CLOCK_TAMPERING_DETECTED',
+          message:
+            'Rilevato arretramento dell\'orologio di sistema rispetto alla data di emissione della ricevuta.',
+          localState,
+        };
+      }
+    }
+
+    // 6. Controllo finestra offline (offlineValidUntil firmato dal server)
+    const offlineValidUntil = receipt.offlineValidUntil;
+    if (!offlineValidUntil) {
+      return {
+        isValid: false,
+        status: 'OFFLINE_WINDOW_EXPIRED',
+        message: 'Nessuna finestra di validazione offline concessa (offlineValidUntil è null).',
+        effectiveUntil: null,
+        localState,
+      };
+    }
+
+    const offlineValidMs = new Date(offlineValidUntil).getTime();
+    if (isNaN(offlineValidMs)) {
+      return {
+        isValid: false,
+        status: 'OFFLINE_WINDOW_EXPIRED',
+        message: 'Data offlineValidUntil firmata non valida.',
+        effectiveUntil: null,
+        localState,
+      };
+    }
+
+    // 7. Controllo scadenza licenza (licenseExpiresAt / expiresAt) e calcolo clamp effectiveUntil
+    const rawLicExpiresAt =
+      receipt.licenseExpiresAt ||
+      (license as any).expiresAt ||
+      localState.licenseExpiresAt ||
+      localState.expiresAt;
+
+    let licenseExpiresMs: number | null = null;
+    if (rawLicExpiresAt) {
+      const parsedLicExpMs = new Date(rawLicExpiresAt).getTime();
+      if (!isNaN(parsedLicExpMs)) {
+        licenseExpiresMs = parsedLicExpMs;
+      }
+    }
+
+    // Calcolo limite effettivo: effectiveUntil = min(offlineValidUntil, licenseExpiresAt) se licenseExpiresAt esiste, altrimenti offlineValidUntil
+    const effectiveUntilMs =
+      licenseExpiresMs !== null
+        ? Math.min(offlineValidMs, licenseExpiresMs)
+        : offlineValidMs;
+    const effectiveUntil = new Date(effectiveUntilMs).toISOString();
+
+    // Se la licenza è scaduta prima della finestra offline
+    if (licenseExpiresMs !== null && nowMs > licenseExpiresMs) {
+      return {
+        isValid: false,
+        status: 'LICENSE_EXPIRED',
+        message: `La licenza è scaduta il ${new Date(licenseExpiresMs).toISOString()}.`,
+        effectiveUntil,
+        localState,
+      };
+    }
+
+    // Se l'ora corrente supera offlineValidUntil
+    if (nowMs > offlineValidMs) {
+      return {
+        isValid: false,
+        status: 'OFFLINE_WINDOW_EXPIRED',
+        message: `La finestra di validazione offline è scaduta il ${offlineValidUntil}.`,
+        effectiveUntil,
+        localState,
+      };
+    }
+
+    // Se l'ora corrente supera il limite effettivo clamped
+    if (nowMs > effectiveUntilMs) {
+      return {
+        isValid: false,
+        status: 'OFFLINE_WINDOW_EXPIRED',
+        message: `La validità offline effettiva è scaduta il ${effectiveUntil}.`,
+        effectiveUntil,
+        localState,
+      };
+    }
+
+    // 8. Tutti i requisiti soddisfatti con successo: autorizzazione offline
+    return {
+      isValid: true,
+      status: 'VALID_OFFLINE',
+      message: 'Validazione offline autorizzata con successo.',
+      effectiveUntil,
+      localState,
     };
   }
 }

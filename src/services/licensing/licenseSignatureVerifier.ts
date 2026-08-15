@@ -1,8 +1,10 @@
 /* global process, Buffer, require */
 import {
   ActivationValidator,
-  buildCanonicalLicensePayloadV1,
+  buildCanonicalLicensePayload,
+  buildCanonicalValidationReceiptV1,
   type SignedLicenseDocument,
+  type SignedValidationReceiptV1,
   type CryptographicStatus,
 } from '@gestione-casa/shared-sdk/activation';
 import { ACTIVATION_CONFIG } from '../../config/activation.config';
@@ -149,7 +151,7 @@ async function verifyEd25519Signature(
 
 export const licenseSignatureVerifier = {
   /**
-   * Valida la struttura di SignedLicenseDocument e ne verifica la firma Ed25519.
+   * Valida la struttura di SignedLicenseDocument (V1 o V2) e ne verifica la firma Ed25519.
    */
   async verifySignedLicense(
     signedDoc: SignedLicenseDocument | null | undefined,
@@ -163,17 +165,23 @@ export const licenseSignatureVerifier = {
       };
     }
 
-    // 1. Validazione di struttura tramite Shared SDK
+    // 1. Validazione di struttura e accoppiamento versione (1:1) tramite Shared SDK
     const formatValidation = ActivationValidator.validateSignedLicenseDocument(signedDoc);
     if (!formatValidation.isValid) {
+      const isUnsupportedVersionOrAlgo = formatValidation.issues.some((i: any) =>
+        i.field?.includes('signatureVersion') ||
+        i.field?.includes('signatureAlgorithm') ||
+        i.field?.includes('schemaVersion')
+      );
+
       return {
         isValid: false,
-        status: 'INVALID_FORMAT',
+        status: isUnsupportedVersionOrAlgo ? 'UNSUPPORTED_VERSION' : 'INVALID_FORMAT',
         error: formatValidation.issues.map((i: any) => `${i.field}: ${i.message}`).join('; '),
       };
     }
 
-    // 2. Controllo algoritmo e versione
+    // 2. Controllo algoritmo e versioni supportate (V1 o V2)
     if (signedDoc.signatureAlgorithm !== 'Ed25519') {
       return {
         isValid: false,
@@ -182,11 +190,11 @@ export const licenseSignatureVerifier = {
       };
     }
 
-    if (signedDoc.signatureVersion !== 1) {
+    if (signedDoc.signatureVersion !== 1 && signedDoc.signatureVersion !== 2) {
       return {
         isValid: false,
         status: 'UNSUPPORTED_VERSION',
-        error: `Versione firma non supportata: ${signedDoc.signatureVersion}`,
+        error: `Versione firma non supportata: ${(signedDoc as any).signatureVersion}`,
       };
     }
 
@@ -207,10 +215,10 @@ export const licenseSignatureVerifier = {
       };
     }
 
-    // 4. Generazione Canonical Payload V1
+    // 4. Generazione Canonical Payload tramite dispatcher automatico SDK (supporta V1 e V2)
     let canonicalPayload: string;
     try {
-      canonicalPayload = buildCanonicalLicensePayloadV1(signedDoc.license);
+      canonicalPayload = buildCanonicalLicensePayload(signedDoc.license);
     } catch (err: any) {
       return {
         isValid: false,
@@ -219,7 +227,7 @@ export const licenseSignatureVerifier = {
       };
     }
 
-    // 5. Verifica firma crittografica
+    // 5. Verifica firma crittografica Ed25519
     const isSignatureValid = await verifyEd25519Signature(
       canonicalPayload,
       signedDoc.signature,
@@ -232,6 +240,123 @@ export const licenseSignatureVerifier = {
         status: 'INVALID_SIGNATURE',
         canonicalPayload,
         error: 'Firma digitale non valida o il payload della licenza è stato alterato/manomesso.',
+      };
+    }
+
+    return {
+      isValid: true,
+      status: 'VALID',
+      canonicalPayload,
+    };
+  },
+
+  /**
+   * Valida la struttura di SignedValidationReceiptV1 e ne verifica la firma crittografica Ed25519.
+   */
+  async verifySignedValidationReceipt(
+    signedReceipt: SignedValidationReceiptV1 | null | undefined,
+    expectedPublicKey?: string
+  ): Promise<SignatureVerificationResult> {
+    if (!signedReceipt) {
+      return {
+        isValid: false,
+        status: 'INVALID_FORMAT',
+        error: 'Ricevuta di validazione firmata mancante o nulla',
+      };
+    }
+
+    // 1. Validazione di struttura tramite Shared SDK
+    const formatValidation = ActivationValidator.validateSignedValidationReceiptV1(signedReceipt);
+    if (!formatValidation.isValid) {
+      const isUnsupportedVersionOrAlgo = formatValidation.issues.some((i: any) =>
+        i.field?.includes('signatureVersion') ||
+        i.field?.includes('signatureAlgorithm') ||
+        i.field?.includes('receiptVersion') ||
+        i.field?.includes('licenseSchemaVersion')
+      );
+
+      return {
+        isValid: false,
+        status: isUnsupportedVersionOrAlgo ? 'UNSUPPORTED_VERSION' : 'INVALID_FORMAT',
+        error: formatValidation.issues.map((i: any) => `${i.field}: ${i.message}`).join('; '),
+      };
+    }
+
+    // 2. Controllo algoritmo e versione firma/receipt
+    if (signedReceipt.signatureAlgorithm !== 'Ed25519') {
+      return {
+        isValid: false,
+        status: 'UNSUPPORTED_VERSION',
+        error: `Algoritmo firma ricevuta non supportato: ${signedReceipt.signatureAlgorithm}`,
+      };
+    }
+
+    if (signedReceipt.signatureVersion !== 1) {
+      return {
+        isValid: false,
+        status: 'UNSUPPORTED_VERSION',
+        error: `Versione firma ricevuta non supportata: ${signedReceipt.signatureVersion}`,
+      };
+    }
+
+    if (signedReceipt.receipt?.receiptVersion !== 1) {
+      return {
+        isValid: false,
+        status: 'UNSUPPORTED_VERSION',
+        error: `Versione ricevuta non supportata: ${signedReceipt.receipt?.receiptVersion}`,
+      };
+    }
+
+    if (signedReceipt.receipt?.licenseSchemaVersion !== 2) {
+      return {
+        isValid: false,
+        status: 'UNSUPPORTED_VERSION',
+        error: `Schema versione licenza nella ricevuta non supportato: ${signedReceipt.receipt?.licenseSchemaVersion}`,
+      };
+    }
+
+    // 3. Risoluzione chiave pubblica
+    let pubKey = expectedPublicKey;
+    if (!pubKey && signedReceipt.keyId && ACTIVATION_CONFIG.publicKeysMap[signedReceipt.keyId]) {
+      pubKey = ACTIVATION_CONFIG.publicKeysMap[signedReceipt.keyId];
+    }
+    if (!pubKey) {
+      pubKey = ACTIVATION_CONFIG.publicKey;
+    }
+
+    if (!pubKey || pubKey.trim() === '') {
+      return {
+        isValid: false,
+        status: 'UNKNOWN_KEY',
+        error: `Chiave pubblica non trovata per keyId: "${signedReceipt.keyId}" e nessuna chiave pubblica di fallback configurata.`,
+      };
+    }
+
+    // 4. Generazione Canonical Payload per ValidationReceiptV1
+    let canonicalPayload: string;
+    try {
+      canonicalPayload = buildCanonicalValidationReceiptV1(signedReceipt.receipt);
+    } catch (err: any) {
+      return {
+        isValid: false,
+        status: 'INVALID_FORMAT',
+        error: `Errore generazione canonical payload ricevuta: ${err?.message || err}`,
+      };
+    }
+
+    // 5. Verifica firma crittografica Ed25519
+    const isSignatureValid = await verifyEd25519Signature(
+      canonicalPayload,
+      signedReceipt.signature,
+      pubKey
+    );
+
+    if (!isSignatureValid) {
+      return {
+        isValid: false,
+        status: 'INVALID_SIGNATURE',
+        canonicalPayload,
+        error: 'Firma digitale della ricevuta non valida o il payload è stato alterato/manomesso.',
       };
     }
 

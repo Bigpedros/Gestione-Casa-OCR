@@ -69,7 +69,7 @@ export class LicenseActivationService {
     });
 
     if (response.status === 'ACTIVATED' || response.status === 'ALREADY_ACTIVE') {
-      // Verifica firma digitale Ed25519 se presente
+      // Verifica firma digitale Ed25519 della licenza se presente
       if (response.signedLicense) {
         const signatureResult = await licenseSignatureVerifier.verifySignedLicense(
           response.signedLicense
@@ -84,6 +84,19 @@ export class LicenseActivationService {
         }
       }
 
+      // Verifica firma digitale Ed25519 della receipt se presente
+      let validReceipt = null;
+      if (response.receipt) {
+        const receiptResult = await licenseSignatureVerifier.verifySignedValidationReceipt(
+          response.receipt
+        );
+        if (receiptResult.isValid) {
+          validReceipt = response.receipt;
+        } else {
+          console.warn(`Receipt firmata non valida durante attivazione: ${receiptResult.error}`);
+        }
+      }
+
       const nowISO = new Date().toISOString();
       const signedDoc = response.signedLicense;
       const licenseDoc = signedDoc?.license;
@@ -94,12 +107,16 @@ export class LicenseActivationService {
         deviceId,
         activationId: response.activationId || null,
         status: response.status,
-        licenseType: licenseDoc?.term || 'beta_60_days',
-        activatedAt: licenseDoc?.activatedAt || nowISO,
+        licenseType: (licenseDoc as any)?.term || (licenseDoc as any)?.licenseType || 'beta_60_days',
+        activatedAt: (licenseDoc as any)?.activatedAt || (licenseDoc as any)?.generatedAt || nowISO,
         expiresAt: licenseDoc?.expiresAt || null,
         lastSuccessfulOnlineValidation: response.serverTime || nowISO,
         signedLicenseDocument: signedDoc || null,
-        keyId: signedDoc?.keyId || null,
+        signedValidationReceipt: validReceipt,
+        offlineValidUntil: validReceipt?.receipt.offlineValidUntil || null,
+        licenseExpiresAt: validReceipt?.receipt.licenseExpiresAt || licenseDoc?.expiresAt || null,
+        schemaVersion: licenseDoc?.schemaVersion || (signedDoc?.signatureVersion as number) || 1,
+        keyId: signedDoc?.keyId || validReceipt?.keyId || null,
         deactivationStatus: null,
         updatedAt: nowISO,
       };
@@ -110,7 +127,7 @@ export class LicenseActivationService {
       try {
         licenseService.activate({
           licenseId: licenseDoc?.id || `LIC-${normalizedCode}`,
-          owner: licenseDoc?.owner || 'Utente Gestione Casa',
+          owner: (licenseDoc as any)?.owner || 'Utente Gestione Casa',
           expirationDate: licenseDoc?.expiresAt || undefined,
           status: response.status === 'ACTIVATED' ? 'beta_active' : 'beta_active',
         });
@@ -175,11 +192,30 @@ export class LicenseActivationService {
         }
       }
 
+      // Se il server ha restituito una nuova receipt, ne verifichiamo la firma
+      let updatedReceipt = localState.signedValidationReceipt || null;
+      if (response.receipt) {
+        const receiptCheck = await licenseSignatureVerifier.verifySignedValidationReceipt(
+          response.receipt
+        );
+        if (receiptCheck.isValid) {
+          updatedReceipt = response.receipt;
+        } else {
+          console.warn(`Receipt firmata non valida durante validazione: ${receiptCheck.error}`);
+        }
+      }
+
+      const licenseDoc = updatedSignedDoc?.license;
+
       const updatedState: LocalLicenseState = {
         ...localState,
         status: 'VALID',
         lastSuccessfulOnlineValidation: response.serverTime || response.lastValidatedAt || nowISO,
         signedLicenseDocument: updatedSignedDoc,
+        signedValidationReceipt: updatedReceipt,
+        offlineValidUntil: updatedReceipt?.receipt.offlineValidUntil || localState.offlineValidUntil || null,
+        licenseExpiresAt: updatedReceipt?.receipt.licenseExpiresAt || licenseDoc?.expiresAt || localState.licenseExpiresAt || null,
+        schemaVersion: licenseDoc?.schemaVersion || localState.schemaVersion || 1,
         updatedAt: nowISO,
       };
 

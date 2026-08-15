@@ -1,4 +1,7 @@
-import type { SignedLicenseDocument } from '@gestione-casa/shared-sdk/activation';
+import type {
+  SignedLicenseDocument,
+  SignedValidationReceiptV1,
+} from '@gestione-casa/shared-sdk/activation';
 
 /**
  * Modello Dati e Tipi del Sistema Licenze (Punto 1 Architettura Licenze)
@@ -42,6 +45,10 @@ export interface LocalLicenseState {
   expiresAt?: string | null;
   lastSuccessfulOnlineValidation?: string | null;
   signedLicenseDocument?: SignedLicenseDocument | null;
+  signedValidationReceipt?: SignedValidationReceiptV1 | null;
+  offlineValidUntil?: string | null;
+  licenseExpiresAt?: string | null;
+  schemaVersion?: number | null;
   keyId?: string | null;
   deactivationStatus?: 'DEACTIVATED' | 'DEACTIVATION_PENDING_CONFIRMATION' | null;
   updatedAt: string;

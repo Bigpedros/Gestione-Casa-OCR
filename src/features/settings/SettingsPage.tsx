@@ -9,6 +9,7 @@ import {
 } from '../../components/common';
 import { Settings, CheckCircle2, Plus, Trash2, AlertCircle, Mail, Home, Headphones } from 'lucide-react';
 import type { AppSettings, Contributor, HomeAddress } from '../../types';
+import { LicenseSettingsCard } from './components/LicenseSettingsCard';
 
 export const SettingsPage: React.FC = () => {
   const dbContributors = useLiveQuery(() => contributorRepository.getAll(), []);
@@ -439,6 +440,9 @@ export const SettingsPage: React.FC = () => {
           </div>
         </div>
       </DashboardCard>
+
+      {/* Sezione Licenza Software */}
+      <LicenseSettingsCard />
 
       {/* Supporto e Contatti */}
       <DashboardCard

@@ -6,12 +6,6 @@ export function useLicense() {
     throw new Error('useLicense deve essere utilizzato all\'interno di un LicenseProvider');
   }
 
-  return {
-    licenseState: context.licenseState,
-    licenseInfo: context.licenseInfo,
-    isLoading: context.isLoading,
-    activateLicense: context.activateLicense,
-    deactivateLicense: context.deactivateLicense,
-    refreshLicenseState: context.refreshLicenseState,
-  };
+  return context;
 }
+

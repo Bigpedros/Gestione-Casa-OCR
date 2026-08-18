@@ -36,14 +36,89 @@ describe('Sottofase 2.3.B.3 - Modulo UI Supporto e Contatti (/settings/contact)'
     // Campi obbligatori e controlli del form
     expect(screen.getByLabelText(/^Nome/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/^Cognome/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/^Ragione sociale/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/^Email/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/^Telefono/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/^Tipo di richiesta/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/^Dettaglio della richiesta/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/^Canale di contatto preferito/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/^Oggetto \/ Titolo/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/^Messaggio/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/Acconsento al trattamento dei dati personali/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Salva richiesta in locale/i })).toBeInTheDocument();
+  });
+
+  it('2.bis: Menu dinamico Dettaglio della richiesta per ciascuna categoria e reset automatico al cambio tipo', () => {
+    render(
+      <MemoryRouter initialEntries={['/settings/contact']}>
+        <Routes>
+          <Route path="/settings/contact" element={<ContactPage />} />
+        </Routes>
+      </MemoryRouter>
+    );
+
+    const typeSelect = screen.getByLabelText(/^Tipo di richiesta/i);
+    const subtypeSelect = screen.getByLabelText(/^Dettaglio della richiesta/i);
+
+    // Default: 'support'
+    expect(typeSelect).toHaveValue('support');
+    expect(screen.getByRole('option', { name: 'Problema OCR / lettura scontrino' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'Backup / ripristino' })).toBeInTheDocument();
+
+    // Seleziona un sottotipo per support
+    fireEvent.change(subtypeSelect, { target: { value: 'ocr_receipt_issue' } });
+    expect(subtypeSelect).toHaveValue('ocr_receipt_issue');
+
+    // Cambia a 'information'
+    fireEvent.change(typeSelect, { target: { value: 'information' } });
+    expect(subtypeSelect).toHaveValue(''); // Resettato perché non valido in information
+    expect(screen.getByRole('option', { name: 'Informazioni sul funzionamento' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'Compatibilità / requisiti' })).toBeInTheDocument();
+
+    // Cambia a 'license_request'
+    fireEvent.change(typeSelect, { target: { value: 'license_request' } });
+    expect(screen.getByRole('option', { name: 'Nuova licenza' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'Problema ricezione licenza' })).toBeInTheDocument();
+
+    // Cambia a 'activation_request'
+    fireEvent.change(typeSelect, { target: { value: 'activation_request' } });
+    expect(screen.getByRole('option', { name: 'Attivazione non riuscita' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'Riattivazione dopo cambio dispositivo' })).toBeInTheDocument();
+
+    // Cambia a 'renewal_request'
+    fireEvent.change(typeSelect, { target: { value: 'renewal_request' } });
+    expect(screen.getByRole('option', { name: 'Informazioni sul rinnovo' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'Aggiornamento dati licenza' })).toBeInTheDocument();
+
+    // Cambia a 'other'
+    fireEvent.change(typeSelect, { target: { value: 'other' } });
+    expect(screen.getByRole('option', { name: 'Suggerimento / miglioramento' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'Privacy' })).toBeInTheDocument();
+  });
+
+  it('2.ter: Validazione telefono obbligatorio se canale preferito è Telefono', async () => {
+    render(
+      <MemoryRouter initialEntries={['/settings/contact']}>
+        <Routes>
+          <Route path="/settings/contact" element={<ContactPage />} />
+        </Routes>
+      </MemoryRouter>
+    );
+
+    fireEvent.change(screen.getByLabelText(/^Nome/i), { target: { value: 'Marco' } });
+    fireEvent.change(screen.getByLabelText(/^Email/i), { target: { value: 'marco@example.com' } });
+    fireEvent.change(screen.getByLabelText(/^Canale di contatto preferito/i), { target: { value: 'phone' } });
+    fireEvent.change(screen.getByLabelText(/^Oggetto \/ Titolo/i), { target: { value: 'Oggetto test' } });
+    fireEvent.change(screen.getByLabelText(/^Messaggio/i), { target: { value: 'Messaggio senza telefono' } });
+    fireEvent.click(screen.getByLabelText(/Acconsento al trattamento dei dati personali/i));
+
+    const form = screen.getByRole('button', { name: /Salva richiesta in locale/i }).closest('form')!;
+    await act(async () => {
+      fireEvent.submit(form);
+    });
+
+    expect(screen.getByText(/Il numero di telefono è obbligatorio quando il canale di contatto preferito è Telefono/i)).toBeInTheDocument();
+    expect(await contactRequestRepository.count()).toBe(0);
   });
 
   it('3: Validazione consenso privacy obbligatorio', async () => {
@@ -156,6 +231,46 @@ describe('Sottofase 2.3.B.3 - Modulo UI Supporto e Contatti (/settings/contact)'
 
     // 12. linkedLicenseId = null
     expect(doc.linkedLicenseId).toBeNull();
+  });
+
+  it('14.bis: Creazione richiesta con Ragione Sociale e Dettaglio Richiesta memorizzati nei metadata', async () => {
+    render(
+      <MemoryRouter initialEntries={['/settings/contact']}>
+        <Routes>
+          <Route path="/settings/contact" element={<ContactPage />} />
+        </Routes>
+      </MemoryRouter>
+    );
+
+    fireEvent.change(screen.getByLabelText(/^Nome/i), { target: { value: 'Luigi' } });
+    fireEvent.change(screen.getByLabelText(/^Cognome/i), { target: { value: 'Bianchi' } });
+    fireEvent.change(screen.getByLabelText(/^Ragione sociale/i), { target: { value: 'Acme SpA' } });
+    fireEvent.change(screen.getByLabelText(/^Email/i), { target: { value: 'luigi.bianchi@acme.it' } });
+    fireEvent.change(screen.getByLabelText(/^Tipo di richiesta/i), { target: { value: 'support' } });
+    fireEvent.change(screen.getByLabelText(/^Dettaglio della richiesta/i), { target: { value: 'ocr_receipt_issue' } });
+    fireEvent.change(screen.getByLabelText(/^Oggetto \/ Titolo/i), { target: { value: 'Errore OCR su scontrini carburante' } });
+    fireEvent.change(screen.getByLabelText(/^Messaggio/i), { target: { value: 'Gli scontrini con intestazione sbiadita non vengono letti.' } });
+    fireEvent.click(screen.getByLabelText(/Acconsento al trattamento dei dati personali/i));
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /Salva richiesta in locale/i }));
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText(/Richiesta salvata correttamente\./i)).toBeInTheDocument();
+    });
+
+    // Verifico visualizzazione dettagli
+    expect(screen.getByText('Acme SpA')).toBeInTheDocument();
+    expect(screen.getByText('Problema OCR / lettura scontrino')).toBeInTheDocument();
+
+    const all = await contactRequestRepository.getAll();
+    expect(all).toHaveLength(1);
+    const doc = all[0];
+
+    expect(doc.companyName).toBe('Acme SpA');
+    expect(doc.metadata).toEqual({ requestSubtype: 'ocr_receipt_issue' });
+    expect(doc.requestType).toBe('support');
   });
 
   it('15-20: Esportazione JSON Envelope, filename generato dallo SDK e invio Mailto (syncStatus rimane pending)', async () => {

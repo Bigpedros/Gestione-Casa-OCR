@@ -11,6 +11,7 @@ import { SuppliersPage } from '../features/suppliers/SuppliersPage';
 import { AttachmentsPage } from '../features/attachments/AttachmentsPage';
 import { BackupPage } from '../features/backup/BackupPage';
 import { SettingsPage } from '../features/settings/SettingsPage';
+import { LicensePage } from '../features/settings/LicensePage';
 import { ContactPage } from '../features/settings/ContactPage';
 import { ROUTES } from './routes';
 
@@ -30,6 +31,7 @@ export const router = createBrowserRouter([
       { path: ROUTES.ATTACHMENTS, element: <AttachmentsPage /> },
       { path: ROUTES.BACKUP, element: <BackupPage /> },
       { path: ROUTES.SETTINGS, element: <SettingsPage /> },
+      { path: ROUTES.LICENSE, element: <LicensePage /> },
       { path: ROUTES.CONTACT, element: <ContactPage /> },
     ],
   },

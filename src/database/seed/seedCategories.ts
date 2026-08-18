@@ -82,7 +82,7 @@ async function performSeed(): Promise<void> {
       await db.settings.put({
         id: defaultSettingsId,
         userMode: 'family',
-        contributorsCount: 2,
+        contributorsCount: 1,
         currency: 'EUR',
         language: 'it-IT',
         budgetMode: 'prudential',
@@ -112,8 +112,7 @@ async function performSeed(): Promise<void> {
   // 2. Seed Default Contributors safely
   try {
     const existingContrib1 = await db.contributors.get('contrib-1');
-    const existingContrib2 = await db.contributors.get('contrib-2');
-    if (!existingContrib1 || !existingContrib2) {
+    if (!existingContrib1) {
       await db.contributors.bulkPut([
         {
           id: 'contrib-1',
@@ -122,15 +121,6 @@ async function performSeed(): Promise<void> {
           label: 'Stipendio 1',
           active: true,
           colorToken: '#4F46E5',
-          metadata: { createdAt: now, updatedAt: now, version: 1 },
-        },
-        {
-          id: 'contrib-2',
-          order: 2,
-          name: 'Contributore 2',
-          label: 'Stipendio 2',
-          active: true,
-          colorToken: '#0EA5E9',
           metadata: { createdAt: now, updatedAt: now, version: 1 },
         },
       ]);

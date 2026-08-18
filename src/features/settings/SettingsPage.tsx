@@ -1,23 +1,68 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { Link } from 'react-router-dom';
 import { useLiveQuery } from 'dexie-react-hooks';
+import { db } from '../../database/db';
 import { contributorRepository, settingsRepository } from '../../repositories';
+import {
+  isUnusedPlaceholderContributor,
+  filterVisibleContributors,
+} from '../../utils/contributorUtils';
 import {
   PageHeader,
   DashboardCard,
   Button,
+  Badge,
 } from '../../components/common';
-import { Settings, CheckCircle2, Plus, Trash2, AlertCircle, Mail, Home, Headphones } from 'lucide-react';
+import {
+  Settings,
+  CheckCircle2,
+  Plus,
+  Trash2,
+  AlertCircle,
+  Mail,
+  Home,
+  Headphones,
+  Key,
+  ShieldCheck,
+} from 'lucide-react';
 import type { AppSettings, Contributor, HomeAddress } from '../../types';
-import { LicenseSettingsCard } from './components/LicenseSettingsCard';
+import { useLicense } from '../../hooks/useLicense';
+import { ROUTES } from '../../app/routes';
 
 export const SettingsPage: React.FC = () => {
   const dbContributors = useLiveQuery(() => contributorRepository.getAll(), []);
+  const dbIncomeEntries = useLiveQuery(() => db.incomeEntries.toArray(), []);
+
+  const referencedContributorIds = useMemo(() => {
+    const set = new Set<string>();
+    if (dbIncomeEntries) {
+      for (const inc of dbIncomeEntries) {
+        if (inc.contributorId) {
+          set.add(inc.contributorId);
+        }
+      }
+    }
+    return set;
+  }, [dbIncomeEntries]);
+
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [editedContributors, setEditedContributors] = useState<Contributor[]>([]);
   const [isInitialized, setIsInitialized] = useState(false);
   const [savedMsg, setSavedMsg] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  // License state from LicenseContext
+  const {
+    localState,
+    maskedLicenseCode,
+    status: licenseStatus,
+    validationStatus,
+    isValid: isLicenseValid,
+    edition: licenseEdition,
+    owner: licenseOwner,
+    deactivationStatus,
+    isLoading: isLicenseLoading,
+  } = useLicense();
 
   // Home Address state
   const [homeAddress, setHomeAddress] = useState<HomeAddress>({
@@ -43,10 +88,33 @@ export const SettingsPage: React.FC = () => {
 
   useEffect(() => {
     if (dbContributors && !isInitialized) {
-      setEditedContributors(dbContributors);
+      if (dbContributors.length === 0) {
+        // Nuova configurazione: mostra inizialmente 1 solo contributore
+        const now = new Date().toISOString();
+        setEditedContributors([
+          {
+            id: 'contrib-1',
+            order: 1,
+            name: '',
+            label: 'Stipendio',
+            active: true,
+            email: '',
+            receiveDeadlineEmails: false,
+            receive48HourReminder: false,
+            receive24HourReminder: false,
+            emailDeliveryStatus: 'provider_not_configured',
+            colorToken: '#4F46E5',
+            metadata: { createdAt: now, updatedAt: now, version: 1 },
+          },
+        ]);
+      } else {
+        // Filtra i placeholder tecnici non utilizzati preservando tutti i contributori reali/attivi/referenziati
+        const visible = filterVisibleContributors(dbContributors, referencedContributorIds);
+        setEditedContributors(visible);
+      }
       setIsInitialized(true);
     }
-  }, [dbContributors, isInitialized]);
+  }, [dbContributors, isInitialized, referencedContributorIds]);
 
   const handleSaveHomeAddress = async () => {
     setHomeAddressError(null);
@@ -95,22 +163,58 @@ export const SettingsPage: React.FC = () => {
       setErrorMsg('Massimo tre contribuenti consentiti');
       return;
     }
-    const order = editedContributors.length + 1;
+    const currentCount = editedContributors.length;
+    const nextOrder = currentCount + 1;
     const now = new Date().toISOString();
-    const newContrib: Contributor = {
-      id: `contrib-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
-      order,
-      name: '',
-      label: 'Stipendio',
-      active: true,
-      email: '',
-      receiveDeadlineEmails: false,
-      receive48HourReminder: false,
-      receive24HourReminder: false,
-      emailDeliveryStatus: 'provider_not_configured',
-      colorToken: order === 1 ? '#4F46E5' : order === 2 ? '#0EA5E9' : '#10B981',
-      metadata: { createdAt: now, updatedAt: now, version: 1 },
-    };
+
+    // Cerca se nel DB esiste un placeholder inattivo/non utilizzato per questo slot o un ID corrispondente
+    const existingPlaceholder = (dbContributors || []).find(
+      (c) =>
+        !editedContributors.some((ec) => ec.id === c.id) &&
+        (c.order === nextOrder || c.id === `contrib-${nextOrder}` || isUnusedPlaceholderContributor(c, referencedContributorIds))
+    );
+
+    let newContrib: Contributor;
+    if (existingPlaceholder) {
+      // Riutilizza il record placeholder esistente senza creare duplicazioni
+      const rawName = (existingPlaceholder.name || '').trim();
+      const isPlaceholderName =
+        !rawName ||
+        /^contributore(\s*\d*)?$/i.test(rawName) ||
+        /^(secondo|terzo)\s+contributore$/i.test(rawName);
+      const rawEmail = (existingPlaceholder.email || '').trim().toLowerCase();
+      const isPlaceholderEmail =
+        !rawEmail ||
+        rawEmail === 'nome@esempio.com' ||
+        rawEmail.includes('esempio');
+
+      newContrib = {
+        ...existingPlaceholder,
+        order: nextOrder,
+        name: isPlaceholderName ? '' : existingPlaceholder.name,
+        email: isPlaceholderEmail ? '' : existingPlaceholder.email,
+        active: true,
+        label: existingPlaceholder.label || 'Stipendio',
+        colorToken: nextOrder === 1 ? '#4F46E5' : nextOrder === 2 ? '#0EA5E9' : '#10B981',
+      };
+    } else {
+      // Crea nuovo contributore
+      newContrib = {
+        id: `contrib-${nextOrder}`,
+        order: nextOrder,
+        name: '',
+        label: 'Stipendio',
+        active: true,
+        email: '',
+        receiveDeadlineEmails: false,
+        receive48HourReminder: false,
+        receive24HourReminder: false,
+        emailDeliveryStatus: 'provider_not_configured',
+        colorToken: nextOrder === 1 ? '#4F46E5' : nextOrder === 2 ? '#0EA5E9' : '#10B981',
+        metadata: { createdAt: now, updatedAt: now, version: 1 },
+      };
+    }
+
     setEditedContributors((prev) => [...prev, newContrib]);
     setErrorMsg(null);
   };
@@ -179,12 +283,41 @@ export const SettingsPage: React.FC = () => {
     setTimeout(() => setSavedMsg(false), 2000);
   };
 
+  // Badge di stato calcolato per la card di riepilogo licenza
+  const renderLicenseStatusBadge = () => {
+    if (isLicenseLoading) {
+      return <Badge variant="neutral">Caricamento...</Badge>;
+    }
+    if (deactivationStatus === 'DEACTIVATION_PENDING_CONFIRMATION') {
+      return <Badge variant="warning">Disattivazione in sospeso</Badge>;
+    }
+    if (licenseStatus === 'deactivated' || deactivationStatus === 'DEACTIVATED') {
+      return <Badge variant="neutral">Disattivata</Badge>;
+    }
+    if (licenseStatus === 'LICENSE_REVOKED' || validationStatus === 'LICENSE_REVOKED') {
+      return <Badge variant="danger">Revocata</Badge>;
+    }
+    if (licenseStatus === 'LICENSE_SUSPENDED' || validationStatus === 'LICENSE_SUSPENDED') {
+      return <Badge variant="danger">Sospesa</Badge>;
+    }
+    if (licenseStatus === 'LICENSE_EXPIRED' || validationStatus === 'LICENSE_EXPIRED') {
+      return <Badge variant="danger">Scaduta</Badge>;
+    }
+    if (licenseStatus === 'DEVICE_MISMATCH' || validationStatus === 'DEVICE_MISMATCH') {
+      return <Badge variant="danger">Dispositivo non corrispondente</Badge>;
+    }
+    if (isLicenseValid) {
+      return <Badge variant="success">Attiva e Valida</Badge>;
+    }
+    return <Badge variant="neutral">Non attivata</Badge>;
+  };
+
   if (!settings) return <div className="p-12 text-center text-slate-500 font-medium">Caricamento impostazioni...</div>;
 
   return (
     <div className="space-y-6 max-w-7xl mx-auto pb-12">
       <PageHeader
-        icon={<Settings className="w-6 h-6 text-indigo-600" />}
+        icon={<Settings className="w-6 h-6 text-indigo-600 dark:text-indigo-400" />}
         title="Impostazioni Applicazione"
         subtitle="Configura la modalità casa, i contributori e le preferenze di sistema."
         actions={
@@ -196,7 +329,63 @@ export const SettingsPage: React.FC = () => {
         }
       />
 
-      {/* Abitazione Settings */}
+      {/* 1. Attivazione licenza (Nuovo primo riquadro) */}
+      <DashboardCard
+        title="Attivazione licenza"
+        badge={
+          <div className="flex items-center gap-2">
+            {renderLicenseStatusBadge()}
+          </div>
+        }
+        subtitle="Gestione stato licenza, attivazione e verifica dispositivo per Gestione Casa OCR."
+      >
+        <div className="space-y-4 pt-2">
+          {isLicenseValid && localState?.licenseCode ? (
+            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 p-4 rounded-2xl bg-emerald-50/50 dark:bg-emerald-950/20 border border-emerald-200/70 dark:border-emerald-800/60">
+              <div className="space-y-1">
+                <div className="flex items-center gap-2">
+                  <ShieldCheck className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                  <span className="text-sm font-semibold text-slate-900 dark:text-white">
+                    Licenza {licenseEdition ? `Edizione ${licenseEdition}` : 'Attiva'}
+                  </span>
+                </div>
+                <p className="text-xs text-slate-600 dark:text-slate-300">
+                  Codice: <span className="font-mono font-bold text-slate-800 dark:text-slate-200">{maskedLicenseCode}</span>
+                  {licenseOwner && <span> • Intestatario: <strong>{licenseOwner}</strong></span>}
+                </p>
+              </div>
+
+              <Link to={ROUTES.LICENSE}>
+                <Button variant="primary" size="sm" icon={<Key className="w-4 h-4" />}>
+                  Gestisci licenza
+                </Button>
+              </Link>
+            </div>
+          ) : (
+            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 p-4 rounded-2xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200/70 dark:border-slate-700/60">
+              <div className="space-y-1">
+                <div className="flex items-center gap-2">
+                  <Key className="w-4 h-4 text-slate-500 dark:text-slate-400 shrink-0" />
+                  <span className="text-sm font-semibold text-slate-800 dark:text-slate-200">
+                    {licenseStatus === 'deactivated' ? 'Licenza disattivata' : 'Nessuna licenza attiva'}
+                  </span>
+                </div>
+                <p className="text-xs text-slate-500 dark:text-slate-400">
+                  Accedi alla pagina dedicata per inserire un nuovo codice di attivazione o verificare la licenza.
+                </p>
+              </div>
+
+              <Link to={ROUTES.LICENSE}>
+                <Button variant="primary" size="sm" icon={<Key className="w-4 h-4" />}>
+                  Gestisci licenza
+                </Button>
+              </Link>
+            </div>
+          )}
+        </div>
+      </DashboardCard>
+
+      {/* 2. Abitazione */}
       <DashboardCard
         title="Abitazione"
         badge={<Home className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />}
@@ -284,7 +473,7 @@ export const SettingsPage: React.FC = () => {
         </div>
       </DashboardCard>
 
-      {/* Contributor Settings */}
+      {/* 3. Contributori nucleo familiare — massimo 3 */}
       <DashboardCard
         title="Contributori Nucleo Familiare (Max 3)"
         subtitle="Definisci i nomi, la tipologia di contributo e le preferenze e-mail per i promemoria"
@@ -296,9 +485,13 @@ export const SettingsPage: React.FC = () => {
               icon={<Plus className="w-4 h-4" />}
               onClick={handleAddContributor}
             >
-              Aggiungi Contributore
+              + Aggiungi contributore
             </Button>
-          ) : undefined
+          ) : (
+            <span className="text-xs font-medium text-slate-500 dark:text-slate-400 bg-slate-100 dark:bg-slate-800 px-3 py-1.5 rounded-xl">
+              Limite massimo raggiunto (3 contributori)
+            </span>
+          )
         }
       >
         <div className="space-y-4 pt-2">
@@ -441,10 +634,7 @@ export const SettingsPage: React.FC = () => {
         </div>
       </DashboardCard>
 
-      {/* Sezione Licenza Software */}
-      <LicenseSettingsCard />
-
-      {/* Supporto e Contatti */}
+      {/* 4. Supporto e Contatti */}
       <DashboardCard
         title="Supporto e Contatti"
         badge={<Headphones className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />}
@@ -454,7 +644,7 @@ export const SettingsPage: React.FC = () => {
           <p className="text-sm text-slate-600 dark:text-slate-400">
             Hai bisogno di assistenza o vuoi inviare una richiesta di informazioni o licenza?
           </p>
-          <Link to="/settings/contact">
+          <Link to={ROUTES.CONTACT}>
             <Button variant="primary" size="sm" icon={<Headphones className="w-4 h-4" />}>
               Supporto e Contatti
             </Button>
@@ -462,7 +652,7 @@ export const SettingsPage: React.FC = () => {
         </div>
       </DashboardCard>
 
-      {/* General Settings */}
+      {/* 5. Preferenze Generali */}
       <DashboardCard
         title="Preferenze Generali"
         subtitle="Lingua, valuta e impostazioni del tema visuale"

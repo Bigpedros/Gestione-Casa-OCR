@@ -29,6 +29,64 @@ export const REQUEST_TYPE_OPTIONS: { value: ContactRequestType; label: string }[
   { value: 'other', label: 'Altro' },
 ];
 
+export interface RequestSubtypeOption {
+  value: string;
+  label: string;
+}
+
+export const REQUEST_SUBTYPE_OPTIONS_MAP: Record<ContactRequestType, RequestSubtypeOption[]> = {
+  support: [
+    { value: 'ocr_receipt_issue', label: 'Problema OCR / lettura scontrino' },
+    { value: 'product_recognition_issue', label: 'Problema prodotti o riconoscimento prodotto' },
+    { value: 'supplier_issue', label: 'Problema fornitori' },
+    { value: 'income_expense_issue', label: 'Problema entrate / uscite' },
+    { value: 'report_issue', label: 'Problema report' },
+    { value: 'backup_restore_issue', label: 'Backup / ripristino' },
+    { value: 'app_ui_issue', label: 'Problema applicazione / interfaccia' },
+    { value: 'license_issue', label: 'Problema licenza' },
+    { value: 'other_technical_issue', label: 'Altro problema tecnico' },
+  ],
+  information: [
+    { value: 'how_it_works_info', label: 'Informazioni sul funzionamento' },
+    { value: 'commercial_info', label: 'Informazioni commerciali' },
+    { value: 'compatibility_requirements_info', label: 'Compatibilità / requisiti' },
+    { value: 'app_features_info', label: "Funzioni dell'applicazione" },
+    { value: 'other_info', label: 'Altro' },
+  ],
+  license_request: [
+    { value: 'new_license', label: 'Nuova licenza' },
+    { value: 'license_info', label: 'Informazioni sulla licenza' },
+    { value: 'license_delivery_issue', label: 'Problema ricezione licenza' },
+    { value: 'other_license_request', label: 'Altro' },
+  ],
+  activation_request: [
+    { value: 'activation_failed', label: 'Attivazione non riuscita' },
+    { value: 'unrecognized_code', label: 'Codice non riconosciuto' },
+    { value: 'device_limit_reached', label: 'Limite dispositivi' },
+    { value: 'reactivation_new_device', label: 'Riattivazione dopo cambio dispositivo' },
+    { value: 'other_activation_request', label: 'Altro' },
+  ],
+  renewal_request: [
+    { value: 'renewal_info', label: 'Informazioni sul rinnovo' },
+    { value: 'renewal_issue', label: 'Problema rinnovo' },
+    { value: 'license_data_update', label: 'Aggiornamento dati licenza' },
+    { value: 'other_renewal_request', label: 'Altro' },
+  ],
+  other: [
+    { value: 'suggestion_improvement', label: 'Suggerimento / miglioramento' },
+    { value: 'generic_report', label: 'Segnalazione generica' },
+    { value: 'payment_admin', label: 'Pagamento / amministrazione' },
+    { value: 'privacy_inquiry', label: 'Privacy' },
+    { value: 'other_general', label: 'Altro' },
+  ],
+};
+
+export const getSubtypeLabel = (requestType: ContactRequestType, subtypeValue: string): string => {
+  const options = REQUEST_SUBTYPE_OPTIONS_MAP[requestType] || [];
+  const found = options.find((opt) => opt.value === subtypeValue);
+  return found ? found.label : subtypeValue;
+};
+
 export const CONTACT_CHANNEL_OPTIONS: { value: PreferredContactChannel; label: string }[] = [
   { value: 'email', label: 'Email' },
   { value: 'phone', label: 'Telefono' },
@@ -37,9 +95,11 @@ export const CONTACT_CHANNEL_OPTIONS: { value: PreferredContactChannel; label: s
 export const ContactPage: React.FC = () => {
   const [firstName, setFirstName] = useState('');
   const [lastName, setLastName] = useState('');
+  const [companyName, setCompanyName] = useState('');
   const [email, setEmail] = useState('');
   const [phone, setPhone] = useState('');
   const [requestType, setRequestType] = useState<ContactRequestType>('support');
+  const [requestSubtype, setRequestSubtype] = useState('');
   const [preferredContactChannel, setPreferredContactChannel] =
     useState<PreferredContactChannel>('email');
   const [subject, setSubject] = useState('');
@@ -53,6 +113,14 @@ export const ContactPage: React.FC = () => {
   const [importResult, setImportResult] = useState<ImportSyncResponseResult | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  const handleRequestTypeChange = (newType: ContactRequestType) => {
+    setRequestType(newType);
+    const validSubtypes = REQUEST_SUBTYPE_OPTIONS_MAP[newType] || [];
+    if (!validSubtypes.some((opt) => opt.value === requestSubtype)) {
+      setRequestSubtype('');
+    }
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setValidationError(null);
@@ -64,10 +132,17 @@ export const ContactPage: React.FC = () => {
 
     const trimmedFirstName = firstName.trim();
     const trimmedLastName = lastName.trim();
+    const trimmedCompanyName = companyName.trim();
     const trimmedEmail = email.trim();
     const trimmedPhone = phone.trim();
     const trimmedSubject = subject.trim();
     const trimmedMessage = message.trim();
+    const trimmedSubtype = requestSubtype.trim();
+
+    if (preferredContactChannel === 'phone' && !trimmedPhone) {
+      setValidationError('Il numero di telefono è obbligatorio quando il canale di contatto preferito è Telefono.');
+      return;
+    }
 
     const fullName = [trimmedFirstName, trimmedLastName].filter(Boolean).join(' ');
 
@@ -75,15 +150,19 @@ export const ContactPage: React.FC = () => {
     const generatedId = `req_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
     const deviceId = await getOrCreateDeviceId();
 
+    const metadata: Record<string, unknown> = trimmedSubtype
+      ? { requestSubtype: trimmedSubtype }
+      : {};
+
     const candidateDoc: ContactRequestDocument = {
       id: generatedId,
       requestType,
       status: 'new',
       source: 'gestione_casa_ocr',
-      displayName: fullName || trimmedEmail,
+      displayName: fullName || trimmedCompanyName || trimmedEmail,
       firstName: trimmedFirstName || 'Utente',
       lastName: trimmedLastName || null,
-      companyName: null,
+      companyName: trimmedCompanyName || null,
       email: trimmedEmail,
       phone: trimmedPhone || null,
       preferredContactChannel,
@@ -100,7 +179,7 @@ export const ContactPage: React.FC = () => {
       sourceAppVersion: APP_CONFIG.version,
       syncStatus: 'pending',
       schemaVersion: 1,
-      metadata: {},
+      metadata,
     };
 
     const validationRes = ContactRequestValidator.validate(candidateDoc);
@@ -155,9 +234,14 @@ export const ContactPage: React.FC = () => {
 
     const recipient = 'gestionecasaocr@gmail.com';
     const emailSubject = encodeURIComponent(`[Gestione Casa OCR] Richiesta Supporto ID: ${savedRequest.id}`);
+    const subtypeStr =
+      typeof savedRequest.metadata?.requestSubtype === 'string' && savedRequest.metadata.requestSubtype
+        ? `\nDettaglio: ${getSubtypeLabel(savedRequest.requestType, savedRequest.metadata.requestSubtype)}`
+        : '';
+    const companyStr = savedRequest.companyName ? `\nRagione Sociale: ${savedRequest.companyName}` : '';
     const emailBody = encodeURIComponent(
       `ID Richiesta: ${savedRequest.id}\n` +
-      `Tipo Richiesta: ${savedRequest.requestType}\n` +
+      `Tipo Richiesta: ${savedRequest.requestType}${subtypeStr}${companyStr}\n` +
       `Oggetto: ${savedRequest.subject}\n\n` +
       `Promemoria: Allega manualmente il file JSON esportato dalla richiesta se necessario.`
     );
@@ -169,9 +253,11 @@ export const ContactPage: React.FC = () => {
     setSavedRequest(null);
     setFirstName('');
     setLastName('');
+    setCompanyName('');
     setEmail('');
     setPhone('');
     setRequestType('support');
+    setRequestSubtype('');
     setPreferredContactChannel('email');
     setSubject('');
     setMessage('');
@@ -232,10 +318,19 @@ export const ContactPage: React.FC = () => {
 
             <div className="bg-slate-50 dark:bg-slate-900 p-4 rounded-2xl border border-slate-200 dark:border-slate-800 text-xs space-y-1.5 font-medium text-slate-700 dark:text-slate-300">
               <p>ID Richiesta: <strong className="text-slate-900 dark:text-white font-mono">{savedRequest.id}</strong></p>
-              <p>Tipo Richiesta: <strong className="text-slate-900 dark:text-white">{savedRequest.requestType}</strong></p>
+              <p>Tipo Richiesta: <strong className="text-slate-900 dark:text-white">{REQUEST_TYPE_OPTIONS.find(o => o.value === savedRequest.requestType)?.label || savedRequest.requestType}</strong></p>
+              {typeof savedRequest.metadata?.requestSubtype === 'string' && savedRequest.metadata.requestSubtype && (
+                <p>Dettaglio della richiesta: <strong className="text-slate-900 dark:text-white">{getSubtypeLabel(savedRequest.requestType, savedRequest.metadata.requestSubtype)}</strong></p>
+              )}
               <p>Nome: <strong className="text-slate-900 dark:text-white">{savedRequest.displayName}</strong></p>
+              {savedRequest.companyName && (
+                <p>Ragione sociale: <strong className="text-slate-900 dark:text-white">{savedRequest.companyName}</strong></p>
+              )}
               <p>Email: <strong className="text-slate-900 dark:text-white">{savedRequest.email}</strong></p>
-              <p>Canale preferito: <strong className="text-slate-900 dark:text-white">{savedRequest.preferredContactChannel}</strong></p>
+              {savedRequest.phone && (
+                <p>Telefono: <strong className="text-slate-900 dark:text-white">{savedRequest.phone}</strong></p>
+              )}
+              <p>Canale preferito: <strong className="text-slate-900 dark:text-white">{savedRequest.preferredContactChannel === 'phone' ? 'Telefono' : 'Email'}</strong></p>
               <p>Oggetto: <strong className="text-slate-900 dark:text-white">{savedRequest.subject}</strong></p>
             </div>
 
@@ -314,6 +409,20 @@ export const ContactPage: React.FC = () => {
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
+                <label htmlFor="contact-company-name" className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
+                  Ragione sociale (opzionale)
+                </label>
+                <input
+                  id="contact-company-name"
+                  type="text"
+                  placeholder="Nome azienda o ente (opzionale)"
+                  value={companyName}
+                  onChange={(e) => setCompanyName(e.target.value)}
+                  className="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl px-3 py-2 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500 text-sm"
+                />
+              </div>
+
+              <div>
                 <label htmlFor="contact-email" className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
                   Email <span className="text-rose-500">*</span>
                 </label>
@@ -327,21 +436,6 @@ export const ContactPage: React.FC = () => {
                   className="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl px-3 py-2 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500 text-sm"
                 />
               </div>
-
-              <div>
-                <label htmlFor="contact-phone" className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
-                  Telefono {preferredContactChannel === 'phone' && <span className="text-rose-500">*</span>}
-                </label>
-                <input
-                  id="contact-phone"
-                  type="tel"
-                  required={preferredContactChannel === 'phone'}
-                  placeholder="+39 333 1234567"
-                  value={phone}
-                  onChange={(e) => setPhone(e.target.value)}
-                  className="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl px-3 py-2 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500 text-sm"
-                />
-              </div>
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -352,7 +446,7 @@ export const ContactPage: React.FC = () => {
                 <select
                   id="contact-request-type"
                   value={requestType}
-                  onChange={(e) => setRequestType(e.target.value as ContactRequestType)}
+                  onChange={(e) => handleRequestTypeChange(e.target.value as ContactRequestType)}
                   className="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl px-3 py-2 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500 text-sm cursor-pointer"
                 >
                   {REQUEST_TYPE_OPTIONS.map((opt) => (
@@ -363,6 +457,27 @@ export const ContactPage: React.FC = () => {
                 </select>
               </div>
 
+              <div>
+                <label htmlFor="contact-request-subtype" className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
+                  Dettaglio della richiesta
+                </label>
+                <select
+                  id="contact-request-subtype"
+                  value={requestSubtype}
+                  onChange={(e) => setRequestSubtype(e.target.value)}
+                  className="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl px-3 py-2 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500 text-sm cursor-pointer"
+                >
+                  <option value="">Seleziona dettaglio (opzionale)...</option>
+                  {(REQUEST_SUBTYPE_OPTIONS_MAP[requestType] || []).map((opt) => (
+                    <option key={opt.value} value={opt.value}>
+                      {opt.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
                 <label htmlFor="contact-preferred-channel" className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
                   Canale di contatto preferito <span className="text-rose-500">*</span>
@@ -381,6 +496,21 @@ export const ContactPage: React.FC = () => {
                     </option>
                   ))}
                 </select>
+              </div>
+
+              <div>
+                <label htmlFor="contact-phone" className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
+                  Telefono {preferredContactChannel === 'phone' ? <span className="text-rose-500">*</span> : <span className="text-slate-400 font-normal">(opzionale)</span>}
+                </label>
+                <input
+                  id="contact-phone"
+                  type="tel"
+                  required={preferredContactChannel === 'phone'}
+                  placeholder="+39 333 1234567"
+                  value={phone}
+                  onChange={(e) => setPhone(e.target.value)}
+                  className="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl px-3 py-2 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500 text-sm"
+                />
               </div>
             </div>
 

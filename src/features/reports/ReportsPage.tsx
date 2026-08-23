@@ -1,7 +1,7 @@
-import React, { useState, useMemo, useEffect, useRef } from 'react';
+import React, { useState, useMemo } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { budgetService } from '../../services/budgetService';
-import { runMonthClosingCheck, getClosingInfoText } from '../../services/monthClosingService';
+import { reportService } from '../../services/reportService';
 import {
   reportRepository,
   contributorRepository,
@@ -13,7 +13,7 @@ import {
   savingPlanRepository,
   projectRepository,
 } from '../../repositories';
-import { getMonthName, getCurrentYearMonth } from '../../utils/formatters';
+import { getMonthName, getCurrentYearMonth, formatCurrency } from '../../utils/formatters';
 import {
   isCancelledStatus,
   formatHomeAddress,
@@ -23,7 +23,6 @@ import {
   PeriodType,
   PERIOD_OPTIONS,
   calculateSelectedRange,
-  getPeriodSubtitle,
   getReportDocumentTitle,
   getPrintPeriodStr,
 } from './periodUtils';
@@ -31,72 +30,70 @@ import {
   PageHeader,
   Button,
   Badge,
+  DashboardCard,
+  Modal,
 } from '../../components/common';
 import {
   Printer,
-  CheckCircle2,
-  Calendar,
   PieChart,
-  Clock,
-  Home as HomeIcon,
-  Eye,
+  Download,
+  Save,
+  RotateCcw,
+  CheckCircle2,
+  FolderOpen,
+  PlusCircle,
+  ChevronLeft,
+  ChevronRight,
+  Sparkles,
+  Trash2,
 } from 'lucide-react';
-import { EconomicReportDocument } from './EconomicReportDocument';
-import { ReportPreviewModal } from './ReportPreviewModal';
+import {
+  EconomicReportDocument,
+  type ReportInclusions,
+  type ReportVisualMode,
+  type ReportDetailLevel,
+} from './EconomicReportDocument';
+import type { MonthlyReport } from '../../types';
 
 export const ReportsPage: React.FC = () => {
-  const initialPeriod = useMemo(() => {
-    try {
-      if (typeof window !== 'undefined' && window.location && window.location.search) {
-        const params = new URLSearchParams(window.location.search);
-        const p = params.get('period');
-        if (p && PERIOD_OPTIONS.some((opt) => opt.value === p)) {
-          return p as PeriodType;
-        }
-      }
-    } catch {
-      // Ignore fallback
-    }
-    return 'current_month';
-  }, []);
-
   const currentDate = useMemo(() => getCurrentYearMonth(), []);
-  const [periodType, setPeriodType] = useState<PeriodType>(initialPeriod);
 
-  useEffect(() => {
-    try {
-      if (typeof window !== 'undefined' && window.location && window.location.search) {
-        const params = new URLSearchParams(window.location.search);
-        const p = params.get('period');
-        if (p && PERIOD_OPTIONS.some((opt) => opt.value === p)) {
-          setPeriodType(p as PeriodType);
-        }
-      }
-    } catch {
-      // Ignore
-    }
-  }, []);
-
+  // 1. Configuration State (Right Column)
+  const [reportType, setReportType] = useState<string>('monthly');
+  const [periodType, setPeriodType] = useState<PeriodType>('current_month');
   const [selectedCustomMonth, setSelectedCustomMonth] = useState<number | ''>('');
-  const [isPreviewOpen, setIsPreviewOpen] = useState(false);
-  const previewButtonRef = useRef<HTMLButtonElement>(null);
+  const [selectedYear, setSelectedYear] = useState<number>(currentDate.year);
+  const [customTitle, setCustomTitle] = useState<string>('');
+  const [selectedContributor, setSelectedContributor] = useState<string>('all');
+  const [comparisonMode, setComparisonMode] = useState<string>('none');
 
-  useEffect(() => {
-    runMonthClosingCheck();
-    const handleFocus = () => {
-      runMonthClosingCheck();
-    };
-    window.addEventListener('focus', handleFocus);
-    return () => {
-      window.removeEventListener('focus', handleFocus);
-    };
-  }, []);
+  const [inclusions, setInclusions] = useState<ReportInclusions>({
+    summary: true,
+    incomes: true,
+    expenses: true,
+    purchases: true,
+    classification: true,
+    budget: true,
+    contributors: true,
+  });
 
+  const [visualMode, setVisualMode] = useState<ReportVisualMode>('chartsAndTables');
+  const [detailLevel, setDetailLevel] = useState<ReportDetailLevel>('standard');
+
+  // Preview Pagination State (Left Column)
+  const [activePage, setActivePage] = useState<number>(1);
+  const totalPages = 2;
+
+  // Modals & Feedback
+  const [isSavedReportsModalOpen, setIsSavedReportsModalOpen] = useState<boolean>(false);
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
+
+  // Selected Range Calculation
   const selectedRange = useMemo(() => {
-    return calculateSelectedRange(periodType, selectedCustomMonth, currentDate);
-  }, [periodType, selectedCustomMonth, currentDate]);
+    return calculateSelectedRange(periodType, selectedCustomMonth, { year: selectedYear, month: currentDate.month });
+  }, [periodType, selectedCustomMonth, selectedYear, currentDate.month]);
 
-  // Live queries for READ-ONLY display – called unconditionally at top level
+  // Live queries for READ-ONLY display
   const summary = useLiveQuery(
     async () => {
       if (!selectedRange) return null;
@@ -117,6 +114,8 @@ export const ReportsPage: React.FC = () => {
     },
     [selectedRange?.endYear, selectedRange?.endMonth, selectedRange?.isSingleMonth]
   );
+
+  const allSavedReports = useLiveQuery(() => reportRepository.getAll(), []) ?? [];
 
   const rawIncomes = useLiveQuery(
     async () => {
@@ -151,316 +150,726 @@ export const ReportsPage: React.FC = () => {
   const savingPlans = useLiveQuery(() => savingPlanRepository.getActive(), []);
   const projects = useLiveQuery(() => projectRepository.getActive(), []);
 
-  // Classification summaries - MUST be declared unconditionally before any early return
+  // Filtered Incomes and Expenses based on Contributor
+  const incomes = useMemo(() => {
+    if (!rawIncomes) return [];
+    if (selectedContributor === 'all') return rawIncomes;
+    return rawIncomes.filter((inc) => inc.contributorId === selectedContributor);
+  }, [rawIncomes, selectedContributor]);
+
+  const expenses = useMemo(() => {
+    if (!rawExpenses) return [];
+    return rawExpenses;
+  }, [rawExpenses]);
+
+  // Lookup maps
+  const contributorMap = useMemo(() => {
+    const map = new Map();
+    (contributors || []).forEach((c) => map.set(c.id, c));
+    return map;
+  }, [contributors]);
+
+  const categoryMap = useMemo(() => {
+    const map = new Map();
+    (categories || []).forEach((c) => map.set(c.id, c.name));
+    return map;
+  }, [categories]);
+
+  const supplierMap = useMemo(() => {
+    const map = new Map();
+    (suppliers || []).forEach((s) => map.set(s.id, s.name));
+    return map;
+  }, [suppliers]);
+
+  // Classification summaries
   const classificationSummaries = useMemo(() => {
     const res = { necessary: 0, voluntary: 0, toEvaluate: 0 };
-    if (!rawExpenses) return res;
-    for (const e of rawExpenses) {
+    if (!expenses) return res;
+    for (const e of expenses) {
       if (isCancelledStatus(e.status)) continue;
       if (e.classification === 'necessary') res.necessary += e.amount;
       else if (e.classification === 'voluntary') res.voluntary += e.amount;
       else if (e.classification === 'toEvaluate') res.toEvaluate += e.amount;
     }
     return res;
-  }, [rawExpenses]);
+  }, [expenses]);
 
-  const handlePrintOrPDF = () => {
-    window.print();
-  };
+  // Upcoming payments
+  const upcomingPaymentsList = useMemo(() => {
+    return getUpcomingPayments(expenses || []);
+  }, [expenses]);
 
-  // Home Address & Formatting
+  const upcomingPaymentsSum = useMemo(() => {
+    return upcomingPaymentsList.reduce((sum, e) => sum + e.amount, 0);
+  }, [upcomingPaymentsList]);
+
+  // Title generation
+  const defaultDocTitle = useMemo(() => {
+    if (selectedRange) {
+      return getReportDocumentTitle(periodType, selectedRange, currentDate);
+    }
+    return 'Report Economico';
+  }, [periodType, selectedRange, currentDate]);
+
+  const activeDocTitle = customTitle.trim() || defaultDocTitle;
+
+  const printPeriodText = useMemo(() => {
+    if (selectedRange) {
+      return getPrintPeriodStr(selectedRange);
+    }
+    return '';
+  }, [selectedRange]);
+
   const formattedAddress = formatHomeAddress(settings?.homeAddress);
   const now = new Date();
   const generationDateStr = `${now.getDate()} ${getMonthName(now.getMonth() + 1).toLowerCase()} ${now.getFullYear()}, ore ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
 
   const reportStatus: 'provisional' | 'final' = savedReport?.status === 'final' ? 'final' : 'provisional';
 
-  const closingInfo = useMemo(() => {
-    if (!selectedRange) {
-      return { mainText: 'Il mese viene chiuso automaticamente alla sua scadenza.', subText: '' };
+  const isAllZeroPeriod = useMemo(() => {
+    if (!summary) return true;
+    return summary.totalIncome === 0 && summary.totalExpenses === 0 && summary.savings === 0;
+  }, [summary]);
+
+  // Save report handler
+  const handleSaveReport = async () => {
+    if (!selectedRange) return;
+    try {
+      await reportService.generateMonthlyReport(selectedRange.endYear, selectedRange.endMonth);
+      setToastMessage(`Report per ${getMonthName(selectedRange.endMonth)} ${selectedRange.endYear} salvato con successo!`);
+      setTimeout(() => setToastMessage(null), 4000);
+    } catch (err) {
+      alert((err as Error).message);
     }
-    return getClosingInfoText(selectedRange.endYear, selectedRange.endMonth, selectedRange.isSingleMonth, reportStatus);
-  }, [selectedRange, reportStatus]);
+  };
 
-  const isChoosePeriodWithoutMonth = periodType === 'choose_period' && !selectedCustomMonth;
+  // Reset settings
+  const handleResetSettings = () => {
+    setReportType('monthly');
+    setPeriodType('current_month');
+    setSelectedCustomMonth('');
+    setSelectedYear(currentDate.year);
+    setCustomTitle('');
+    setSelectedContributor('all');
+    setComparisonMode('none');
+    setInclusions({
+      summary: true,
+      incomes: true,
+      expenses: true,
+      purchases: true,
+      classification: true,
+      budget: true,
+      contributors: true,
+    });
+    setVisualMode('chartsAndTables');
+    setDetailLevel('standard');
+    setActivePage(1);
+    setToastMessage('Impostazioni del report ripristinate ai valori predefiniti.');
+    setTimeout(() => setToastMessage(null), 3000);
+  };
 
-  // Render top bar header controls shared across all views
-  // Order required by P-34: 1. Periodo, 2. Mese da analizzare, 3. Anteprima Report, 4. Stampa / PDF, 5. Chiudi Mese (disabled)
-  const renderHeaderActions = () => (
-    <div className="flex flex-wrap items-center gap-3">
-      {/* 1. Periodo del report */}
-      <div className="flex items-center gap-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-3 py-1.5">
-        <Calendar className="w-4 h-4 text-slate-400" />
-        <select
-          value={periodType}
-          aria-label="Periodo del report"
-          onChange={(e) => {
-            const newType = e.target.value as PeriodType;
-            setPeriodType(newType);
-            setSelectedCustomMonth('');
-          }}
-          className="text-xs font-semibold text-slate-700 dark:text-slate-200 bg-transparent focus:outline-none cursor-pointer"
-        >
-          {PERIOD_OPTIONS.map((opt) => (
-            <option key={opt.value} value={opt.value}>
-              {opt.label}
-            </option>
-          ))}
-        </select>
-      </div>
+  const handlePrint = () => {
+    window.print();
+  };
 
-      {/* 2. Mese da analizzare */}
-      {periodType === 'choose_period' && (
-        <div className="flex items-center gap-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-3 py-1.5 animate-fadeIn" aria-live="polite">
-          <span className="text-xs font-medium text-slate-500 dark:text-slate-400">Mese:</span>
-          <select
-            value={selectedCustomMonth}
-            aria-label="Mese da analizzare"
-            onChange={(e) => setSelectedCustomMonth(e.target.value ? Number(e.target.value) : '')}
-            className="text-xs font-semibold text-slate-700 dark:text-slate-200 bg-transparent focus:outline-none cursor-pointer"
-          >
-            <option value="" disabled hidden>
-              Seleziona un mese
-            </option>
-            {Array.from({ length: 12 }, (_, i) => i + 1).map((m) => (
-              <option key={m} value={m}>
-                {getMonthName(m)}
-              </option>
-            ))}
-          </select>
-        </div>
-      )}
+  const handleLoadSavedReport = (rep: MonthlyReport) => {
+    setSelectedYear(rep.year);
+    setSelectedCustomMonth(rep.month);
+    setPeriodType('choose_period');
+    setIsSavedReportsModalOpen(false);
+    setToastMessage(`Report di ${getMonthName(rep.month)} ${rep.year} caricato nell'anteprima.`);
+    setTimeout(() => setToastMessage(null), 3500);
+  };
 
-      {/* 3. Anteprima Report Button */}
-      <Button
-        ref={previewButtonRef}
-        variant="outline"
-        size="sm"
-        icon={<Eye className="w-4 h-4" />}
-        disabled={isChoosePeriodWithoutMonth || !summary}
-        onClick={() => setIsPreviewOpen(true)}
-        aria-label="Apri anteprima del report"
-        title={
-          isChoosePeriodWithoutMonth
-            ? "Seleziona un mese prima di aprire l'anteprima."
-            : 'Apri anteprima del report'
-        }
-      >
-        Anteprima Report
-      </Button>
-
-      {/* 4. Stampa / PDF Button */}
-      <Button
-        variant="primary"
-        size="sm"
-        icon={<Printer className="w-4 h-4" />}
-        disabled={isChoosePeriodWithoutMonth}
-        onClick={handlePrintOrPDF}
-        aria-label="Stampa il report visualizzato"
-        title="Stampa / PDF"
-      >
-        Stampa / PDF
-      </Button>
-
-      {/* 5. Chiudi Mese Button – ALWAYS VISIBLE, ALWAYS TRULY DISABLED (no click handlers) according to P-33R */}
-      <button
-        type="button"
-        disabled
-        aria-disabled="true"
-        className="inline-flex items-center justify-center gap-1.5 px-3.5 py-2 text-xs font-semibold rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-400 dark:text-slate-500 cursor-not-allowed border border-slate-200 dark:border-slate-700 opacity-80"
-        title="La chiusura del mese avviene esclusivamente in modo automatico alla sua scadenza."
-      >
-        <CheckCircle2 className="w-4 h-4 text-slate-400 dark:text-slate-500" />
-        <span>Chiudi Mese</span>
-      </button>
-    </div>
-  );
-
-  // If choose_period is selected without a month, show prompt view
-  if (isChoosePeriodWithoutMonth) {
-    return (
-      <div className="report-page-container space-y-6 max-w-7xl mx-auto pb-12">
-        <div className="no-print space-y-3">
-          <PageHeader
-            icon={<PieChart className="w-6 h-6 text-indigo-600" />}
-            title="Report Economico"
-            subtitle="Seleziona il mese per generare il report."
-            actions={renderHeaderActions()}
-          />
-          <div className="bg-slate-50 dark:bg-slate-800/60 border border-slate-200/80 dark:border-slate-700/80 rounded-2xl p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs text-slate-700 dark:text-slate-300">
-            <div className="flex items-center gap-2.5">
-              <Clock className="w-4 h-4 text-indigo-500 shrink-0" />
-              <div>
-                <span className="font-bold">{closingInfo.mainText}</span>
-                {closingInfo.subText && (
-                  <span className="block sm:inline sm:ml-2 text-slate-500 dark:text-slate-400 font-medium">
-                    {closingInfo.subText}
-                  </span>
-                )}
-              </div>
-            </div>
-            <span className="text-[11px] font-semibold text-slate-500 dark:text-slate-400 bg-slate-200/60 dark:bg-slate-700/60 px-2.5 py-1 rounded-lg shrink-0 w-fit">
-              Chiusura automatica
-            </span>
-          </div>
-        </div>
-
-        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl p-6 shadow-xs print-avoid-break">
-          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-4 border-b border-slate-100 dark:border-slate-800">
-            <div>
-              <div className="flex items-center gap-2 mb-1">
-                <div className="w-8 h-8 rounded-xl bg-indigo-600 flex items-center justify-center text-white font-extrabold text-sm">
-                  GC
-                </div>
-                <h1 className="text-xl font-extrabold tracking-tight text-slate-900 dark:text-white uppercase">
-                  GESTIONE CASA
-                </h1>
-              </div>
-              <h2 className="text-lg font-bold text-slate-800 dark:text-slate-200">
-                Report Economico
-              </h2>
-            </div>
-            {formattedAddress && (
-              <div className="text-left md:text-right space-y-1 text-xs text-slate-500 dark:text-slate-400">
-                <p className="flex items-center md:justify-end gap-1.5 font-medium text-slate-700 dark:text-slate-300">
-                  <HomeIcon className="w-3.5 h-3.5 text-indigo-500" />
-                  <span>Abitazione: {formattedAddress}</span>
-                </p>
-              </div>
-            )}
-          </div>
-        </div>
-
-        <div className="p-12 text-center text-slate-500 dark:text-slate-400 font-medium bg-slate-50 dark:bg-slate-800/40 rounded-2xl border border-dashed border-slate-200 dark:border-slate-700">
-          Seleziona il mese per generare il report.
-        </div>
-      </div>
-    );
-  }
-
-  if (!summary || !selectedRange) {
-    return (
-      <div className="report-page-container space-y-6 max-w-7xl mx-auto pb-12">
-        <div className="no-print">
-          <PageHeader
-            icon={<PieChart className="w-6 h-6 text-indigo-600" />}
-            title="Report Economico"
-            subtitle={getPeriodSubtitle(periodType, selectedCustomMonth, selectedRange, currentDate)}
-            actions={renderHeaderActions()}
-          />
-        </div>
-        <div className="p-12 text-center text-slate-500 font-medium bg-slate-50 dark:bg-slate-800/40 rounded-2xl border border-dashed border-slate-200 dark:border-slate-700">
-          Generazione report economico in corso...
-        </div>
-      </div>
-    );
-  }
-
-  // Filter valid entries (excluding cancelled)
-  const incomes = (rawIncomes || [])
-    .filter((i) => !isCancelledStatus(i.status))
-    .sort((a, b) => (b.incomeDate || '').localeCompare(a.incomeDate || ''));
-
-  const expenses = (rawExpenses || [])
-    .filter((e) => !isCancelledStatus(e.status))
-    .sort((a, b) => (b.expenseDate || '').localeCompare(a.expenseDate || ''));
-
-  // Lookups
-  const contributorMap = new Map((contributors || []).map((c) => [c.id, c]));
-  const categoryMap = new Map((categories || []).map((cat) => [cat.id, cat.name]));
-  const supplierMap = new Map((suppliers || []).map((s) => [s.id, s.name]));
-
-  // Calculated totals
-  const upcomingPaymentsList = getUpcomingPayments(expenses);
-  const upcomingPaymentsSum = upcomingPaymentsList.reduce((sum, e) => sum + e.amount, 0);
-
-  // Zero check flags
-  const isAllZeroPeriod = summary.totalIncome === 0 && summary.totalExpenses === 0 && summary.savings === 0;
-
-  const hasExtraBudgetData =
-    summary.openingExtraBudget > 0 ||
-    summary.extraBudgetUsed > 0 ||
-    summary.closingExtraBudget > 0;
-
-  const activeSavingsTotal = (savingPlans || []).reduce((sum, s) => sum + (s.monthlyQuota || 0), 0);
-  const activeProjectsTotal = (projects || []).reduce((sum, p) => sum + (p.monthlyQuota || 0), 0);
-  const hasSavingsOrProjects = (savingPlans && savingPlans.length > 0) || (projects && projects.length > 0) || activeSavingsTotal > 0 || activeProjectsTotal > 0;
-
-  const docTitle = getReportDocumentTitle(periodType, selectedRange, currentDate);
-  const printPeriodText = getPrintPeriodStr(selectedRange);
-
-  const documentProps = {
-    summary,
-    selectedRange,
-    periodType,
-    reportStatus,
-    generationDateStr,
-    formattedAddress,
-    incomes,
-    expenses,
-    contributorMap,
-    categoryMap,
-    supplierMap,
-    upcomingPaymentsList,
-    upcomingPaymentsSum,
-    classificationSummaries,
-    savingPlans,
-    projects,
-    hasExtraBudgetData,
-    hasSavingsOrProjects,
-    isAllZeroPeriod,
-    docTitle,
-    printPeriodText,
+  const handleDeleteSavedReport = async (repId: string) => {
+    if (window.confirm('Sei sicuro di voler eliminare questo report salvato?')) {
+      await reportRepository.delete(repId);
+    }
   };
 
   return (
-    <div className="report-page-container space-y-6 max-w-7xl mx-auto pb-12">
-      {/* 1. Header Bar with Actions (Hidden in Print) */}
-      <div className="no-print space-y-3">
-        <PageHeader
-          icon={<PieChart className="w-6 h-6 text-indigo-600" />}
-          title="Report Economico"
-          badge={
-            selectedRange.isSingleMonth ? (
-              <Badge variant={reportStatus === 'final' ? 'success' : 'warning'}>
-                {reportStatus === 'final' ? 'Definitivo' : 'Provvisorio'}
-              </Badge>
-            ) : undefined
-          }
-          subtitle={getPeriodSubtitle(periodType, selectedCustomMonth, selectedRange, currentDate)}
-          actions={renderHeaderActions()}
-        />
+    <div id="reports-page-container" className="space-y-6 max-w-7xl mx-auto pb-12">
+      {/* Toast Notification */}
+      {toastMessage && (
+        <div className="fixed bottom-6 right-6 z-50 p-4 bg-slate-900 text-white rounded-2xl shadow-xl border border-slate-700 text-xs font-semibold flex items-center gap-2.5 animate-fadeIn">
+          <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+          <span>{toastMessage}</span>
+        </div>
+      )}
 
-        {/* Informative banner on automatic month closing */}
-        <div className="bg-slate-50 dark:bg-slate-800/60 border border-slate-200/80 dark:border-slate-700/80 rounded-2xl p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs text-slate-700 dark:text-slate-300">
-          <div className="flex items-center gap-2.5">
-            <Clock className="w-4 h-4 text-indigo-500 shrink-0" />
-            <div>
-              <span className="font-bold">{closingInfo.mainText}</span>
-              {closingInfo.subText && (
-                <span className="block sm:inline sm:ml-2 text-slate-500 dark:text-slate-400 font-medium">
-                  {closingInfo.subText}
-                </span>
-              )}
-            </div>
+      {/* 1. Testata Globale della Pagina Report (SCR-PC-012) */}
+      <PageHeader
+        icon={<PieChart className="w-6 h-6 text-indigo-600 dark:text-indigo-400" />}
+        title="Report"
+        subtitle="Crea, configura e richiama i report salvati."
+        actions={
+          <div className="flex flex-wrap items-center gap-2.5">
+            {/* Pulsante Secondario: Apri report salvato */}
+            <Button
+              id="btn-open-saved-reports-modal"
+              variant="outline"
+              icon={<FolderOpen className="w-4 h-4" />}
+              onClick={() => setIsSavedReportsModalOpen(true)}
+            >
+              Apri report salvato ({allSavedReports.length})
+            </Button>
+
+            {/* Pulsante Primario: Crea report */}
+            <Button
+              id="btn-create-save-report"
+              variant="primary"
+              icon={<PlusCircle className="w-4 h-4" />}
+              onClick={handleSaveReport}
+            >
+              Crea report
+            </Button>
           </div>
-          <span className="text-[11px] font-semibold text-slate-500 dark:text-slate-400 bg-slate-200/60 dark:bg-slate-700/60 px-2.5 py-1 rounded-lg shrink-0 w-fit">
-            Chiusura automatica
-          </span>
+        }
+      />
+
+      {/* 2. Layout a Due Colonne (SCR-PC-012) */}
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+        {/* ==================== COLONNA SINISTRA: ANTEPRIMA REPORT (Span 7/8) ==================== */}
+        <div className="lg:col-span-7 xl:col-span-8 space-y-4">
+          <DashboardCard
+            title="Anteprima report"
+            subtitle="Visualizzazione in tempo reale del documento economico generato"
+            action={
+              <div className="flex flex-wrap items-center gap-2">
+                {/* Badge Stato Report */}
+                {selectedRange?.isSingleMonth && (
+                  <Badge variant={reportStatus === 'final' ? 'success' : 'warning'}>
+                    {reportStatus === 'final' ? 'Definitivo' : 'Provvisorio'}
+                  </Badge>
+                )}
+
+                {/* Azione: Salva Report */}
+                <button
+                  id="btn-preview-save-report"
+                  onClick={handleSaveReport}
+                  title="Salva questo report"
+                  className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-xl text-xs font-bold transition-colors"
+                >
+                  <Save className="w-3.5 h-3.5" />
+                  Salva
+                </button>
+
+                {/* Azione: Esporta PDF */}
+                <button
+                  id="btn-preview-export-pdf"
+                  onClick={handlePrint}
+                  title="Esporta o Stampa in PDF"
+                  className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-indigo-50 dark:bg-indigo-950/50 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-100 dark:hover:bg-indigo-900/50 rounded-xl text-xs font-bold transition-colors"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  Esporta PDF
+                </button>
+
+                {/* Azione: Stampa */}
+                <button
+                  id="btn-preview-print"
+                  onClick={handlePrint}
+                  title="Stampa documento"
+                  className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-xl text-xs font-bold transition-colors"
+                >
+                  <Printer className="w-3.5 h-3.5" />
+                  Stampa
+                </button>
+              </div>
+            }
+          >
+            {/* Controlli di Navigazione Pagine Anteprima */}
+            <div className="flex items-center justify-between py-2.5 px-4 bg-slate-50 dark:bg-slate-800/60 rounded-xl border border-slate-200/60 dark:border-slate-800 text-xs mb-4">
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setActivePage(1)}
+                  className={`px-2.5 py-1 rounded-lg font-bold transition-all ${
+                    activePage === 1
+                      ? 'bg-indigo-600 text-white shadow-xs'
+                      : 'text-slate-600 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-700'
+                  }`}
+                >
+                  Pagina 1: Sintesi Economica
+                </button>
+                <button
+                  onClick={() => setActivePage(2)}
+                  className={`px-2.5 py-1 rounded-lg font-bold transition-all ${
+                    activePage === 2
+                      ? 'bg-indigo-600 text-white shadow-xs'
+                      : 'text-slate-600 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-700'
+                  }`}
+                >
+                  Pagina 2: Dettagli & Ripartizioni
+                </button>
+              </div>
+
+              <div className="flex items-center gap-1.5">
+                <button
+                  onClick={() => setActivePage(Math.max(1, activePage - 1))}
+                  disabled={activePage === 1}
+                  className="p-1 rounded-lg text-slate-400 hover:text-slate-700 dark:hover:text-white disabled:opacity-40"
+                  title="Pagina precedente"
+                >
+                  <ChevronLeft className="w-4 h-4" />
+                </button>
+                <span className="font-semibold text-slate-700 dark:text-slate-300">
+                  Pagina {activePage} di {totalPages}
+                </span>
+                <button
+                  onClick={() => setActivePage(Math.min(totalPages, activePage + 1))}
+                  disabled={activePage === totalPages}
+                  className="p-1 rounded-lg text-slate-400 hover:text-slate-700 dark:hover:text-white disabled:opacity-40"
+                  title="Pagina successiva"
+                >
+                  <ChevronRight className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+
+            {/* Document Content View */}
+            {summary && selectedRange ? (
+              <div className="report-preview-sheet bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 rounded-2xl p-5 shadow-xs">
+                <EconomicReportDocument
+                  summary={summary}
+                  selectedRange={selectedRange}
+                  periodType={periodType}
+                  reportStatus={reportStatus}
+                  generationDateStr={generationDateStr}
+                  formattedAddress={formattedAddress}
+                  incomes={incomes}
+                  expenses={expenses}
+                  contributorMap={contributorMap}
+                  categoryMap={categoryMap}
+                  supplierMap={supplierMap}
+                  upcomingPaymentsList={upcomingPaymentsList}
+                  upcomingPaymentsSum={upcomingPaymentsSum}
+                  classificationSummaries={classificationSummaries}
+                  savingPlans={savingPlans}
+                  projects={projects}
+                  hasExtraBudgetData={summary.openingExtraBudget > 0 || summary.extraBudgetUsed > 0}
+                  hasSavingsOrProjects={(savingPlans?.length ?? 0) > 0 || (projects?.length ?? 0) > 0}
+                  isAllZeroPeriod={isAllZeroPeriod}
+                  docTitle={activeDocTitle}
+                  printPeriodText={printPeriodText}
+                  inclusions={inclusions}
+                  visualMode={visualMode}
+                  detailLevel={detailLevel}
+                  activePage={activePage}
+                  totalPages={totalPages}
+                />
+              </div>
+            ) : (
+              <div className="p-12 text-center text-slate-400 dark:text-slate-500 font-medium bg-slate-50 dark:bg-slate-800/40 rounded-2xl border border-dashed border-slate-200 dark:border-slate-700">
+                Seleziona un periodo valido per visualizzare l&apos;anteprima del report.
+              </div>
+            )}
+          </DashboardCard>
+        </div>
+
+        {/* ==================== COLONNA DESTRA: CONFIGURA REPORT (Span 5/4) ==================== */}
+        <div className="lg:col-span-5 xl:col-span-4 space-y-4">
+          <DashboardCard
+            title="Configura report"
+            subtitle="Personalizza i parametri e i contenuti del report"
+          >
+            <div className="space-y-5 text-xs">
+              {/* 1. Tipo di report */}
+              <div>
+                <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1.5 uppercase tracking-wider text-[11px]">
+                  1. Tipo di report
+                </label>
+                <select
+                  id="config-report-type"
+                  value={reportType}
+                  onChange={(e) => setReportType(e.target.value)}
+                  className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl px-3 py-2 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500 font-medium"
+                >
+                  <option value="monthly">Report Mensile</option>
+                  <option value="quarterly">Report Trimestrale</option>
+                  <option value="semester">Report Semestrale</option>
+                  <option value="annual">Report Annuale</option>
+                  <option value="custom">Report Personalizzato</option>
+                </select>
+              </div>
+
+              {/* 2. Periodo */}
+              <div>
+                <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1.5 uppercase tracking-wider text-[11px]">
+                  2. Periodo di riferimento
+                </label>
+                <select
+                  id="config-report-period"
+                  value={periodType}
+                  onChange={(e) => {
+                    setPeriodType(e.target.value as PeriodType);
+                    setSelectedCustomMonth('');
+                  }}
+                  className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl px-3 py-2 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500 font-medium"
+                >
+                  {PERIOD_OPTIONS.map((opt) => (
+                    <option key={opt.value} value={opt.value}>
+                      {opt.label}
+                    </option>
+                  ))}
+                </select>
+
+                {/* Selettori specifici Anno e Mese */}
+                <div className="grid grid-cols-2 gap-2 mt-2">
+                  <div>
+                    <span className="text-[10px] text-slate-400 block mb-0.5 font-semibold">Anno:</span>
+                    <select
+                      id="config-report-year"
+                      value={selectedYear}
+                      onChange={(e) => setSelectedYear(parseInt(e.target.value, 10))}
+                      className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl px-2.5 py-1.5 text-slate-900 dark:text-white focus:outline-none font-medium"
+                    >
+                      {[selectedYear - 1, selectedYear, selectedYear + 1].map((y) => (
+                        <option key={y} value={y}>
+                          {y}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  {periodType === 'choose_period' && (
+                    <div>
+                      <span className="text-[10px] text-slate-400 block mb-0.5 font-semibold">Mese:</span>
+                      <select
+                        id="config-report-custom-month"
+                        value={selectedCustomMonth}
+                        onChange={(e) => setSelectedCustomMonth(e.target.value ? Number(e.target.value) : '')}
+                        className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl px-2.5 py-1.5 text-slate-900 dark:text-white focus:outline-none font-medium"
+                      >
+                        <option value="">Seleziona mese</option>
+                        {Array.from({ length: 12 }, (_, i) => i + 1).map((m) => (
+                          <option key={m} value={m}>
+                            {getMonthName(m)}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* 3. Titolo del report */}
+              <div>
+                <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1.5 uppercase tracking-wider text-[11px]">
+                  3. Titolo del report
+                </label>
+                <input
+                  id="config-report-title"
+                  type="text"
+                  value={customTitle}
+                  placeholder={defaultDocTitle}
+                  onChange={(e) => setCustomTitle(e.target.value)}
+                  className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl px-3 py-2 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500 font-medium"
+                />
+              </div>
+
+              {/* 4. Contributori */}
+              <div>
+                <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1.5 uppercase tracking-wider text-[11px]">
+                  4. Contributori inclusi
+                </label>
+                <select
+                  id="config-report-contributor"
+                  value={selectedContributor}
+                  onChange={(e) => setSelectedContributor(e.target.value)}
+                  className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl px-3 py-2 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500 font-medium"
+                >
+                  <option value="all">Tutti i componenti della casa</option>
+                  {(contributors || []).map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {/* 5. Confronta con */}
+              <div>
+                <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1.5 uppercase tracking-wider text-[11px]">
+                  5. Confronta con
+                </label>
+                <select
+                  id="config-report-comparison"
+                  value={comparisonMode}
+                  onChange={(e) => setComparisonMode(e.target.value)}
+                  className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl px-3 py-2 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500 font-medium"
+                >
+                  <option value="none">Nessun confronto</option>
+                  <option value="previous_month">Mese precedente</option>
+                  <option value="previous_year">Stesso periodo anno precedente</option>
+                </select>
+              </div>
+
+              {/* 6. Cosa includere nel report */}
+              <div>
+                <label className="block font-bold text-slate-700 dark:text-slate-300 mb-2 uppercase tracking-wider text-[11px]">
+                  6. Cosa includere nel report
+                </label>
+                <div className="space-y-2 bg-slate-50 dark:bg-slate-800/60 p-3.5 rounded-xl border border-slate-200/60 dark:border-slate-700">
+                  <label className="flex items-center gap-2.5 cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={inclusions.summary}
+                      onChange={(e) => setInclusions({ ...inclusions, summary: e.target.checked })}
+                      className="rounded text-indigo-600 focus:ring-indigo-500 w-4 h-4"
+                    />
+                    <span className="font-semibold text-slate-800 dark:text-slate-200">Riepilogo generale</span>
+                  </label>
+
+                  <label className="flex items-center gap-2.5 cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={inclusions.incomes}
+                      onChange={(e) => setInclusions({ ...inclusions, incomes: e.target.checked })}
+                      className="rounded text-indigo-600 focus:ring-indigo-500 w-4 h-4"
+                    />
+                    <span className="font-semibold text-slate-800 dark:text-slate-200">Entrate</span>
+                  </label>
+
+                  <label className="flex items-center gap-2.5 cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={inclusions.expenses}
+                      onChange={(e) => setInclusions({ ...inclusions, expenses: e.target.checked })}
+                      className="rounded text-indigo-600 focus:ring-indigo-500 w-4 h-4"
+                    />
+                    <span className="font-semibold text-slate-800 dark:text-slate-200">Uscite</span>
+                  </label>
+
+                  <label className="flex items-center gap-2.5 cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={inclusions.purchases}
+                      onChange={(e) => setInclusions({ ...inclusions, purchases: e.target.checked })}
+                      className="rounded text-indigo-600 focus:ring-indigo-500 w-4 h-4"
+                    />
+                    <span className="font-semibold text-slate-800 dark:text-slate-200">Analisi acquisti</span>
+                  </label>
+
+                  <label className="flex items-center gap-2.5 cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={inclusions.classification}
+                      onChange={(e) => setInclusions({ ...inclusions, classification: e.target.checked })}
+                      className="rounded text-indigo-600 focus:ring-indigo-500 w-4 h-4"
+                    />
+                    <span className="font-semibold text-slate-800 dark:text-slate-200">Classificazione spese</span>
+                  </label>
+
+                  <label className="flex items-center gap-2.5 cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={inclusions.budget}
+                      onChange={(e) => setInclusions({ ...inclusions, budget: e.target.checked })}
+                      className="rounded text-indigo-600 focus:ring-indigo-500 w-4 h-4"
+                    />
+                    <span className="font-semibold text-slate-800 dark:text-slate-200">Budget</span>
+                  </label>
+
+                  <label className="flex items-center gap-2.5 cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={inclusions.contributors}
+                      onChange={(e) => setInclusions({ ...inclusions, contributors: e.target.checked })}
+                      className="rounded text-indigo-600 focus:ring-indigo-500 w-4 h-4"
+                    />
+                    <span className="font-semibold text-slate-800 dark:text-slate-200">Contributori</span>
+                  </label>
+                </div>
+              </div>
+
+              {/* 7. Visualizzazioni */}
+              <div>
+                <label className="block font-bold text-slate-700 dark:text-slate-300 mb-2 uppercase tracking-wider text-[11px]">
+                  7. Visualizzazioni
+                </label>
+                <div className="space-y-1.5 bg-slate-50 dark:bg-slate-800/60 p-3 rounded-xl border border-slate-200/60 dark:border-slate-700">
+                  <label className="flex items-center gap-2.5 cursor-pointer select-none">
+                    <input
+                      type="radio"
+                      name="visualMode"
+                      checked={visualMode === 'chartsAndTables'}
+                      onChange={() => setVisualMode('chartsAndTables')}
+                      className="text-indigo-600 focus:ring-indigo-500"
+                    />
+                    <span className="font-semibold text-slate-800 dark:text-slate-200">Grafici e tabelle</span>
+                  </label>
+                  <label className="flex items-center gap-2.5 cursor-pointer select-none">
+                    <input
+                      type="radio"
+                      name="visualMode"
+                      checked={visualMode === 'onlyCharts'}
+                      onChange={() => setVisualMode('onlyCharts')}
+                      className="text-indigo-600 focus:ring-indigo-500"
+                    />
+                    <span className="font-semibold text-slate-800 dark:text-slate-200">Solo grafici</span>
+                  </label>
+                  <label className="flex items-center gap-2.5 cursor-pointer select-none">
+                    <input
+                      type="radio"
+                      name="visualMode"
+                      checked={visualMode === 'onlyTables'}
+                      onChange={() => setVisualMode('onlyTables')}
+                      className="text-indigo-600 focus:ring-indigo-500"
+                    />
+                    <span className="font-semibold text-slate-800 dark:text-slate-200">Solo tabelle</span>
+                  </label>
+                </div>
+              </div>
+
+              {/* 8. Livello di dettaglio */}
+              <div>
+                <label className="block font-bold text-slate-700 dark:text-slate-300 mb-2 uppercase tracking-wider text-[11px]">
+                  8. Livello di dettaglio
+                </label>
+                <div className="space-y-1.5 bg-slate-50 dark:bg-slate-800/60 p-3 rounded-xl border border-slate-200/60 dark:border-slate-700">
+                  <label className="flex items-center gap-2.5 cursor-pointer select-none">
+                    <input
+                      type="radio"
+                      name="detailLevel"
+                      checked={detailLevel === 'synthetic'}
+                      onChange={() => setDetailLevel('synthetic')}
+                      className="text-indigo-600 focus:ring-indigo-500"
+                    />
+                    <span className="font-semibold text-slate-800 dark:text-slate-200">Sintetico</span>
+                  </label>
+                  <label className="flex items-center gap-2.5 cursor-pointer select-none">
+                    <input
+                      type="radio"
+                      name="detailLevel"
+                      checked={detailLevel === 'standard'}
+                      onChange={() => setDetailLevel('standard')}
+                      className="text-indigo-600 focus:ring-indigo-500"
+                    />
+                    <span className="font-semibold text-slate-800 dark:text-slate-200">Standard</span>
+                  </label>
+                  <label className="flex items-center gap-2.5 cursor-pointer select-none">
+                    <input
+                      type="radio"
+                      name="detailLevel"
+                      checked={detailLevel === 'detailed'}
+                      onChange={() => setDetailLevel('detailed')}
+                      className="text-indigo-600 focus:ring-indigo-500"
+                    />
+                    <span className="font-semibold text-slate-800 dark:text-slate-200">Dettagliato</span>
+                  </label>
+                </div>
+              </div>
+
+              {/* Azioni in fondo al pannello di configurazione */}
+              <div className="pt-4 border-t border-slate-200 dark:border-slate-800 flex flex-col gap-2">
+                <Button
+                  id="btn-update-preview"
+                  variant="primary"
+                  className="w-full justify-center"
+                  icon={<Sparkles className="w-4 h-4" />}
+                  onClick={() => {
+                    setToastMessage('Anteprima report aggiornata.');
+                    setTimeout(() => setToastMessage(null), 2500);
+                  }}
+                >
+                  Aggiorna anteprima
+                </Button>
+                <Button
+                  id="btn-reset-report-settings"
+                  variant="secondary"
+                  className="w-full justify-center"
+                  icon={<RotateCcw className="w-3.5 h-3.5" />}
+                  onClick={handleResetSettings}
+                >
+                  Ripristina impostazioni
+                </Button>
+              </div>
+            </div>
+          </DashboardCard>
         </div>
       </div>
 
-      {/* 2. Single Source of Truth: Economic Report Document */}
-      <EconomicReportDocument {...documentProps} />
-
-      {/* 3. Preview Modal */}
-      <ReportPreviewModal
-        isOpen={isPreviewOpen}
-        onClose={() => setIsPreviewOpen(false)}
-        onPrint={handlePrintOrPDF}
-        documentProps={documentProps}
-        triggerButtonRef={previewButtonRef}
-      />
+      {/* MODAL: Elenco Report Salvati (SCR-PC-012) */}
+      <Modal
+        isOpen={isSavedReportsModalOpen}
+        onClose={() => setIsSavedReportsModalOpen(false)}
+        title="Report Economici Salvati"
+        subtitle={`Archivio storico dei report generati (${allSavedReports.length} presenti)`}
+      >
+        <div className="max-h-[60vh] overflow-y-auto -mx-6 px-6">
+          {allSavedReports.length === 0 ? (
+            <div className="py-8 text-center text-slate-400 text-xs italic">
+              Nessun report salvato in archivio. Clicca su &quot;Crea report&quot; per archiviare il primo report.
+            </div>
+          ) : (
+            <table className="w-full text-xs text-left border-collapse">
+              <thead>
+                <tr className="bg-slate-50 dark:bg-slate-800 text-slate-500 dark:text-slate-400 font-bold uppercase tracking-wider border-b border-slate-200 dark:border-slate-800 sticky top-0">
+                  <th className="py-2.5 px-3">Periodo</th>
+                  <th className="py-2.5 px-3">Stato</th>
+                  <th className="py-2.5 px-3 text-right">Entrate</th>
+                  <th className="py-2.5 px-3 text-right">Uscite</th>
+                  <th className="py-2.5 px-3 text-right">Saldo</th>
+                  <th className="py-2.5 px-3 text-center">Azioni</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                {allSavedReports.map((rep) => {
+                  const totalExp = rep.paidExpenses + rep.plannedNotifiedExpenses;
+                  const netBal = rep.totalIncome - totalExp;
+                  return (
+                    <tr key={rep.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/40">
+                      <td className="py-2.5 px-3 font-semibold text-slate-900 dark:text-white">
+                        {getMonthName(rep.month)} {rep.year}
+                      </td>
+                      <td className="py-2.5 px-3">
+                        <Badge variant={rep.status === 'final' ? 'success' : 'warning'}>
+                          {rep.status === 'final' ? 'Definitivo' : 'Provvisorio'}
+                        </Badge>
+                      </td>
+                      <td className="py-2.5 px-3 text-right font-medium text-emerald-600 dark:text-emerald-400">
+                        {formatCurrency(rep.totalIncome)}
+                      </td>
+                      <td className="py-2.5 px-3 text-right font-medium text-rose-600 dark:text-rose-400">
+                        {formatCurrency(totalExp)}
+                      </td>
+                      <td
+                        className={`py-2.5 px-3 text-right font-bold ${
+                          netBal < 0 ? 'text-rose-600' : 'text-indigo-600 dark:text-indigo-400'
+                        }`}
+                      >
+                        {formatCurrency(netBal)}
+                      </td>
+                      <td className="py-2.5 px-3 text-center">
+                        <div className="flex items-center justify-center gap-1.5">
+                          <button
+                            onClick={() => handleLoadSavedReport(rep)}
+                            className="px-2.5 py-1 bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-100 dark:hover:bg-indigo-900/60 rounded-lg font-bold text-[11px]"
+                          >
+                            Carica
+                          </button>
+                          <button
+                            onClick={() => handleDeleteSavedReport(rep.id)}
+                            className="p-1 text-slate-400 hover:text-rose-600 dark:hover:text-rose-400 rounded-lg hover:bg-rose-50 dark:hover:bg-rose-950/40"
+                            title="Elimina report salvato"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          )}
+        </div>
+        <div className="flex justify-end pt-4 border-t border-slate-100 dark:border-slate-800 mt-4">
+          <Button variant="secondary" onClick={() => setIsSavedReportsModalOpen(false)}>
+            Chiudi
+          </Button>
+        </div>
+      </Modal>
     </div>
   );
 };

@@ -87,7 +87,7 @@ export const SettingsPage: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    if (dbContributors && !isInitialized) {
+    if (dbContributors && dbIncomeEntries !== undefined && !isInitialized) {
       if (dbContributors.length === 0) {
         // Nuova configurazione: mostra inizialmente 1 solo contributore
         const now = new Date().toISOString();
@@ -114,7 +114,7 @@ export const SettingsPage: React.FC = () => {
       }
       setIsInitialized(true);
     }
-  }, [dbContributors, isInitialized, referencedContributorIds]);
+  }, [dbContributors, dbIncomeEntries, isInitialized, referencedContributorIds]);
 
   const handleSaveHomeAddress = async () => {
     setHomeAddressError(null);

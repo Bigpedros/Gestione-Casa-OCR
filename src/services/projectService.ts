@@ -1,5 +1,5 @@
-import { projectRepository, expenseRepository, categoryRepository } from '../repositories';
-import type { Project, Expense } from '../types';
+import { projectRepository, projectMovementRepository, expenseRepository, categoryRepository } from '../repositories';
+import type { Project, Expense, ProjectMovement } from '../types';
 
 export const projectService = {
   calculateMonthlyQuota: (targetAmount: number, savedAmount: number, remainingMonths: number): number => {
@@ -26,10 +26,52 @@ export const projectService = {
     const quota = projectService.calculateMonthlyQuota(data.targetAmount, data.savedAmount, data.remainingMonths);
     const progress = projectService.calculateProgressPercentage(data.targetAmount, data.savedAmount);
 
-    return projectRepository.create({
+    const project = await projectRepository.create({
       ...data,
       monthlyQuota: quota,
       progressPercentage: progress,
+    });
+
+    if (data.savedAmount > 0) {
+      await projectMovementRepository.create({
+        projectId: project.id,
+        amount: data.savedAmount,
+        movementDate: data.startDate || new Date().toISOString().substring(0, 10),
+        type: 'deposit',
+        notes: 'Capitale iniziale accumulato al momento della creazione',
+      });
+    }
+
+    return project;
+  },
+
+  recordDeposit: async (
+    projectId: string,
+    amount: number,
+    movementDate: string,
+    notes?: string
+  ): Promise<ProjectMovement> => {
+    const all = await projectRepository.getAll();
+    const project = all.find((p) => p.id === projectId);
+    if (!project) throw new Error(`Progetto ${projectId} non trovato`);
+
+    const newSaved = Math.max(0, Math.round((Number(project.savedAmount || 0) + Number(amount)) * 100) / 100);
+    const progress = projectService.calculateProgressPercentage(project.targetAmount, newSaved);
+    const quota = projectService.calculateMonthlyQuota(project.targetAmount, newSaved, project.remainingMonths);
+
+    await projectRepository.update(projectId, {
+      savedAmount: newSaved,
+      progressPercentage: progress,
+      monthlyQuota: quota,
+      ...(newSaved >= project.targetAmount && project.status === 'active' ? { status: 'completed' } : {}),
+    });
+
+    return projectMovementRepository.create({
+      projectId,
+      amount,
+      movementDate,
+      type: 'deposit',
+      notes: notes || 'Versamento volontario al progetto',
     });
   },
 
@@ -65,6 +107,14 @@ export const projectService = {
       classification: 'necessary',
       notified: true,
       recurring: false,
+    });
+
+    await projectMovementRepository.create({
+      projectId,
+      amount,
+      movementDate: expenseDate,
+      type: 'purchase',
+      notes: description || 'Spesa acquisto collegata al progetto',
     });
 
     return expense;

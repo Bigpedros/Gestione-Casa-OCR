@@ -8,8 +8,9 @@ export const MAIN_NAVIGATION: NavItem[] = [
   { label: 'Home', path: '/', iconName: 'Home' },
   { label: 'Entrate', path: '/income', iconName: 'TrendingUp' },
   { label: 'Uscite', path: '/expenses', iconName: 'TrendingDown' },
-  { label: 'Progetti', path: '/projects', iconName: 'FolderKanban' },
+  { label: 'Progetti e Risparmi', path: '/projects', iconName: 'FolderKanban' },
   { label: 'Report', path: '/reports', iconName: 'FileText' },
+  { label: 'Impostazioni', path: '/settings', iconName: 'Settings' },
 ];
 
 export const SECONDARY_NAVIGATION: NavItem[] = [

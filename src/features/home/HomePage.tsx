@@ -5,14 +5,16 @@ import { budgetService } from '../../services/budgetService';
 import { formatCurrency, getMonthName, getCurrentYearMonth } from '../../utils/formatters';
 import {
   ArrowRight,
-  Home as HomeIcon,
-  ShoppingBag,
-  Wallet,
-  Receipt,
+  ScanLine,
+  TrendingDown,
+  TrendingUp,
+  CalendarCheck,
   Tag,
-  Settings,
 } from 'lucide-react';
 import { HomeSavingsBox } from './HomeSavingsBox';
+import { ScanReceiptModal } from '../attachments/ScanReceiptModal';
+import { OcrReviewModal } from '../attachments/OcrReviewModal';
+import { FixedExpenseFormModal } from '../../components/fixed-expenses/FixedExpenseFormModal';
 import { colors } from '../../design/colors';
 
 export const HomePage: React.FC = () => {
@@ -20,6 +22,12 @@ export const HomePage: React.FC = () => {
   const { year, month } = getCurrentYearMonth();
   const [selectedYear, setSelectedYear] = useState(year);
   const [selectedMonth, setSelectedMonth] = useState(month);
+
+  // Modal states for direct quick actions
+  const [isScanModalOpen, setIsScanModalOpen] = useState(false);
+  const [isFixedExpenseModalOpen, setIsFixedExpenseModalOpen] = useState(false);
+  const [reviewOcrProcessId, setReviewOcrProcessId] = useState<string | null>(null);
+  const [isReviewModalOpen, setIsReviewModalOpen] = useState<boolean>(false);
 
   useEffect(() => {
     let isActive = true;
@@ -191,81 +199,68 @@ export const HomePage: React.FC = () => {
         </div>
       </div>
 
-      {/* 2. "Cosa vuoi fare?" Section with 6 Action Cards */}
+      {/* 2. Azioni Rapide (Esattamente 4 azioni come da Tavola SCR-PC-001 R02) */}
       <div className="space-y-3">
-        <h3 className="text-lg font-bold text-slate-900">Cosa vuoi fare?</h3>
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3.5">
-          {/* Card 1: Inserisci Stipendio */}
+        <h3 className="text-lg font-bold text-slate-900">Azioni rapide</h3>
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          {/* 1. Acquisisci scontrino */}
           <button
-            onClick={() => navigate('/income')}
-            className="flex flex-col text-left p-4 rounded-2xl bg-emerald-50/60 border border-emerald-200 hover:bg-emerald-100/50 transition-all shadow-xs group cursor-pointer"
+            type="button"
+            onClick={() => setIsScanModalOpen(true)}
+            className="flex flex-col text-left p-4.5 rounded-2xl bg-white border border-slate-200 hover:border-indigo-300 hover:shadow-md transition-all group cursor-pointer"
           >
-            <div className="w-12 h-12 rounded-2xl bg-emerald-100 border border-emerald-300 flex items-center justify-center mb-3 group-hover:scale-105 transition-transform">
-              <Wallet className="w-6 h-6 text-emerald-600" />
+            <div className="w-12 h-12 rounded-2xl bg-indigo-50 border border-indigo-100 flex items-center justify-center mb-3 group-hover:scale-105 transition-transform text-indigo-600">
+              <ScanLine className="w-6 h-6" />
             </div>
-            <span className="font-bold text-sm text-emerald-800 leading-tight">Inserisci Stipendio</span>
-            <span className="text-xs text-slate-500 mt-1">Aggiungi le tue entrate mensili</span>
+            <span className="font-bold text-sm text-slate-900 group-hover:text-indigo-600 transition-colors">
+              Acquisisci scontrino
+            </span>
+            <span className="text-xs text-slate-500 mt-1">Fotografa o carica una ricevuta</span>
           </button>
 
-          {/* Card 2: Spese Fisse */}
+          {/* 2. Nuova uscita */}
           <button
-            onClick={() => navigate('/fixed-expenses')}
-            className="flex flex-col text-left p-4 rounded-2xl bg-blue-50/60 border border-blue-200 hover:bg-blue-100/50 transition-all shadow-xs group cursor-pointer"
+            type="button"
+            onClick={() => navigate('/expenses?action=new-expense')}
+            className="flex flex-col text-left p-4.5 rounded-2xl bg-white border border-slate-200 hover:border-rose-300 hover:shadow-md transition-all group cursor-pointer"
           >
-            <div className="w-12 h-12 rounded-2xl bg-blue-100 border border-blue-300 flex items-center justify-center mb-3 group-hover:scale-105 transition-transform">
-              <Receipt className="w-6 h-6 text-blue-600" />
+            <div className="w-12 h-12 rounded-2xl bg-rose-50 border border-rose-100 flex items-center justify-center mb-3 group-hover:scale-105 transition-transform text-rose-600">
+              <TrendingDown className="w-6 h-6" />
             </div>
-            <span className="font-bold text-sm text-blue-800 leading-tight">Spese Fisse</span>
-            <span className="text-xs text-slate-500 mt-1">Gestisci le spese fisse mensili</span>
+            <span className="font-bold text-sm text-slate-900 group-hover:text-rose-600 transition-colors">
+              Nuova uscita
+            </span>
+            <span className="text-xs text-slate-500 mt-1">Registra una nuova spesa</span>
           </button>
 
-          {/* Card 3: Spese Alimentari */}
+          {/* 3. Nuova entrata */}
           <button
-            onClick={() => navigate('/expenses')}
-            className="flex flex-col text-left p-4 rounded-2xl bg-amber-50/60 border border-amber-200 hover:bg-amber-100/50 transition-all shadow-xs group cursor-pointer"
+            type="button"
+            onClick={() => navigate('/income?action=new-income')}
+            className="flex flex-col text-left p-4.5 rounded-2xl bg-white border border-slate-200 hover:border-emerald-300 hover:shadow-md transition-all group cursor-pointer"
           >
-            <div className="w-12 h-12 rounded-2xl bg-amber-100 border border-amber-300 flex items-center justify-center mb-3 group-hover:scale-105 transition-transform">
-              <ShoppingBag className="w-6 h-6 text-amber-600" />
+            <div className="w-12 h-12 rounded-2xl bg-emerald-50 border border-emerald-100 flex items-center justify-center mb-3 group-hover:scale-105 transition-transform text-emerald-600">
+              <TrendingUp className="w-6 h-6" />
             </div>
-            <span className="font-bold text-sm text-amber-800 leading-tight">Spese Alimentari</span>
-            <span className="text-xs text-slate-500 mt-1">Registra le spese alimentari</span>
+            <span className="font-bold text-sm text-slate-900 group-hover:text-emerald-600 transition-colors">
+              Nuova entrata
+            </span>
+            <span className="text-xs text-slate-500 mt-1">Registra un nuovo incasso</span>
           </button>
 
-          {/* Card 4: Gestione Casa */}
+          {/* 4. Nuova spesa fissa */}
           <button
-            onClick={() => navigate('/expenses')}
-            className="flex flex-col text-left p-4 rounded-2xl bg-purple-50/60 border border-purple-200 hover:bg-purple-100/50 transition-all shadow-xs group cursor-pointer"
+            type="button"
+            onClick={() => setIsFixedExpenseModalOpen(true)}
+            className="flex flex-col text-left p-4.5 rounded-2xl bg-white border border-slate-200 hover:border-blue-300 hover:shadow-md transition-all group cursor-pointer"
           >
-            <div className="w-12 h-12 rounded-2xl bg-purple-100 border border-purple-300 flex items-center justify-center mb-3 group-hover:scale-105 transition-transform">
-              <HomeIcon className="w-6 h-6 text-purple-600" />
+            <div className="w-12 h-12 rounded-2xl bg-blue-50 border border-blue-100 flex items-center justify-center mb-3 group-hover:scale-105 transition-transform text-blue-600">
+              <CalendarCheck className="w-6 h-6" />
             </div>
-            <span className="font-bold text-sm text-purple-800 leading-tight">Gestione Casa</span>
-            <span className="text-xs text-slate-500 mt-1">Utenze, bollette e spese di casa</span>
-          </button>
-
-          {/* Card 5: Spese Varie */}
-          <button
-            onClick={() => navigate('/expenses')}
-            className="flex flex-col text-left p-4 rounded-2xl bg-rose-50/60 border border-rose-200 hover:bg-rose-100/50 transition-all shadow-xs group cursor-pointer"
-          >
-            <div className="w-12 h-12 rounded-2xl bg-rose-100 border border-rose-300 flex items-center justify-center mb-3 group-hover:scale-105 transition-transform">
-              <Tag className="w-6 h-6 text-rose-600" />
-            </div>
-            <span className="font-bold text-sm text-rose-800 leading-tight">Spese Varie</span>
-            <span className="text-xs text-slate-500 mt-1">Altre spese e acquisti</span>
-          </button>
-
-          {/* Card 6: Impostazioni */}
-          <button
-            onClick={() => navigate('/settings')}
-            aria-label="Apri Impostazioni"
-            className="flex flex-col text-left p-4 rounded-2xl bg-indigo-50/60 border border-indigo-200 hover:bg-indigo-100/50 transition-all shadow-xs group cursor-pointer"
-          >
-            <div className="w-12 h-12 rounded-2xl bg-indigo-100 border border-indigo-300 flex items-center justify-center mb-3 group-hover:scale-105 transition-transform">
-              <Settings className="w-6 h-6 text-indigo-600" />
-            </div>
-            <span className="font-bold text-sm text-indigo-800 leading-tight">Impostazioni</span>
-            <span className="text-xs text-slate-500 mt-1">Configura contributori, notifiche e preferenze</span>
+            <span className="font-bold text-sm text-slate-900 group-hover:text-blue-600 transition-colors">
+              Nuova spesa fissa
+            </span>
+            <span className="text-xs text-slate-500 mt-1">Aggiungi una spesa ricorrente</span>
           </button>
         </div>
       </div>
@@ -309,6 +304,7 @@ export const HomePage: React.FC = () => {
           </div>
 
           <button
+            type="button"
             onClick={() => navigate('/reports')}
             className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl bg-slate-50 text-slate-700 font-semibold text-xs hover:bg-slate-100 transition-colors cursor-pointer"
           >
@@ -348,6 +344,7 @@ export const HomePage: React.FC = () => {
           )}
 
           <button
+            type="button"
             onClick={() => navigate('/expenses')}
             className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl bg-slate-50 text-slate-700 font-semibold text-xs hover:bg-slate-100 transition-colors cursor-pointer"
           >
@@ -363,8 +360,41 @@ export const HomePage: React.FC = () => {
         selectedMonth={selectedMonth}
         currentMonthSavings={savings}
       />
+
+      {/* Modals triggered from quick actions */}
+      <ScanReceiptModal
+        isOpen={isScanModalOpen}
+        onClose={() => setIsScanModalOpen(false)}
+        onScanComplete={(_attId, ocrProcId) => {
+          setIsScanModalOpen(false);
+          setReviewOcrProcessId(ocrProcId);
+          setIsReviewModalOpen(true);
+        }}
+      />
+
+      <OcrReviewModal
+        isOpen={isReviewModalOpen}
+        onClose={() => {
+          setIsReviewModalOpen(false);
+          setReviewOcrProcessId(null);
+        }}
+        ocrProcessId={reviewOcrProcessId || undefined}
+        onReviewConfirmed={() => {
+          setIsReviewModalOpen(false);
+          setReviewOcrProcessId(null);
+        }}
+      />
+
+      <FixedExpenseFormModal
+        isOpen={isFixedExpenseModalOpen}
+        onClose={() => setIsFixedExpenseModalOpen(false)}
+        onSuccess={() => {
+          budgetService.calculateMonthlySummary(selectedYear, selectedMonth);
+        }}
+      />
     </div>
   );
 };
+
 
 

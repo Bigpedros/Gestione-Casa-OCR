@@ -14,6 +14,7 @@ import type {
   FixedExpenseOccurrence,
   SavingPlan,
   Project,
+  ProjectMovement,
   MonthlyReport,
   ExtraBudgetMovement,
   Supplier,
@@ -334,6 +335,31 @@ export const projectRepository = {
     await db.projects.put(updated);
     return updated;
   },
+  delete: async (id: string) => {
+    await db.transaction('rw', [db.projects, db.projectMovements], async () => {
+      await db.projectMovements.where('projectId').equals(id).delete();
+      await db.projects.delete(id);
+    });
+  },
+};
+
+export const projectMovementRepository = {
+  getAll: () => db.projectMovements.orderBy('movementDate').reverse().toArray(),
+  getByProjectId: (projectId: string) =>
+    db.projectMovements.where('projectId').equals(projectId).reverse().sortBy('movementDate'),
+  getById: (id: string) => db.projectMovements.get(id),
+  create: async (data: Omit<ProjectMovement, 'id' | 'metadata'>) => {
+    const id = `pm-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+    const now = new Date().toISOString();
+    const item: ProjectMovement = {
+      ...data,
+      id,
+      metadata: { createdAt: now, updatedAt: now, version: 1 },
+    };
+    await db.projectMovements.add(item);
+    return item;
+  },
+  delete: (id: string) => db.projectMovements.delete(id),
 };
 
 export const reportRepository = {
@@ -356,6 +382,7 @@ export const reportRepository = {
     await db.monthlyReports.put(item);
     return item;
   },
+  delete: (id: string) => db.monthlyReports.delete(id),
 };
 
 export const extraBudgetRepository = {

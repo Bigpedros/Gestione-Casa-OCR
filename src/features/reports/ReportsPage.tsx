@@ -46,6 +46,7 @@ import {
   ChevronRight,
   Sparkles,
   Trash2,
+  Info,
 } from 'lucide-react';
 import {
   EconomicReportDocument,
@@ -54,6 +55,7 @@ import {
   type ReportDetailLevel,
 } from './EconomicReportDocument';
 import type { MonthlyReport } from '../../types';
+import { getClosingInfoText } from '../../services/monthClosingService';
 
 export const ReportsPage: React.FC = () => {
   const currentDate = useMemo(() => getCurrentYearMonth(), []);
@@ -226,6 +228,15 @@ export const ReportsPage: React.FC = () => {
 
   const reportStatus: 'provisional' | 'final' = savedReport?.status === 'final' ? 'final' : 'provisional';
 
+  const closingInfo = useMemo(() => {
+    return getClosingInfoText(
+      selectedRange?.endYear ?? currentDate.year,
+      selectedRange?.endMonth ?? currentDate.month,
+      !!selectedRange?.isSingleMonth,
+      reportStatus
+    );
+  }, [selectedRange?.endYear, selectedRange?.endMonth, selectedRange?.isSingleMonth, reportStatus, currentDate]);
+
   const isAllZeroPeriod = useMemo(() => {
     if (!summary) return true;
     return summary.totalIncome === 0 && summary.totalExpenses === 0 && summary.savings === 0;
@@ -308,6 +319,7 @@ export const ReportsPage: React.FC = () => {
             <Button
               id="btn-open-saved-reports-modal"
               variant="outline"
+              aria-label="Apri report salvato"
               icon={<FolderOpen className="w-4 h-4" />}
               onClick={() => setIsSavedReportsModalOpen(true)}
             >
@@ -318,6 +330,7 @@ export const ReportsPage: React.FC = () => {
             <Button
               id="btn-create-save-report"
               variant="primary"
+              aria-label="Crea report"
               icon={<PlusCircle className="w-4 h-4" />}
               onClick={handleSaveReport}
             >
@@ -343,11 +356,23 @@ export const ReportsPage: React.FC = () => {
                   </Badge>
                 )}
 
+                {/* Azione: Chiudi Mese (Disabilitato - P-33R) */}
+                <button
+                  id="btn-close-month"
+                  disabled
+                  aria-disabled="true"
+                  title={closingInfo.mainText}
+                  className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-slate-100 dark:bg-slate-800 text-slate-400 dark:text-slate-500 cursor-not-allowed rounded-xl text-xs font-bold transition-colors opacity-60"
+                >
+                  Chiudi Mese
+                </button>
+
                 {/* Azione: Salva Report */}
                 <button
                   id="btn-preview-save-report"
                   onClick={handleSaveReport}
                   title="Salva questo report"
+                  aria-label="Salva questo report"
                   className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-xl text-xs font-bold transition-colors"
                 >
                   <Save className="w-3.5 h-3.5" />
@@ -359,6 +384,7 @@ export const ReportsPage: React.FC = () => {
                   id="btn-preview-export-pdf"
                   onClick={handlePrint}
                   title="Esporta o Stampa in PDF"
+                  aria-label="Esporta o Stampa in PDF"
                   className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-indigo-50 dark:bg-indigo-950/50 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-100 dark:hover:bg-indigo-900/50 rounded-xl text-xs font-bold transition-colors"
                 >
                   <Download className="w-3.5 h-3.5" />
@@ -369,7 +395,8 @@ export const ReportsPage: React.FC = () => {
                 <button
                   id="btn-preview-print"
                   onClick={handlePrint}
-                  title="Stampa documento"
+                  title="Stampa il report visualizzato"
+                  aria-label="Stampa il report visualizzato"
                   className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-xl text-xs font-bold transition-colors"
                 >
                   <Printer className="w-3.5 h-3.5" />
@@ -378,6 +405,15 @@ export const ReportsPage: React.FC = () => {
               </div>
             }
           >
+            {/* Banner Informativo Chiusura Automatica (P-33R) */}
+            <div className="flex items-center gap-2 p-3 bg-slate-50 dark:bg-slate-800/50 rounded-xl border border-slate-200/60 dark:border-slate-800 text-xs text-slate-600 dark:text-slate-400 mb-4">
+              <Info className="w-4 h-4 text-indigo-500 shrink-0" />
+              <div>
+                <span className="font-semibold text-slate-800 dark:text-slate-200">{closingInfo.mainText}</span>{' '}
+                <span>{closingInfo.subText}</span>
+              </div>
+            </div>
+
             {/* Controlli di Navigazione Pagine Anteprima */}
             <div className="flex items-center justify-between py-2.5 px-4 bg-slate-50 dark:bg-slate-800/60 rounded-xl border border-slate-200/60 dark:border-slate-800 text-xs mb-4">
               <div className="flex items-center gap-2">
@@ -427,7 +463,11 @@ export const ReportsPage: React.FC = () => {
             </div>
 
             {/* Document Content View */}
-            {summary && selectedRange ? (
+            {!selectedRange ? (
+              <div className="p-12 text-center text-slate-500 dark:text-slate-400 font-medium bg-slate-50 dark:bg-slate-800/40 rounded-2xl border border-dashed border-slate-200 dark:border-slate-700">
+                Seleziona il mese per generare il report.
+              </div>
+            ) : summary ? (
               <div className="report-preview-sheet bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 rounded-2xl p-5 shadow-xs">
                 <EconomicReportDocument
                   summary={summary}
@@ -459,8 +499,11 @@ export const ReportsPage: React.FC = () => {
                 />
               </div>
             ) : (
-              <div className="p-12 text-center text-slate-400 dark:text-slate-500 font-medium bg-slate-50 dark:bg-slate-800/40 rounded-2xl border border-dashed border-slate-200 dark:border-slate-700">
-                Seleziona un periodo valido per visualizzare l&apos;anteprima del report.
+              <div className="p-12 text-center text-slate-500 dark:text-slate-400 font-medium bg-slate-50 dark:bg-slate-800/40 rounded-2xl border border-dashed border-slate-200 dark:border-slate-700">
+                <div className="flex flex-col items-center justify-center gap-2">
+                  <div className="w-6 h-6 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin" />
+                  <span>Generazione report economico in corso...</span>
+                </div>
               </div>
             )}
           </DashboardCard>
@@ -475,11 +518,12 @@ export const ReportsPage: React.FC = () => {
             <div className="space-y-5 text-xs">
               {/* 1. Tipo di report */}
               <div>
-                <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1.5 uppercase tracking-wider text-[11px]">
+                <label htmlFor="config-report-type" className="block font-bold text-slate-700 dark:text-slate-300 mb-1.5 uppercase tracking-wider text-[11px]">
                   1. Tipo di report
                 </label>
                 <select
                   id="config-report-type"
+                  aria-label="Tipo di report"
                   value={reportType}
                   onChange={(e) => setReportType(e.target.value)}
                   className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl px-3 py-2 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500 font-medium"
@@ -494,11 +538,12 @@ export const ReportsPage: React.FC = () => {
 
               {/* 2. Periodo */}
               <div>
-                <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1.5 uppercase tracking-wider text-[11px]">
+                <label htmlFor="config-report-period" className="block font-bold text-slate-700 dark:text-slate-300 mb-1.5 uppercase tracking-wider text-[11px]">
                   2. Periodo di riferimento
                 </label>
                 <select
                   id="config-report-period"
+                  aria-label="Periodo del report"
                   value={periodType}
                   onChange={(e) => {
                     setPeriodType(e.target.value as PeriodType);
@@ -519,6 +564,7 @@ export const ReportsPage: React.FC = () => {
                     <span className="text-[10px] text-slate-400 block mb-0.5 font-semibold">Anno:</span>
                     <select
                       id="config-report-year"
+                      aria-label="Anno da analizzare"
                       value={selectedYear}
                       onChange={(e) => setSelectedYear(parseInt(e.target.value, 10))}
                       className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl px-2.5 py-1.5 text-slate-900 dark:text-white focus:outline-none font-medium"
@@ -536,11 +582,14 @@ export const ReportsPage: React.FC = () => {
                       <span className="text-[10px] text-slate-400 block mb-0.5 font-semibold">Mese:</span>
                       <select
                         id="config-report-custom-month"
+                        aria-label="Mese da analizzare"
                         value={selectedCustomMonth}
                         onChange={(e) => setSelectedCustomMonth(e.target.value ? Number(e.target.value) : '')}
                         className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl px-2.5 py-1.5 text-slate-900 dark:text-white focus:outline-none font-medium"
                       >
-                        <option value="">Seleziona mese</option>
+                        <option value="" disabled>
+                          Seleziona mese
+                        </option>
                         {Array.from({ length: 12 }, (_, i) => i + 1).map((m) => (
                           <option key={m} value={m}>
                             {getMonthName(m)}
@@ -554,11 +603,12 @@ export const ReportsPage: React.FC = () => {
 
               {/* 3. Titolo del report */}
               <div>
-                <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1.5 uppercase tracking-wider text-[11px]">
+                <label htmlFor="config-report-title" className="block font-bold text-slate-700 dark:text-slate-300 mb-1.5 uppercase tracking-wider text-[11px]">
                   3. Titolo del report
                 </label>
                 <input
                   id="config-report-title"
+                  aria-label="Titolo del report"
                   type="text"
                   value={customTitle}
                   placeholder={defaultDocTitle}
@@ -569,11 +619,12 @@ export const ReportsPage: React.FC = () => {
 
               {/* 4. Contributori */}
               <div>
-                <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1.5 uppercase tracking-wider text-[11px]">
+                <label htmlFor="config-report-contributor" className="block font-bold text-slate-700 dark:text-slate-300 mb-1.5 uppercase tracking-wider text-[11px]">
                   4. Contributori inclusi
                 </label>
                 <select
                   id="config-report-contributor"
+                  aria-label="Contributori inclusi"
                   value={selectedContributor}
                   onChange={(e) => setSelectedContributor(e.target.value)}
                   className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl px-3 py-2 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500 font-medium"
@@ -589,11 +640,12 @@ export const ReportsPage: React.FC = () => {
 
               {/* 5. Confronta con */}
               <div>
-                <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1.5 uppercase tracking-wider text-[11px]">
+                <label htmlFor="config-report-comparison" className="block font-bold text-slate-700 dark:text-slate-300 mb-1.5 uppercase tracking-wider text-[11px]">
                   5. Confronta con
                 </label>
                 <select
                   id="config-report-comparison"
+                  aria-label="Confronta con"
                   value={comparisonMode}
                   onChange={(e) => setComparisonMode(e.target.value)}
                   className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl px-3 py-2 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500 font-medium"

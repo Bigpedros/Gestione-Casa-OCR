@@ -8,6 +8,7 @@ import { LicenseProvider } from '../context/LicenseContext';
 import { SettingsPage } from '../features/settings/SettingsPage';
 import { LicensePage } from '../features/settings/LicensePage';
 import { ContactPage } from '../features/settings/ContactPage';
+import { ContributorsSettingsPage } from '../features/settings/ContributorsSettingsPage';
 import { localLicenseRepository } from '../services/licensing';
 import { seedInitialCategoriesAndSettings } from '../database/seed/seedCategories';
 import { ACTIVATION_CONFIG } from '../config/activation.config';
@@ -111,33 +112,42 @@ describe('Riorganizzazione Grafica Impostazioni / Licenza Software & Contributor
     vi.restoreAllMocks();
   });
 
-  it('1. Ordine della pagina Impostazioni: Attivazione licenza è il primo blocco, seguito da Abitazione, Contributori, Supporto', async () => {
+  it('1. Hub Impostazioni: struttura a 3 macro-aree e 12 card di navigazione', async () => {
     render(
       <LicenseProvider>
         <MemoryRouter initialEntries={['/settings']}>
           <Routes>
             <Route path="/settings" element={<SettingsPage />} />
-            <Route path="/settings/license" element={<LicensePage />} />
-            <Route path="/settings/contact" element={<ContactPage />} />
           </Routes>
         </MemoryRouter>
       </LicenseProvider>
     );
 
     await waitFor(() => {
-      expect(screen.getByRole('heading', { name: 'Impostazioni Applicazione' })).toBeInTheDocument();
+      expect(screen.getByRole('heading', { name: 'Impostazioni' })).toBeInTheDocument();
     });
 
-    // Verifico presenza e ordine dei titoli dei riquadri
-    const headings = screen.getAllByRole('heading', { level: 3 }).map((h) => h.textContent?.trim());
-    expect(headings[0]).toBe('Attivazione licenza');
-    expect(headings[1]).toBe('Abitazione');
-    expect(headings[2]).toContain('Contributori Nucleo Familiare');
-    expect(headings[3]).toBe('Supporto e Contatti');
-    expect(headings[4]).toBe('Preferenze Generali');
+    // 3 macro-aree
+    expect(screen.getByText('1. Gestione della Casa')).toBeInTheDocument();
+    expect(screen.getByText('2. Esperienza e Funzionalità')).toBeInTheDocument();
+    expect(screen.getByText('3. Dati e Assistenza')).toBeInTheDocument();
+
+    // 12 card
+    expect(screen.getByText('Generali')).toBeInTheDocument();
+    expect(screen.getByText('Contributori')).toBeInTheDocument();
+    expect(screen.getByText('Categorie')).toBeInTheDocument();
+    expect(screen.getByText('Fornitori')).toBeInTheDocument();
+    expect(screen.getByText('OCR')).toBeInTheDocument();
+    expect(screen.getByText('Notifiche')).toBeInTheDocument();
+    expect(screen.getByText('Aspetto')).toBeInTheDocument();
+    expect(screen.getByText('Moduli')).toBeInTheDocument();
+    expect(screen.getByText('Backup')).toBeInTheDocument();
+    expect(screen.getByText('Allegati')).toBeInTheDocument();
+    expect(screen.getByText('Licenza')).toBeInTheDocument();
+    expect(screen.getByText('Supporto')).toBeInTheDocument();
   });
 
-  it('2. Riquadro Attivazione licenza mostra stato non attivata e pulsante Gestisci licenza', async () => {
+  it('2. Card Licenza mostra link alla pagina Licenza software', async () => {
     render(
       <LicenseProvider>
         <MemoryRouter initialEntries={['/settings']}>
@@ -150,15 +160,11 @@ describe('Riorganizzazione Grafica Impostazioni / Licenza Software & Contributor
     );
 
     await waitFor(() => {
-      expect(screen.getByText('Attivazione licenza')).toBeInTheDocument();
-      expect(screen.getByText('Non attivata')).toBeInTheDocument();
+      expect(screen.getByRole('link', { name: /Licenza/i })).toBeInTheDocument();
     });
-
-    const manageBtn = screen.getByRole('button', { name: /Gestisci licenza/i });
-    expect(manageBtn).toBeInTheDocument();
   });
 
-  it('3. Riquadro Attivazione licenza mostra badge e dettagli licenza attiva', async () => {
+  it('3. Pagina Licenza software mostra badge e dettagli licenza attiva', async () => {
     const keyPair = generateEd25519TestKeyPair();
     vi.spyOn(ACTIVATION_CONFIG, 'publicKey', 'get').mockReturnValue(keyPair.publicKey);
 
@@ -192,9 +198,8 @@ describe('Riorganizzazione Grafica Impostazioni / Licenza Software & Contributor
 
     render(
       <LicenseProvider>
-        <MemoryRouter initialEntries={['/settings']}>
+        <MemoryRouter initialEntries={['/settings/license']}>
           <Routes>
-            <Route path="/settings" element={<SettingsPage />} />
             <Route path="/settings/license" element={<LicensePage />} />
           </Routes>
         </MemoryRouter>
@@ -221,40 +226,40 @@ describe('Riorganizzazione Grafica Impostazioni / Licenza Software & Contributor
     );
 
     await waitFor(() => {
-      expect(screen.getByText('Attivazione licenza')).toBeInTheDocument();
+      expect(screen.getByRole('link', { name: /Licenza/i })).toBeInTheDocument();
     });
 
-    // Clicca su Gestisci licenza
-    const manageBtn = screen.getByRole('button', { name: /Gestisci licenza/i });
+    // Clicca sulla card Licenza
+    const licenseLink = screen.getByRole('link', { name: /Licenza/i });
     await act(async () => {
-      fireEvent.click(manageBtn);
+      fireEvent.click(licenseLink);
     });
 
     // Ora si trova sulla pagina Licenza software
     await waitFor(() => {
       expect(screen.getByRole('heading', { name: 'Licenza software' })).toBeInTheDocument();
-      expect(screen.getByRole('button', { name: /Torna alle Impostazioni/i })).toBeInTheDocument();
+      expect(screen.getByRole('link', { name: /Torna a Impostazioni/i })).toBeInTheDocument();
       expect(screen.getByText('Licenza Software')).toBeInTheDocument();
     });
 
-    // Clicca su Torna alle Impostazioni
-    const backBtn = screen.getByRole('button', { name: /Torna alle Impostazioni/i });
+    // Clicca su Torna a Impostazioni
+    const backBtn = screen.getByRole('link', { name: /Torna a Impostazioni/i });
     await act(async () => {
       fireEvent.click(backBtn);
     });
 
-    // Torna su Impostazioni Applicazione
+    // Torna su Impostazioni
     await waitFor(() => {
-      expect(screen.getByRole('heading', { name: 'Impostazioni Applicazione' })).toBeInTheDocument();
+      expect(screen.getByRole('heading', { name: 'Impostazioni' })).toBeInTheDocument();
     });
   });
 
   it('5. Contributori: nuova configurazione mostra inizialmente 1 solo contributore', async () => {
     render(
       <LicenseProvider>
-        <MemoryRouter initialEntries={['/settings']}>
+        <MemoryRouter initialEntries={['/settings/contributors']}>
           <Routes>
-            <Route path="/settings" element={<SettingsPage />} />
+            <Route path="/settings/contributors" element={<ContributorsSettingsPage />} />
           </Routes>
         </MemoryRouter>
       </LicenseProvider>
@@ -272,9 +277,9 @@ describe('Riorganizzazione Grafica Impostazioni / Licenza Software & Contributor
   it('6. Contributori: aggiunta progressiva del secondo e terzo contributore fino al blocco a 3', async () => {
     render(
       <LicenseProvider>
-        <MemoryRouter initialEntries={['/settings']}>
+        <MemoryRouter initialEntries={['/settings/contributors']}>
           <Routes>
-            <Route path="/settings" element={<SettingsPage />} />
+            <Route path="/settings/contributors" element={<ContributorsSettingsPage />} />
           </Routes>
         </MemoryRouter>
       </LicenseProvider>
@@ -337,9 +342,9 @@ describe('Riorganizzazione Grafica Impostazioni / Licenza Software & Contributor
 
     render(
       <LicenseProvider>
-        <MemoryRouter initialEntries={['/settings']}>
+        <MemoryRouter initialEntries={['/settings/contributors']}>
           <Routes>
-            <Route path="/settings" element={<SettingsPage />} />
+            <Route path="/settings/contributors" element={<ContributorsSettingsPage />} />
           </Routes>
         </MemoryRouter>
       </LicenseProvider>
@@ -380,9 +385,9 @@ describe('Riorganizzazione Grafica Impostazioni / Licenza Software & Contributor
 
     render(
       <LicenseProvider>
-        <MemoryRouter initialEntries={['/settings']}>
+        <MemoryRouter initialEntries={['/settings/contributors']}>
           <Routes>
-            <Route path="/settings" element={<SettingsPage />} />
+            <Route path="/settings/contributors" element={<ContributorsSettingsPage />} />
           </Routes>
         </MemoryRouter>
       </LicenseProvider>
@@ -431,9 +436,9 @@ describe('Riorganizzazione Grafica Impostazioni / Licenza Software & Contributor
 
     render(
       <LicenseProvider>
-        <MemoryRouter initialEntries={['/settings']}>
+        <MemoryRouter initialEntries={['/settings/contributors']}>
           <Routes>
-            <Route path="/settings" element={<SettingsPage />} />
+            <Route path="/settings/contributors" element={<ContributorsSettingsPage />} />
           </Routes>
         </MemoryRouter>
       </LicenseProvider>
@@ -486,9 +491,9 @@ describe('Riorganizzazione Grafica Impostazioni / Licenza Software & Contributor
 
     render(
       <LicenseProvider>
-        <MemoryRouter initialEntries={['/settings']}>
+        <MemoryRouter initialEntries={['/settings/contributors']}>
           <Routes>
-            <Route path="/settings" element={<SettingsPage />} />
+            <Route path="/settings/contributors" element={<ContributorsSettingsPage />} />
           </Routes>
         </MemoryRouter>
       </LicenseProvider>
@@ -513,12 +518,12 @@ describe('Riorganizzazione Grafica Impostazioni / Licenza Software & Contributor
     );
 
     await waitFor(() => {
-      expect(screen.getAllByText(/Supporto e Contatti/i).length).toBeGreaterThan(0);
+      expect(screen.getByRole('link', { name: /Supporto/i })).toBeInTheDocument();
     });
 
-    const contactBtn = screen.getByRole('button', { name: /Supporto e Contatti/i });
+    const contactLink = screen.getByRole('link', { name: /Supporto/i });
     await act(async () => {
-      fireEvent.click(contactBtn);
+      fireEvent.click(contactLink);
     });
 
     await waitFor(() => {

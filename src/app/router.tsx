@@ -11,6 +11,13 @@ import { SuppliersPage } from '../features/suppliers/SuppliersPage';
 import { AttachmentsPage } from '../features/attachments/AttachmentsPage';
 import { BackupPage } from '../features/backup/BackupPage';
 import { SettingsPage } from '../features/settings/SettingsPage';
+import { GeneralSettingsPage } from '../features/settings/GeneralSettingsPage';
+import { ContributorsSettingsPage } from '../features/settings/ContributorsSettingsPage';
+import { CategoriesSettingsPage } from '../features/settings/CategoriesSettingsPage';
+import { OcrSettingsPage } from '../features/settings/OcrSettingsPage';
+import { NotificationsSettingsPage } from '../features/settings/NotificationsSettingsPage';
+import { AppearanceSettingsPage } from '../features/settings/AppearanceSettingsPage';
+import { ModulesSettingsPage } from '../features/settings/ModulesSettingsPage';
 import { LicensePage } from '../features/settings/LicensePage';
 import { ContactPage } from '../features/settings/ContactPage';
 import { ROUTES } from './routes';
@@ -31,6 +38,13 @@ export const router = createBrowserRouter([
       { path: ROUTES.ATTACHMENTS, element: <AttachmentsPage /> },
       { path: ROUTES.BACKUP, element: <BackupPage /> },
       { path: ROUTES.SETTINGS, element: <SettingsPage /> },
+      { path: ROUTES.SETTINGS_GENERAL, element: <GeneralSettingsPage /> },
+      { path: ROUTES.SETTINGS_CONTRIBUTORS, element: <ContributorsSettingsPage /> },
+      { path: ROUTES.SETTINGS_CATEGORIES, element: <CategoriesSettingsPage /> },
+      { path: ROUTES.SETTINGS_OCR, element: <OcrSettingsPage /> },
+      { path: ROUTES.SETTINGS_NOTIFICATIONS, element: <NotificationsSettingsPage /> },
+      { path: ROUTES.SETTINGS_APPEARANCE, element: <AppearanceSettingsPage /> },
+      { path: ROUTES.SETTINGS_MODULES, element: <ModulesSettingsPage /> },
       { path: ROUTES.LICENSE, element: <LicensePage /> },
       { path: ROUTES.CONTACT, element: <ContactPage /> },
     ],

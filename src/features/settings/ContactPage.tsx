@@ -1,4 +1,5 @@
 import React, { useState, useRef } from 'react';
+import { Link } from 'react-router-dom';
 import {
   ContactRequestValidator,
   createContactRequestExchangeEnvelope,
@@ -17,8 +18,9 @@ import {
   type ImportSyncResponseResult,
 } from '../../services/contactRequestSyncService';
 import { APP_CONFIG } from '../../config/app.config';
+import { ROUTES } from '../../app/routes';
 import { PageHeader, DashboardCard, Button } from '../../components/common';
-import { Mail, CheckCircle2, AlertCircle, Download, ExternalLink, Upload } from 'lucide-react';
+import { Mail, CheckCircle2, AlertCircle, Download, ExternalLink, Upload, ArrowLeft } from 'lucide-react';
 
 export const REQUEST_TYPE_OPTIONS: { value: ContactRequestType; label: string }[] = [
   { value: 'information', label: 'Informazioni' },
@@ -293,11 +295,22 @@ export const ContactPage: React.FC = () => {
   };
 
   return (
-    <div className="space-y-6 max-w-7xl mx-auto pb-12">
+    <div className="space-y-6 w-full pb-12">
       <PageHeader
-        icon={<Mail className="w-6 h-6 text-indigo-600" />}
+        icon={<Mail className="w-6 h-6 text-indigo-600 dark:text-indigo-400" />}
         title="Supporto e Contatti"
         subtitle="Invia una richiesta di supporto o informazioni. I dati verranno memorizzati localmente."
+        actions={
+          <Link to={ROUTES.SETTINGS}>
+            <Button
+              variant="secondary"
+              size="sm"
+              icon={<ArrowLeft className="w-4 h-4" />}
+            >
+              Torna a Impostazioni
+            </Button>
+          </Link>
+        }
       />
 
       {savedRequest ? (

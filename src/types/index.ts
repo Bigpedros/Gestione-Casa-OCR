@@ -10,6 +10,7 @@ export type UserMode = 'single' | 'family';
 export type Currency = 'EUR';
 export type Language = 'it-IT';
 export type BudgetMode = 'prudential';
+export type ThemeMode = 'light' | 'pearl' | 'dark';
 export type ExpenseClassification = 'necessary' | 'voluntary' | 'toEvaluate';
 export type ExpenseStatus = 'draft' | 'planned' | 'paid' | 'cancelled';
 export type IncomeStatus = 'planned' | 'received' | 'skipped' | 'cancelled';
@@ -55,7 +56,7 @@ export interface AppSettings {
   reportClosingMode: 'automaticEndOfMonth';
   reportClosingTime: string;
   attachmentRetentionMonths: number;
-  theme: 'light' | 'dark' | 'system';
+  theme: ThemeMode;
   notificationsEnabled: boolean;
   notificationAdvanceDays: number;
   homeAddress?: HomeAddress;

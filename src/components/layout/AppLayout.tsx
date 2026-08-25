@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Outlet, NavLink } from 'react-router-dom';
+import { Outlet, NavLink, useLocation } from 'react-router-dom';
 import { Header } from '../navigation/Header';
 import { Sidebar } from '../navigation/Sidebar';
 import { BottomNav } from '../navigation/BottomNav';
@@ -22,6 +22,15 @@ import { ErrorBoundary } from '../common/ErrorBoundary';
 export const AppLayout: React.FC = () => {
   const { isSeeded } = useSeedData();
   const [isMobileDrawerOpen, setIsMobileDrawerOpen] = useState(false);
+  const location = useLocation();
+
+  // Secondary workflows (Gabbia B): 12 destination pages (all subpaths of /settings/* plus /backup, /attachments, /suppliers)
+  // The main /settings hub and core pages retain the primary desktop sidebar.
+  const isSecondaryWorkflow =
+    (location.pathname.startsWith('/settings/') && location.pathname !== '/settings') ||
+    location.pathname === '/backup' ||
+    location.pathname === '/attachments' ||
+    location.pathname === '/suppliers';
 
   const getSecondaryIcon = (iconName: string) => {
     switch (iconName) {
@@ -47,14 +56,24 @@ export const AppLayout: React.FC = () => {
   return (
     <div className="min-h-screen bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 flex flex-col">
       <Header />
-      <div className="flex flex-1 max-w-7xl w-full mx-auto">
-        <Sidebar />
-        <main className="flex-1 p-4 md:p-6 pb-24 md:pb-8 max-w-full overflow-x-hidden">
-          <ErrorBoundary>
-            <Outlet />
-          </ErrorBoundary>
-        </main>
-      </div>
+      {isSecondaryWorkflow ? (
+        <div className="flex-1 w-full">
+          <main className="max-w-4xl w-full mx-auto p-4 md:p-6 pb-24 md:pb-8">
+            <ErrorBoundary>
+              <Outlet />
+            </ErrorBoundary>
+          </main>
+        </div>
+      ) : (
+        <div className="flex flex-1 max-w-7xl w-full mx-auto">
+          <Sidebar />
+          <main className="flex-1 p-4 md:p-6 pb-24 md:pb-8 max-w-full overflow-x-hidden">
+            <ErrorBoundary>
+              <Outlet />
+            </ErrorBoundary>
+          </main>
+        </div>
+      )}
 
       <BottomNav onOpenSecondaryNav={() => setIsMobileDrawerOpen(true)} />
       <PWAReloadPrompt />

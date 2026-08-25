@@ -45,8 +45,8 @@ export const Header: React.FC = () => {
               </svg>
             </div>
             <div>
-              <h1 className="text-xl font-bold text-slate-900 leading-tight">Gestione Casa</h1>
-              <p className="text-xs text-slate-500 hidden sm:block">
+              <h1 className="text-xl font-bold text-slate-900 dark:text-[#F2EDE2] leading-tight">Gestione Casa</h1>
+              <p className="text-xs text-slate-500 dark:text-[#CAC4B8] hidden sm:block">
                 Tutto sotto controllo, casa e budget in equilibrio.
               </p>
             </div>

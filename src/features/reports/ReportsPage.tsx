@@ -415,47 +415,53 @@ export const ReportsPage: React.FC = () => {
             </div>
 
             {/* Controlli di Navigazione Pagine Anteprima */}
-            <div className="flex items-center justify-between py-2.5 px-4 bg-slate-50 dark:bg-slate-800/60 rounded-xl border border-slate-200/60 dark:border-slate-800 text-xs mb-4">
-              <div className="flex items-center gap-2">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 py-2.5 px-3 sm:px-4 bg-slate-50 dark:bg-slate-800/60 rounded-xl border border-slate-200/60 dark:border-slate-800 text-xs mb-4">
+              <div className="grid grid-cols-2 sm:flex sm:items-center gap-2 w-full sm:w-auto">
                 <button
                   onClick={() => setActivePage(1)}
-                  className={`px-2.5 py-1 rounded-lg font-bold transition-all ${
+                  aria-label="Pagina 1: Sintesi Economica"
+                  className={`px-2.5 py-1.5 rounded-lg font-bold transition-all text-center ${
                     activePage === 1
                       ? 'bg-indigo-600 text-white shadow-xs'
-                      : 'text-slate-600 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-700'
+                      : 'text-slate-600 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-700 bg-white/60 dark:bg-slate-800/60 sm:bg-transparent'
                   }`}
                 >
-                  Pagina 1: Sintesi Economica
+                  <span className="inline sm:hidden">1. Sintesi</span>
+                  <span className="hidden sm:inline">Pagina 1: Sintesi Economica</span>
                 </button>
                 <button
                   onClick={() => setActivePage(2)}
-                  className={`px-2.5 py-1 rounded-lg font-bold transition-all ${
+                  aria-label="Pagina 2: Dettagli e Ripartizioni"
+                  className={`px-2.5 py-1.5 rounded-lg font-bold transition-all text-center ${
                     activePage === 2
                       ? 'bg-indigo-600 text-white shadow-xs'
-                      : 'text-slate-600 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-700'
+                      : 'text-slate-600 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-700 bg-white/60 dark:bg-slate-800/60 sm:bg-transparent'
                   }`}
                 >
-                  Pagina 2: Dettagli & Ripartizioni
+                  <span className="inline sm:hidden">2. Dettagli</span>
+                  <span className="hidden sm:inline">Pagina 2: Dettagli & Ripartizioni</span>
                 </button>
               </div>
 
-              <div className="flex items-center gap-1.5">
+              <div className="flex items-center justify-between sm:justify-end gap-1.5 pt-1 sm:pt-0 border-t sm:border-t-0 border-slate-200/60 dark:border-slate-700/60">
                 <button
                   onClick={() => setActivePage(Math.max(1, activePage - 1))}
                   disabled={activePage === 1}
-                  className="p-1 rounded-lg text-slate-400 hover:text-slate-700 dark:hover:text-white disabled:opacity-40"
+                  className="p-1.5 sm:p-1 rounded-lg text-slate-500 hover:text-slate-800 dark:hover:text-white disabled:opacity-40"
                   title="Pagina precedente"
+                  aria-label="Pagina precedente"
                 >
                   <ChevronLeft className="w-4 h-4" />
                 </button>
-                <span className="font-semibold text-slate-700 dark:text-slate-300">
+                <span className="font-semibold text-slate-700 dark:text-slate-300 px-1">
                   Pagina {activePage} di {totalPages}
                 </span>
                 <button
                   onClick={() => setActivePage(Math.min(totalPages, activePage + 1))}
                   disabled={activePage === totalPages}
-                  className="p-1 rounded-lg text-slate-400 hover:text-slate-700 dark:hover:text-white disabled:opacity-40"
+                  className="p-1.5 sm:p-1 rounded-lg text-slate-500 hover:text-slate-800 dark:hover:text-white disabled:opacity-40"
                   title="Pagina successiva"
+                  aria-label="Pagina successiva"
                 >
                   <ChevronRight className="w-4 h-4" />
                 </button>

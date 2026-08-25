@@ -504,7 +504,7 @@ function generateDesktopHomeScreenshot() {
 // MAIN EXECUTION
 // -------------------------------------------------------------
 async function run() {
-  console.log('Generating PWA Icons and Screenshots...');
+  console.log('Generating PWA Icons, Favicons and Shortcuts...');
 
   // Standard PWA Icons
   const iconSizes = [72, 96, 128, 144, 152, 192, 384, 512];
@@ -532,12 +532,11 @@ async function run() {
   savePNG(drawShortcutIcon('expense', 192), path.join(ICONS_DIR, 'shortcut-expense.png'));
   savePNG(drawShortcutIcon('report', 192), path.join(ICONS_DIR, 'shortcut-report.png'));
 
-  // Screenshots
-  savePNG(generateMobileHomeScreenshot(), path.join(SCREENSHOTS_DIR, 'home-mobile.png'));
-  savePNG(generateMobileReportScreenshot(), path.join(SCREENSHOTS_DIR, 'report-mobile.png'));
-  savePNG(generateDesktopHomeScreenshot(), path.join(SCREENSHOTS_DIR, 'home-desktop.png'));
+  // Screenshots: Protected from synthetic overwrite.
+  // Real screenshots must originate from DOM captures (e.g. Playwright/Puppeteer/browser export).
+  console.log('ℹ️ Note: Screenshots in public/screenshots/ are preserved and not overwritten with synthetic drawings.');
 
-  console.log('All PWA assets generated successfully!');
+  console.log('All PWA icon assets generated successfully!');
 }
 
 run().catch((err) => {

@@ -1,13 +1,192 @@
-@import "tailwindcss";
 @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap');
+@import "tailwindcss";
 
 @custom-variant dark (&:where(.dark, .dark *));
 
+/* ==========================================================================
+   THEME TOKENS: PERLA (DEFAULT), CHIARO (SABBIA), SCURO (ANTRACITE) (FASE 8.3C)
+   ========================================================================== */
+
+/* 1. Perla - Default (Predefinita su tutti i dispositivi) */
+:root,
+[data-palette="pearl"],
+[data-theme="pearl"] {
+  --bg-app: #E3E4E1;
+  --bg-header: #EFF0EC;
+  --bg-sidebar: #EFF0EC;
+  --bg-card: #F7F7F3;
+  --bg-surface: #E9EAE6;
+  --bg-input: #E9EAE6;
+  --border-color: #B5B9B5;
+  --border-subtle: #CED1CD;
+  --text-primary: #292D32;
+  --text-secondary: #59616A;
+  --focus-ring: #4F46E5;
+  --focus-selection: #4F46E5;
+}
+
+/* 2. Chiaro - Sabbia */
+[data-palette="sand"],
+[data-theme="light"] {
+  --bg-app: #F3EBD9;
+  --bg-header: #FAF5E9;
+  --bg-sidebar: #FAF5E9;
+  --bg-card: #FFFDF7;
+  --bg-surface: #F8F1E3;
+  --bg-input: #F8F1E3;
+  --border-color: #D6C6A8;
+  --border-subtle: #E8DECC;
+  --text-primary: #292721;
+  --text-secondary: #5E584C;
+  --focus-ring: #4F46E5;
+  --focus-selection: #4F46E5;
+}
+
+/* 3. Scuro - Antracite */
+.dark,
+[data-palette="anthracite"],
+[data-theme="dark"] {
+  --bg-app: #222528;
+  --bg-header: #1C1F22;
+  --bg-sidebar: #1C1F22;
+  --bg-card: #393D41;
+  --bg-surface: #41464B;
+  --bg-input: #41464B;
+  --border-color: #8D897F;
+  --border-subtle: #5A5E64;
+  --text-primary: #F2EDE2;
+  --text-secondary: #CAC4B8;
+  --focus-ring: #E5DCCB;
+  --focus-selection: #E5DCCB;
+}
+
 @layer base {
+  html {
+    background-color: var(--bg-app);
+    color: var(--text-primary);
+    transition: background-color 0.15s ease, color 0.15s ease;
+  }
+
   body {
     font-family: 'Plus Jakarta Sans', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-    background-color: #f8fafc;
-    color: #0f172a;
+    background-color: var(--bg-app);
+    color: var(--text-primary);
+    min-height: 100vh;
+  }
+
+  /* Accessible focus indicators */
+  :focus-visible {
+    outline: 2px solid var(--focus-ring);
+    outline-offset: 2px;
+  }
+
+  .dark :focus-visible {
+    outline: 2px solid var(--focus-ring);
+    outline-offset: 2px;
+  }
+}
+
+/* Base structural element theme mapping */
+header,
+.app-header {
+  background-color: var(--bg-header);
+  border-color: var(--border-color);
+}
+
+aside,
+.app-sidebar {
+  background-color: var(--bg-sidebar);
+  border-color: var(--border-color);
+}
+
+/* Universal mapping for cards and containers in light/dark modes */
+html:not(.dark) .bg-white {
+  background-color: var(--bg-card);
+}
+
+html:not(.dark) .bg-slate-50 {
+  background-color: var(--bg-app);
+}
+
+html:not(.dark) .bg-slate-100 {
+  background-color: var(--bg-surface);
+}
+
+html:not(.dark) .border-slate-200,
+html:not(.dark) .border-slate-100,
+html:not(.dark) .border-slate-300 {
+  border-color: var(--border-color);
+}
+
+html:not(.dark) .text-slate-900,
+html:not(.dark) .text-slate-800 {
+  color: var(--text-primary);
+}
+
+html:not(.dark) .text-slate-500,
+html:not(.dark) .text-slate-600,
+html:not(.dark) .text-slate-400 {
+  color: var(--text-secondary);
+}
+
+/* Dark Mode Antracite Mappings */
+html.dark .bg-slate-950,
+html.dark [class*="dark:bg-slate-950"] {
+  background-color: var(--bg-app);
+}
+
+html.dark .bg-slate-900,
+html.dark [class*="dark:bg-slate-900"] {
+  background-color: var(--bg-card);
+}
+
+html.dark .bg-slate-800,
+html.dark [class*="dark:bg-slate-800"],
+html.dark .bg-slate-700,
+html.dark [class*="dark:bg-slate-700"] {
+  background-color: var(--bg-surface);
+}
+
+html.dark .border-slate-800,
+html.dark [class*="dark:border-slate-800"],
+html.dark .border-slate-700,
+html.dark [class*="dark:border-slate-700"] {
+  border-color: var(--border-color);
+}
+
+html.dark .text-white,
+html.dark .text-slate-100,
+html.dark [class*="dark:text-white"],
+html.dark [class*="dark:text-slate-100"] {
+  color: var(--text-primary);
+}
+
+html.dark .text-slate-400,
+html.dark .text-slate-300,
+html.dark .text-slate-500,
+html.dark [class*="dark:text-slate-400"],
+html.dark [class*="dark:text-slate-300"],
+html.dark [class*="dark:text-slate-500"] {
+  color: var(--text-secondary);
+}
+
+/* Exclude colored buttons / badges from text-primary overwrite */
+.btn-primary,
+button.bg-indigo-600,
+button.bg-rose-500,
+button.bg-emerald-500,
+.badge-solid,
+span.text-white[class*="bg-"] {
+  color: #ffffff !important;
+}
+
+/* Reduced motion preference */
+@media (prefers-reduced-motion: reduce) {
+  *, ::before, ::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
   }
 }
 

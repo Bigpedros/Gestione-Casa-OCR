@@ -95,7 +95,7 @@ async function performSeed(): Promise<void> {
         reportClosingMode: 'automaticEndOfMonth',
         reportClosingTime: '23:59:59',
         attachmentRetentionMonths: 6,
-        theme: 'system',
+        theme: 'pearl',
         notificationsEnabled: true,
         notificationAdvanceDays: 3,
         metadata: {

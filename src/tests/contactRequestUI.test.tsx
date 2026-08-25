@@ -352,12 +352,12 @@ describe('Sottofase 2.3.B.3 - Modulo UI Supporto e Contatti (/settings/contact)'
       </MemoryRouter>
     );
 
-    // Nella pagina Impostazioni è presente la card / pulsante "Supporto e Contatti"
+    // Nella pagina Impostazioni è presente la card "Supporto"
     await waitFor(() => {
-      expect(screen.getAllByText(/Supporto e Contatti/i).length).toBeGreaterThan(0);
+      expect(screen.getAllByText(/Supporto/i).length).toBeGreaterThan(0);
     });
 
-    const supportLink = screen.getByRole('button', { name: /Supporto e Contatti/i });
+    const supportLink = screen.getByRole('link', { name: /Supporto/i });
     expect(supportLink).toBeInTheDocument();
 
     // Naviga alla route /settings/contact

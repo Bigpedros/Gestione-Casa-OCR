@@ -10,6 +10,13 @@ export const ROUTES = {
   ATTACHMENTS: '/attachments',
   BACKUP: '/backup',
   SETTINGS: '/settings',
+  SETTINGS_GENERAL: '/settings/general',
+  SETTINGS_CONTRIBUTORS: '/settings/contributors',
+  SETTINGS_CATEGORIES: '/settings/categories',
+  SETTINGS_OCR: '/settings/ocr',
+  SETTINGS_NOTIFICATIONS: '/settings/notifications',
+  SETTINGS_APPEARANCE: '/settings/appearance',
+  SETTINGS_MODULES: '/settings/modules',
   LICENSE: '/settings/license',
   CONTACT: '/settings/contact',
 } as const;

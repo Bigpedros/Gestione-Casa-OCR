@@ -9,7 +9,7 @@ import { ROUTES } from '../../app/routes';
 
 export const LicensePage: React.FC = () => {
   return (
-    <div className="space-y-6 max-w-7xl mx-auto pb-12">
+    <div className="space-y-6 w-full pb-12">
       <PageHeader
         icon={<Key className="w-6 h-6 text-indigo-600 dark:text-indigo-400" />}
         title="Licenza software"
@@ -21,7 +21,7 @@ export const LicensePage: React.FC = () => {
               size="sm"
               icon={<ArrowLeft className="w-4 h-4" />}
             >
-              Torna alle Impostazioni
+              Torna a Impostazioni
             </Button>
           </Link>
         }

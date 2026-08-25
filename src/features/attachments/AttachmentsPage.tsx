@@ -1,4 +1,5 @@
 import React, { useState, useRef } from 'react';
+import { Link } from 'react-router-dom';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { attachmentRepository, expenseRepository, supplierRepository, documentSessionRepository } from '../../repositories';
 import { formatDate, formatCurrency, formatFileSize } from '../../utils/formatters';
@@ -24,15 +25,18 @@ import {
   ChevronDown,
   ScanLine,
   FileSearch,
+  ArrowLeft,
 } from 'lucide-react';
 import type { Attachment, Expense } from '../../types';
 import { ScanReceiptModal } from './ScanReceiptModal';
 import { OcrReviewModal } from './OcrReviewModal';
+import { ROUTES } from '../../app/routes';
 
 export const AttachmentsPage: React.FC = () => {
   const attachments = useLiveQuery(() => attachmentRepository.getAll(), []);
   const expenses = useLiveQuery(() => expenseRepository.getAll(), []);
   const suppliers = useLiveQuery(() => supplierRepository.getAll(), []);
+  const [activeFilterTab, setActiveFilterTab] = useState<'all' | 'receipts' | 'documents' | 'unlinked'>('all');
 
   // Pending review sessions
   const pendingReviewSessions = useLiveQuery(
@@ -64,6 +68,49 @@ export const AttachmentsPage: React.FC = () => {
   const [uploadDescription, setUploadDescription] = useState('');
   const [uploadExpenseId, setUploadExpenseId] = useState<string>('');
   const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
+
+  const totalSizeBytes = React.useMemo(() => {
+    return (attachments || []).reduce((acc, att) => acc + (att.sizeBytes || 0), 0);
+  }, [attachments]);
+
+  const receiptsCount = React.useMemo(() => {
+    return (attachments || []).filter(
+      (a) => a.mimeType?.startsWith('image') || a.fileName.match(/\.(jpg|jpeg|png|webp)$/i)
+    ).length;
+  }, [attachments]);
+
+  const docsCount = React.useMemo(() => {
+    return (attachments || []).filter(
+      (a) => a.mimeType?.includes('pdf') || a.fileName.toLowerCase().endsWith('.pdf')
+    ).length;
+  }, [attachments]);
+
+  const unlinkedCount = React.useMemo(() => {
+    return (attachments || []).filter(
+      (a) => !a.entityId || a.entityId === 'unlinked' || a.entityType === 'unlinked'
+    ).length;
+  }, [attachments]);
+
+  const filteredAttachments = React.useMemo(() => {
+    if (!attachments) return [];
+    if (activeFilterTab === 'all') return attachments;
+    if (activeFilterTab === 'receipts') {
+      return attachments.filter(
+        (a) => a.mimeType?.startsWith('image') || a.fileName.match(/\.(jpg|jpeg|png|webp)$/i)
+      );
+    }
+    if (activeFilterTab === 'documents') {
+      return attachments.filter(
+        (a) => a.mimeType?.includes('pdf') || a.fileName.toLowerCase().endsWith('.pdf')
+      );
+    }
+    if (activeFilterTab === 'unlinked') {
+      return attachments.filter(
+        (a) => !a.entityId || a.entityId === 'unlinked' || a.entityType === 'unlinked'
+      );
+    }
+    return attachments;
+  }, [attachments, activeFilterTab]);
 
   // Modals for view, edit, delete
   const [viewingAttachment, setViewingAttachment] = useState<Attachment | null>(null);
@@ -187,7 +234,7 @@ export const AttachmentsPage: React.FC = () => {
   };
 
   return (
-    <div className="space-y-6 max-w-7xl mx-auto pb-12">
+    <div className="space-y-6 max-w-4xl mx-auto pb-12">
       {/* Hidden File Inputs */}
       <input
         ref={cameraInputRef}
@@ -214,13 +261,24 @@ export const AttachmentsPage: React.FC = () => {
 
       {/* Header Banner */}
       <PageHeader
-        icon={<Paperclip className="w-6 h-6 text-indigo-600" />}
+        icon={<Paperclip className="w-6 h-6 text-indigo-600 dark:text-indigo-400" />}
         title="Allegati e Ricevute Scontrini"
         subtitle="Gestisci ed archivia gli scontrini, le fatture ed i documenti delle spese domestiche."
         actions={
           <div className="flex items-center gap-3">
+            <Link to={ROUTES.SETTINGS}>
+              <Button
+                variant="secondary"
+                size="sm"
+                icon={<ArrowLeft className="w-4 h-4" />}
+              >
+                Torna a Impostazioni
+              </Button>
+            </Link>
+
             <Button
               variant="primary"
+              size="sm"
               icon={<ScanLine className="w-4 h-4" />}
               onClick={() => setIsScanModalOpen(true)}
               className="bg-emerald-600 hover:bg-emerald-700 text-white"
@@ -231,6 +289,7 @@ export const AttachmentsPage: React.FC = () => {
             <div className="relative">
               <Button
                 variant="secondary"
+                size="sm"
                 icon={<Plus className="w-4 h-4" />}
                 onClick={() => setIsMenuOpen((prev) => !prev)}
               >
@@ -300,6 +359,19 @@ export const AttachmentsPage: React.FC = () => {
         }
       />
 
+      {/* Breadcrumbs */}
+      <div className="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400">
+        <Link
+          to={ROUTES.SETTINGS}
+          className="hover:text-indigo-600 dark:hover:text-indigo-400 flex items-center gap-1 font-medium transition-colors"
+        >
+          <ArrowLeft className="w-3.5 h-3.5" />
+          Impostazioni
+        </Link>
+        <span>/</span>
+        <span className="text-slate-800 dark:text-slate-200 font-semibold">Allegati</span>
+      </div>
+
       {/* Toast / Alert Feedback */}
       {feedbackMsg && (
         <div className="flex items-center gap-2 p-4 bg-emerald-50 text-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-200 rounded-2xl text-sm font-semibold border border-emerald-200 dark:border-emerald-800">
@@ -338,6 +410,89 @@ export const AttachmentsPage: React.FC = () => {
         </div>
       )}
 
+      {/* Stats & Retention Policy Bar (013-L) */}
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        <div className="p-4 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-xs flex items-center justify-between">
+          <div>
+            <span className="text-xs text-slate-500 dark:text-slate-400 font-semibold block">Totale Allegati</span>
+            <span className="text-xl font-bold text-slate-900 dark:text-white mt-0.5 block">{attachments?.length || 0} file</span>
+          </div>
+          <div className="p-2.5 rounded-xl bg-indigo-50 dark:bg-indigo-950/50 text-indigo-600 dark:text-indigo-400">
+            <Paperclip className="w-5 h-5" />
+          </div>
+        </div>
+
+        <div className="p-4 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-xs flex items-center justify-between">
+          <div>
+            <span className="text-xs text-slate-500 dark:text-slate-400 font-semibold block">Spazio Occupato</span>
+            <span className="text-xl font-bold text-slate-900 dark:text-white mt-0.5 block">{formatFileSize(totalSizeBytes)}</span>
+          </div>
+          <div className="p-2.5 rounded-xl bg-emerald-50 dark:bg-emerald-950/50 text-emerald-600 dark:text-emerald-400">
+            <ImageIcon className="w-5 h-5" />
+          </div>
+        </div>
+
+        <div className="p-4 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-xs flex items-center justify-between">
+          <div>
+            <span className="text-xs text-slate-500 dark:text-slate-400 font-semibold block">Politica Conservazione</span>
+            <span className="text-xs font-bold text-slate-900 dark:text-white mt-1 block">6 Mesi (Configurabile)</span>
+          </div>
+          <span className="text-[11px] font-bold px-2 py-1 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300">
+            Locale
+          </span>
+        </div>
+      </div>
+
+      {/* Filter Tabs (013-L Sezioni) */}
+      <div className="flex flex-wrap items-center gap-2 p-1.5 bg-slate-100 dark:bg-slate-800/80 rounded-2xl w-fit">
+        <button
+          type="button"
+          onClick={() => setActiveFilterTab('all')}
+          className={`px-3.5 py-1.5 rounded-xl text-xs font-semibold transition-colors cursor-pointer ${
+            activeFilterTab === 'all'
+              ? 'bg-white dark:bg-slate-700 text-slate-900 dark:text-white shadow-xs'
+              : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'
+          }`}
+        >
+          Tutti ({attachments?.length || 0})
+        </button>
+        <button
+          type="button"
+          onClick={() => setActiveFilterTab('receipts')}
+          className={`px-3.5 py-1.5 rounded-xl text-xs font-semibold transition-colors cursor-pointer flex items-center gap-1.5 ${
+            activeFilterTab === 'receipts'
+              ? 'bg-white dark:bg-slate-700 text-indigo-600 dark:text-indigo-400 shadow-xs'
+              : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'
+          }`}
+        >
+          <ImageIcon className="w-3.5 h-3.5" />
+          Immagini scontrini ({receiptsCount})
+        </button>
+        <button
+          type="button"
+          onClick={() => setActiveFilterTab('documents')}
+          className={`px-3.5 py-1.5 rounded-xl text-xs font-semibold transition-colors cursor-pointer flex items-center gap-1.5 ${
+            activeFilterTab === 'documents'
+              ? 'bg-white dark:bg-slate-700 text-emerald-600 dark:text-emerald-400 shadow-xs'
+              : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'
+          }`}
+        >
+          <FileText className="w-3.5 h-3.5" />
+          Documenti e PDF ({docsCount})
+        </button>
+        <button
+          type="button"
+          onClick={() => setActiveFilterTab('unlinked')}
+          className={`px-3.5 py-1.5 rounded-xl text-xs font-semibold transition-colors cursor-pointer flex items-center gap-1.5 ${
+            activeFilterTab === 'unlinked'
+              ? 'bg-white dark:bg-slate-700 text-amber-600 dark:text-amber-400 shadow-xs'
+              : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'
+          }`}
+        >
+          Senza collegamento ({unlinkedCount})
+        </button>
+      </div>
+
       {/* Main List / Table Box with 3 Columns */}
       <div className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 p-6 shadow-xs overflow-hidden">
         <div className="overflow-x-auto -mx-6 -my-6">
@@ -350,14 +505,14 @@ export const AttachmentsPage: React.FC = () => {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 dark:divide-slate-800 text-sm">
-              {!attachments || attachments.length === 0 ? (
+              {!filteredAttachments || filteredAttachments.length === 0 ? (
                 <tr>
                   <td colSpan={3} className="px-6 py-12 text-center text-slate-400 dark:text-slate-500 font-medium">
-                    Nessun allegato o ricevuta presente.
+                    Nessun allegato presente per la sezione selezionata.
                   </td>
                 </tr>
               ) : (
-                attachments.map((att) => {
+                filteredAttachments.map((att) => {
                   const linkedExpense = findExpense(att.entityId);
                   const supplier = linkedExpense?.supplierId
                     ? suppliers?.find((s) => s.id === linkedExpense.supplierId)

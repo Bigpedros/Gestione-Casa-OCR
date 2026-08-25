@@ -597,7 +597,7 @@ export const settingsRepository = {
         reportClosingMode: 'automaticEndOfMonth',
         reportClosingTime: '23:59',
         attachmentRetentionMonths: 12,
-        theme: 'light',
+        theme: 'pearl',
         notificationsEnabled: true,
         notificationAdvanceDays: 3,
         homeAddress: { address: '', streetNumber: '', postalCode: '' },

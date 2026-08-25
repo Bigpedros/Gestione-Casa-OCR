@@ -319,26 +319,26 @@ export const EconomicReportDocument: React.FC<EconomicReportDocumentProps> = ({
                           </div>
                         </div>
 
-                        <div className="grid grid-cols-3 gap-2 text-center text-xs pt-1">
-                          <div className="p-2 rounded-xl bg-emerald-50/50 dark:bg-emerald-950/20 border border-emerald-100 dark:border-emerald-900/30">
-                            <span className="text-slate-500 block text-[10px]">Copertura Uscite</span>
-                            <span className="font-bold text-emerald-700 dark:text-emerald-400">
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-center text-xs pt-1">
+                          <div className="p-2.5 sm:p-2 rounded-xl bg-emerald-50/50 dark:bg-emerald-950/20 border border-emerald-100 dark:border-emerald-900/30 flex sm:block items-center justify-between sm:justify-center">
+                            <span className="text-slate-500 block text-xs sm:text-[10px]">Copertura Uscite</span>
+                            <span className="font-bold text-emerald-700 dark:text-emerald-400 text-sm sm:text-xs">
                               {summary.totalIncome > 0
                                 ? `${Math.round(((summary.totalIncome - summary.totalExpenses) / summary.totalIncome) * 100)}%`
                                 : '0%'}
                             </span>
                           </div>
-                          <div className="p-2 rounded-xl bg-rose-50/50 dark:bg-rose-950/20 border border-rose-100 dark:border-rose-900/30">
-                            <span className="text-slate-500 block text-[10px]">Incidenza Spese</span>
-                            <span className="font-bold text-rose-700 dark:text-rose-400">
+                          <div className="p-2.5 sm:p-2 rounded-xl bg-rose-50/50 dark:bg-rose-950/20 border border-rose-100 dark:border-rose-900/30 flex sm:block items-center justify-between sm:justify-center">
+                            <span className="text-slate-500 block text-xs sm:text-[10px]">Incidenza Spese</span>
+                            <span className="font-bold text-rose-700 dark:text-rose-400 text-sm sm:text-xs">
                               {summary.totalIncome > 0
                                 ? `${Math.round((summary.totalExpenses / summary.totalIncome) * 100)}%`
                                 : '0%'}
                             </span>
                           </div>
-                          <div className="p-2 rounded-xl bg-indigo-50/50 dark:bg-indigo-950/20 border border-indigo-100 dark:border-indigo-900/30">
-                            <span className="text-slate-500 block text-[10px]">Tasso di Risparmio</span>
-                            <span className="font-bold text-indigo-700 dark:text-indigo-400">
+                          <div className="p-2.5 sm:p-2 rounded-xl bg-indigo-50/50 dark:bg-indigo-950/20 border border-indigo-100 dark:border-indigo-900/30 flex sm:block items-center justify-between sm:justify-center">
+                            <span className="text-slate-500 block text-xs sm:text-[10px]">Tasso di Risparmio</span>
+                            <span className="font-bold text-indigo-700 dark:text-indigo-400 text-sm sm:text-xs">
                               {summary.totalIncome > 0
                                 ? `${Math.round((summary.savings / summary.totalIncome) * 100)}%`
                                 : '0%'}

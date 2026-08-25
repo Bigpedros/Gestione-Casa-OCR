@@ -1,12 +1,15 @@
 import React, { useMemo } from 'react';
+import { Link } from 'react-router-dom';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { supplierRepository } from '../../repositories';
 import {
   PageHeader,
   EmptyState,
   Badge,
+  Button,
 } from '../../components/common';
-import { Store } from 'lucide-react';
+import { Store, ArrowLeft } from 'lucide-react';
+import { ROUTES } from '../../app/routes';
 
 export const SuppliersPage: React.FC = () => {
   const rawSuppliers = useLiveQuery(() => supplierRepository.getAll(), []);
@@ -21,10 +24,34 @@ export const SuppliersPage: React.FC = () => {
   return (
     <div className="space-y-6 max-w-4xl mx-auto pb-12">
       <PageHeader
-        icon={<Store className="w-6 h-6 text-indigo-600" />}
+        icon={<Store className="w-6 h-6 text-indigo-600 dark:text-indigo-400" />}
         title="Anagrafica Fornitori"
         subtitle="Gestisci supermercati, negozianti e fornitori di servizi."
+        actions={
+          <Link to={ROUTES.SETTINGS}>
+            <Button
+              variant="secondary"
+              size="sm"
+              icon={<ArrowLeft className="w-4 h-4" />}
+            >
+              Torna a Impostazioni
+            </Button>
+          </Link>
+        }
       />
+
+      {/* Breadcrumbs */}
+      <div className="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400">
+        <Link
+          to={ROUTES.SETTINGS}
+          className="hover:text-indigo-600 dark:hover:text-indigo-400 flex items-center gap-1 font-medium transition-colors"
+        >
+          <ArrowLeft className="w-3.5 h-3.5" />
+          Impostazioni
+        </Link>
+        <span>/</span>
+        <span className="text-slate-800 dark:text-slate-200 font-semibold">Fornitori</span>
+      </div>
 
       {(!suppliers || suppliers.length === 0) ? (
         <EmptyState

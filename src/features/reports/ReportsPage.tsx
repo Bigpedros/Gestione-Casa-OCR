@@ -298,6 +298,56 @@ export const ReportsPage: React.FC = () => {
 
       if (!activeSummary) return;
 
+      // Deterministic resolution: if rawIncomes / rawExpenses live queries haven't resolved yet (undefined),
+      // fetch directly from repositories to prevent race conditions during rapid export triggers.
+      let activeIncomes = incomes;
+      if (rawIncomes === undefined) {
+        const fetchedRawIncomes = await incomeRepository.getByRange(
+          selectedRange.startYear,
+          selectedRange.startMonth,
+          selectedRange.endYear,
+          selectedRange.endMonth
+        );
+        activeIncomes =
+          selectedContributor === 'all'
+            ? fetchedRawIncomes
+            : fetchedRawIncomes.filter((inc) => inc.contributorId === selectedContributor);
+      }
+
+      let activeExpenses = expenses;
+      if (rawExpenses === undefined) {
+        activeExpenses = await expenseRepository.getByRange(
+          selectedRange.startYear,
+          selectedRange.startMonth,
+          selectedRange.endYear,
+          selectedRange.endMonth
+        );
+      }
+
+      const activeClassificationSummaries =
+        rawExpenses !== undefined
+          ? classificationSummaries
+          : (() => {
+              const res = { necessary: 0, voluntary: 0, toEvaluate: 0 };
+              for (const e of activeExpenses || []) {
+                if (isCancelledStatus(e.status)) continue;
+                if (e.classification === 'necessary') res.necessary += e.amount;
+                else if (e.classification === 'voluntary') res.voluntary += e.amount;
+                else if (e.classification === 'toEvaluate') res.toEvaluate += e.amount;
+              }
+              return res;
+            })();
+
+      const activeUpcomingPaymentsList =
+        rawExpenses !== undefined
+          ? upcomingPaymentsList
+          : getUpcomingPayments(activeExpenses || []);
+
+      const activeUpcomingPaymentsSum =
+        rawExpenses !== undefined
+          ? upcomingPaymentsSum
+          : activeUpcomingPaymentsList.reduce((sum, e) => sum + e.amount, 0);
+
       downloadEconomicReportPDF({
         summary: activeSummary,
         selectedRange,
@@ -305,14 +355,14 @@ export const ReportsPage: React.FC = () => {
         reportStatus,
         generationDateStr,
         formattedAddress,
-        incomes: incomes || [],
-        expenses: expenses || [],
+        incomes: activeIncomes || [],
+        expenses: activeExpenses || [],
         contributorMap,
         categoryMap,
         supplierMap,
-        upcomingPaymentsList,
-        upcomingPaymentsSum,
-        classificationSummaries,
+        upcomingPaymentsList: activeUpcomingPaymentsList,
+        upcomingPaymentsSum: activeUpcomingPaymentsSum,
+        classificationSummaries: activeClassificationSummaries,
         savingPlans,
         projects,
         hasExtraBudgetData: activeSummary.openingExtraBudget > 0 || activeSummary.extraBudgetUsed > 0,

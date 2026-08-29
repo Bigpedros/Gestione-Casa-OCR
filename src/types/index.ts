@@ -24,6 +24,41 @@ export type Frequency = 'once' | 'weekly' | 'monthly' | 'bimonthly' | 'quarterly
 export type PaymentMethod = 'cash' | 'debitCard' | 'creditCard' | 'bankTransfer' | 'directDebit' | 'digitalWallet' | 'other';
 export type Priority = 'high' | 'medium' | 'low' | 'none';
 
+export type DocumentCategory =
+  | 'COMMERCIAL_RECEIPT'
+  | 'PAYMENT_PROOF'
+  | 'INVOICE_OR_BILL'
+  | 'UNKNOWN';
+
+export interface PaymentMethodDefinition {
+  id: EntityId;
+  code: string;
+  displayName: string;
+  macroCategory: PaymentMethod;
+  isSystem: boolean;
+  enabled: boolean;
+  customTickerOrName?: string | null;
+  aliases: string[];
+  metadata: RecordMetadata;
+}
+
+export interface PaymentEvidence {
+  id: EntityId;
+  expenseId?: EntityId | null;
+  documentType: string;
+  paymentMethodId?: EntityId | null;
+  paymentChannel?: string | null;
+  amount?: MoneyAmount | null;
+  fee?: MoneyAmount | null;
+  dateTime?: ISODateTime | null;
+  merchantOrBeneficiary?: string | null;
+  transactionReference?: string | null;
+  attachmentId?: EntityId | null;
+  confidence?: number | null;
+  userConfirmed: boolean;
+  metadata: RecordMetadata;
+}
+
 export interface RecordMetadata {
   createdAt: ISODateTime;
   updatedAt: ISODateTime;
@@ -145,6 +180,8 @@ export interface Expense {
   categoryId: EntityId;
   subcategoryId: EntityId;
   paymentMethod: PaymentMethod;
+  paymentMethodId?: EntityId | null;
+  paymentFee?: MoneyAmount | null;
   status: ExpenseStatus;
   classification: ExpenseClassification;
   notified: boolean;
@@ -486,6 +523,7 @@ export type DocumentSessionStatus =
 export interface DocumentSession {
   id: EntityId;
   documentType: DocumentType;
+  detectedDocumentCategory?: DocumentCategory | null;
   sourceMode: DocumentSourceMode;
   processingMode: DocumentProcessingMode;
   status: DocumentSessionStatus;
@@ -551,6 +589,8 @@ export interface BackupData {
     documentSessions?: DocumentSession[];
     documentPageSegments?: DocumentPageSegment[];
     contactRequests?: ContactRequestDocument[];
+    paymentMethods?: PaymentMethodDefinition[];
+    paymentEvidences?: PaymentEvidence[];
   };
 }
 

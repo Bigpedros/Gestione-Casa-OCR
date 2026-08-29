@@ -38,6 +38,8 @@ export const backupService = {
     const documentSessions = await db.documentSessions.toArray();
     const documentPageSegments = await db.documentPageSegments.toArray();
     const contactRequests = await db.contactRequests.toArray();
+    const paymentMethods = await db.paymentMethods.toArray();
+    const paymentEvidences = await db.paymentEvidences.toArray();
 
     const backupPayload: Omit<BackupData, 'checksum'> = {
       appName: 'Gestione Casa',
@@ -70,6 +72,8 @@ export const backupService = {
         documentSessions,
         documentPageSegments,
         contactRequests,
+        paymentMethods,
+        paymentEvidences,
       },
     };
 
@@ -139,6 +143,12 @@ export const backupService = {
       if (backupData.tables.documentSessions) await db.documentSessions.bulkAdd(backupData.tables.documentSessions);
       if (backupData.tables.documentPageSegments) await db.documentPageSegments.bulkAdd(backupData.tables.documentPageSegments);
       if (contactRequests.length > 0) await db.contactRequests.bulkAdd(contactRequests);
+      if (backupData.tables.paymentMethods && backupData.tables.paymentMethods.length > 0) {
+        await db.paymentMethods.bulkAdd(backupData.tables.paymentMethods);
+      }
+      if (backupData.tables.paymentEvidences && backupData.tables.paymentEvidences.length > 0) {
+        await db.paymentEvidences.bulkAdd(backupData.tables.paymentEvidences);
+      }
     });
   },
 };

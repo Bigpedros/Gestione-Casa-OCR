@@ -49,7 +49,7 @@ describe('Reports Page & DashboardCard Mobile Responsive Verification (Regressio
     expect(screen.getAllByText(/Provvisorio/i).length).toBeGreaterThan(0);
     expect(screen.getByRole('button', { name: /Chiudi Mese/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Salva questo report/i })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Esporta o Stampa in PDF/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Esporta in formato PDF/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Stampa il report visualizzato/i })).toBeInTheDocument();
   });
 

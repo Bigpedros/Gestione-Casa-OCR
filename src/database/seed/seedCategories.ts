@@ -1,5 +1,6 @@
 import { db } from '../db';
 import type { Category } from '../../types';
+import { seedInitialPaymentMethods } from './seedPaymentMethods';
 
 export const INITIAL_CATEGORIES = [
   {
@@ -187,7 +188,14 @@ async function performSeed(): Promise<void> {
     }
   }
 
-  // 4. Run automatic month closing repair and expired check safely
+  // 4. Seed Payment Methods safely
+  try {
+    await seedInitialPaymentMethods();
+  } catch (err) {
+    console.warn('Avviso durante il seeding dei metodi di pagamento:', err);
+  }
+
+  // 5. Run automatic month closing repair and expired check safely
   try {
     const { runMonthClosingCheck } = await import('../../services/monthClosingService');
     await runMonthClosingCheck();

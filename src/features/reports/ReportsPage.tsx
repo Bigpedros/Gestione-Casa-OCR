@@ -54,6 +54,7 @@ import {
   type ReportVisualMode,
   type ReportDetailLevel,
 } from './EconomicReportDocument';
+import { downloadEconomicReportPDF } from './reportPDFGenerator';
 import type { MonthlyReport } from '../../types';
 import { getClosingInfoText } from '../../services/monthClosingService';
 
@@ -283,6 +284,54 @@ export const ReportsPage: React.FC = () => {
     window.print();
   };
 
+  const handleExportPDF = async () => {
+    if (!selectedRange) return;
+    try {
+      const activeSummary =
+        summary ||
+        (await budgetService.calculatePeriodSummary(
+          selectedRange.startYear,
+          selectedRange.startMonth,
+          selectedRange.endYear,
+          selectedRange.endMonth
+        ));
+
+      if (!activeSummary) return;
+
+      downloadEconomicReportPDF({
+        summary: activeSummary,
+        selectedRange,
+        periodType,
+        reportStatus,
+        generationDateStr,
+        formattedAddress,
+        incomes: incomes || [],
+        expenses: expenses || [],
+        contributorMap,
+        categoryMap,
+        supplierMap,
+        upcomingPaymentsList,
+        upcomingPaymentsSum,
+        classificationSummaries,
+        savingPlans,
+        projects,
+        hasExtraBudgetData: activeSummary.openingExtraBudget > 0 || activeSummary.extraBudgetUsed > 0,
+        hasSavingsOrProjects: (savingPlans?.length ?? 0) > 0 || (projects?.length ?? 0) > 0,
+        isAllZeroPeriod:
+          activeSummary.totalIncome === 0 && activeSummary.totalExpenses === 0 && activeSummary.savings === 0,
+        docTitle: activeDocTitle,
+        printPeriodText,
+        inclusions,
+        visualMode,
+        detailLevel,
+      });
+      setToastMessage('Documento PDF esportato con successo.');
+      setTimeout(() => setToastMessage(null), 3000);
+    } catch (err) {
+      alert((err as Error).message);
+    }
+  };
+
   const handleLoadSavedReport = (rep: MonthlyReport) => {
     setSelectedYear(rep.year);
     setSelectedCustomMonth(rep.month);
@@ -382,9 +431,9 @@ export const ReportsPage: React.FC = () => {
                 {/* Azione: Esporta PDF */}
                 <button
                   id="btn-preview-export-pdf"
-                  onClick={handlePrint}
-                  title="Esporta o Stampa in PDF"
-                  aria-label="Esporta o Stampa in PDF"
+                  onClick={handleExportPDF}
+                  title="Esporta in formato PDF"
+                  aria-label="Esporta in formato PDF"
                   className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-indigo-50 dark:bg-indigo-950/50 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-100 dark:hover:bg-indigo-900/50 rounded-xl text-xs font-bold transition-colors"
                 >
                   <Download className="w-3.5 h-3.5" />

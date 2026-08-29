@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Modal, Button } from '../../components/common';
 import {
   CheckCircle2,
@@ -23,6 +23,10 @@ import {
   Calendar,
   CreditCard,
   Info,
+  Terminal,
+  Copy,
+  ChevronDown,
+  ChevronUp,
 } from 'lucide-react';
 import { db } from '../../database/db';
 import {
@@ -37,6 +41,7 @@ import {
 } from '../../repositories';
 import { productClassificationService } from '../../services/productClassification/ProductClassificationService';
 import { receiptParserService } from '../../services/ocrParser/receiptParserService';
+import { TextNormalizationModule } from '../../services/ocrParser/modules/TextNormalizationModule';
 import { ocrService } from '../../services/ocrService';
 import type {
   DocumentSession,
@@ -105,6 +110,11 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
   const [isSaving, setIsSaving] = useState<boolean>(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [feedbackMessage, setFeedbackMessage] = useState<string | null>(null);
+  const [progressText, setProgressText] = useState<string>('Caricamento e analisi dati OCR in corso...');
+  const [progressPercentage, setProgressPercentage] = useState<number>(0);
+
+  // Concurrency and idempotency guard
+  const processingSessionsRef = useRef<Set<string>>(new Set());
 
   // Entities loaded from database
   const [session, setSession] = useState<DocumentSession | null>(null);
@@ -134,10 +144,15 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
   const [newSupplierName, setNewSupplierName] = useState<string>('');
   const [expenseDate, setExpenseDate] = useState<string>('');
   const [documentTotal, setDocumentTotal] = useState<number>(0);
-  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('debitCard');
+  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('cash');
   const [editableLines, setEditableLines] = useState<EditableReviewLine[]>([]);
   const [existingExpense, setExistingExpense] = useState<Expense | null>(null);
   const [isDiscrepancyApproved, setIsDiscrepancyApproved] = useState<boolean>(false);
+  const [isDateDetectedFromOcr, setIsDateDetectedFromOcr] = useState<boolean>(false);
+
+  // Diagnostic State for inspecting real Tesseract output
+  const [showDiagnostics, setShowDiagnostics] = useState<boolean>(false);
+  const [copySuccess, setCopySuccess] = useState<boolean>(false);
 
   // Load database entities & initialize review draft
   const loadReviewData = useCallback(async () => {
@@ -162,28 +177,75 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
         // Find session linked to ocrProcess
         const allSessions = await documentSessionRepository.getAll();
         activeSession = allSessions.find((s) => s.ocrProcessId === activeOcrProcess?.id) || null;
+        if (!activeSession && activeOcrProcess.attachmentId) {
+          const allSegments = await db.documentPageSegments.toArray();
+          const seg = allSegments.find((s: DocumentPageSegment) => s.attachmentId === activeOcrProcess?.attachmentId);
+          if (seg?.sessionId) {
+            activeSession = await documentSessionRepository.getById(seg.sessionId) || null;
+          }
+        }
       }
 
       if (activeSession && !activeOcrProcess && activeSession.ocrProcessId) {
         activeOcrProcess = await ocrProcessRepository.getById(activeSession.ocrProcessId) || null;
       }
 
-      // If session exists but no OCRProcess, run recognition or create OCRProcess
-      if (activeSession && !activeOcrProcess) {
+      // 2. Determine if OCR recognition should be started
+      // Conditions:
+      // - Valid session exists
+      // - Process is not already confirmed by user
+      // - Process is missing OR in 'pending' status OR lacks non-empty rawText
+      // - Process is not already completed with non-empty rawText
+      // - Not already executing in local guard ref
+      const hasValidCompletedText = Boolean(
+        activeOcrProcess &&
+        activeOcrProcess.status === 'completed' &&
+        activeOcrProcess.rawText &&
+        activeOcrProcess.rawText.trim().length > 0
+      );
+
+      const needsOcrRecognition = Boolean(
+        activeSession &&
+        !activeOcrProcess?.confirmedByUser &&
+        !hasValidCompletedText &&
+        activeOcrProcess?.status !== 'processing' &&
+        !processingSessionsRef.current.has(activeSession.id)
+      );
+
+      if (needsOcrRecognition && activeSession) {
+        processingSessionsRef.current.add(activeSession.id);
+        setProgressText('Inizializzazione motore OCR e riconoscimento testo...');
         try {
-          activeOcrProcess = await ocrService.recognize(activeSession.id);
-        } catch {
-          // If recognize fails because rawText is empty, create minimal process
-          const segs = await documentPageSegmentRepository.getBySessionId(activeSession.id);
-          if (segs.length > 0) {
-            activeOcrProcess = await ocrProcessRepository.create({
-              attachmentId: segs[0].attachmentId,
-              status: 'pending',
-              confirmationRequired: true,
-              confirmedByUser: false,
-            });
-            await documentSessionRepository.update(activeSession.id, { ocrProcessId: activeOcrProcess.id });
+          activeOcrProcess = await ocrService.recognize(activeSession.id, (prog) => {
+            if (prog.statusText) setProgressText(prog.statusText);
+            if (typeof prog.progressPercentage === 'number') {
+              setProgressPercentage(prog.progressPercentage);
+            }
+          });
+        } catch (ocrErr: any) {
+          console.error('[OcrReviewModal] Errore recognize OCR:', ocrErr);
+          setErrorMessage(
+            `Riconoscimento OCR non riuscito: ${ocrErr?.message || 'Errore durante la scansione del testo'}. È comunque possibile inserire i dati a mano.`
+          );
+          if (activeSession.ocrProcessId) {
+            activeOcrProcess = await ocrProcessRepository.getById(activeSession.ocrProcessId) || null;
           }
+        } finally {
+          processingSessionsRef.current.delete(activeSession.id);
+        }
+      }
+
+      // Fallback process creation if neither existed nor recognize created one
+      if (!activeOcrProcess && activeSession) {
+        const segs = await documentPageSegmentRepository.getBySessionId(activeSession.id);
+        if (segs.length > 0) {
+          activeOcrProcess = await ocrProcessRepository.create({
+            attachmentId: segs[0].attachmentId,
+            status: 'pending',
+            confirmationRequired: true,
+            confirmedByUser: false,
+          });
+          await documentSessionRepository.update(activeSession.id, { ocrProcessId: activeOcrProcess.id });
         }
       }
 
@@ -191,14 +253,27 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
         throw new Error('Impossibile caricare il processo OCR per la revisione');
       }
 
-      // 2. Ensure rawText parsed & classified
-      if (!activeOcrProcess.detectedSupplier && activeOcrProcess.rawText) {
+      // 3. Ensure rawText parsed & lines extracted
+      const hasRawText = Boolean(activeOcrProcess.rawText && activeOcrProcess.rawText.trim().length > 0);
+      const existingLines = await ocrReceiptLineRepository.getByOcrProcessId(activeOcrProcess.id);
+
+      if (
+        hasRawText &&
+        !activeOcrProcess.confirmedByUser &&
+        (existingLines.length === 0 || (!activeOcrProcess.detectedSupplier && !activeOcrProcess.detectedTotal))
+      ) {
         try {
+          setProgressText('Analisi strutturata dello scontrino ed estrazione righe...');
           await receiptParserService.parse(activeOcrProcess.id);
-          activeOcrProcess = await ocrProcessRepository.getById(activeOcrProcess.id) || activeOcrProcess;
-        } catch (parseErr) {
-          console.warn('[OcrReviewModal] Error during parsing:', parseErr);
+          activeOcrProcess = (await ocrProcessRepository.getById(activeOcrProcess.id)) || activeOcrProcess;
+        } catch (parseErr: any) {
+          console.warn('[OcrReviewModal] Errore parsing scontrino:', parseErr);
+          setErrorMessage(
+            `Parsing scontrino parziale: ${parseErr?.message || 'Nessun dato strutturato estratto'}. Completa o modifica i campi manualmente.`
+          );
         }
+      } else if (!hasRawText && activeOcrProcess.status === 'completed') {
+        setFeedbackMessage('Nessun testo rilevato nel documento. Puoi inserire i dati dello scontrino manualmente.');
       }
 
       // Run classification proposal
@@ -290,11 +365,39 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
         setNewSupplierName('');
       }
 
+      const hasOcrDate = Boolean(activeOcrProcess.detectedDate);
+      setIsDateDetectedFromOcr(hasOcrDate);
       setExpenseDate(
         activeOcrProcess.detectedDate || new Date().toISOString().substring(0, 10)
       );
 
       setDocumentTotal(activeOcrProcess.detectedTotal || 0);
+
+      // Inizializza paymentMethod da OCR o metadati con massima priorità a Contanti/Resto
+      const detectedPayMethod = (activeOcrProcess.metadata as Record<string, any>)?.detectedPaymentMethod;
+      if (detectedPayMethod === 'contanti' || detectedPayMethod === 'cash') {
+        setPaymentMethod('cash');
+      } else if (detectedPayMethod === 'carta' || detectedPayMethod === 'creditCard') {
+        setPaymentMethod('creditCard');
+      } else if (detectedPayMethod === 'bancomat' || detectedPayMethod === 'debitCard') {
+        setPaymentMethod('debitCard');
+      } else if (detectedPayMethod === 'bonifico' || detectedPayMethod === 'bankTransfer') {
+        setPaymentMethod('bankTransfer');
+      } else if (detectedPayMethod === 'digitalWallet') {
+        setPaymentMethod('digitalWallet');
+      } else {
+        // Controllo diretto sul testo grezzo o normalizzato per indizi inequivocabili di contanti
+        const rawUpper = (activeOcrProcess.rawText || '').toUpperCase();
+        if (/\b(?:CONTANT[EI]|RESTO\b|RESTO\s*[:=]?\s*\d|CASH)\b/i.test(rawUpper)) {
+          setPaymentMethod('cash');
+        } else if (/\b(?:BANCOMAT|PAGOBANCOMAT|DEBITO)\b/i.test(rawUpper)) {
+          setPaymentMethod('debitCard');
+        } else if (/\b(?:CARTA\s+CREDITO|CREDITO|POS|CONTACTLESS|VISA|MASTERCARD)\b/i.test(rawUpper)) {
+          setPaymentMethod('creditCard');
+        } else {
+          setPaymentMethod('cash');
+        }
+      }
 
       // 6. Load OCR receipt lines & merge with proposals
       const dbLines = await ocrReceiptLineRepository.getByOcrProcessId(activeOcrProcess.id);
@@ -315,9 +418,31 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
         const matchedProd = prop?.matchedProduct || null;
         const initialProdId = line.productId || matchedProd?.id || null;
 
+        const lineWarnings = [
+          ...((savedMeta.warnings as string[]) || []),
+          ...(prop?.warnings || []),
+          ...(Array.isArray((line.metadata as Record<string, any>)?.warnings) ? (line.metadata as Record<string, any>).warnings : []),
+        ];
+        const uniqueWarnings = Array.from(new Set(lineWarnings));
+        const hasUnsafeWarnings =
+          uniqueWarnings.includes('VAT_PRICE_AMBIGUOUS') ||
+          uniqueWarnings.includes('PRICE_NOT_DETECTED') ||
+          uniqueWarnings.includes('LOW_CONFIDENCE') ||
+          uniqueWarnings.includes('OCR_TEXT_SUSPECT') ||
+          uniqueWarnings.includes('DISCOUNT_VALUE_NOT_DETECTED') ||
+          uniqueWarnings.includes('prezzo_riga_non_rilevato') ||
+          (line.unitPrice === 0 && line.lineTotal === 0 && !line.description.toUpperCase().includes('SCONTO'));
+
+        const isDocUnsafe =
+          hasTotalDiscrepancy ||
+          (typeof ocrProcess?.confidence === 'number' && ocrProcess.confidence < 60) ||
+          hasUnsafeWarnings;
+
         let initialActionMode: 'link_existing' | 'create_new' | 'unlinked' = savedMeta.actionMode || 'unlinked';
         if (!savedMeta.actionMode) {
-          if (initialProdId) {
+          if (isDocUnsafe) {
+            initialActionMode = 'unlinked';
+          } else if (initialProdId) {
             initialActionMode = 'link_existing';
           } else if (prop?.proposedNewProduct) {
             initialActionMode = 'create_new';
@@ -344,9 +469,9 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
           matchedProduct: matchedProd,
           proposedCategoryName: prop?.proposedCategory?.name,
           proposedSubcategoryName: prop?.proposedSubcategory?.name,
-          hasConflict: prop?.hasConflict || false,
+          hasConflict: prop?.hasConflict || hasUnsafeWarnings || false,
           conflictDetails: prop?.conflictDetails,
-          warnings: prop?.warnings || [],
+          warnings: uniqueWarnings,
           isNewRow: false,
           actionMode: initialActionMode,
           newProductDisplayName: savedNewProductName,
@@ -439,6 +564,21 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
           const qty = field === 'quantity' ? Number(value) : line.quantity;
           const price = field === 'unitPrice' ? Number(value) : line.unitPrice;
           updated.lineTotal = Math.round(qty * price * 100) / 100;
+        }
+
+        // Se viene inserito un prezzo valido > 0, rimuovi i warning di prezzo non rilevato
+        if (field === 'unitPrice' || field === 'lineTotal') {
+          const valNum = Number(value);
+          if (valNum > 0 && Array.isArray(updated.warnings)) {
+            updated.warnings = updated.warnings.filter(
+              (w) =>
+                w !== 'PRICE_NOT_DETECTED' &&
+                w !== 'PRICE_ASSOCIATION_UNCERTAIN' &&
+                w !== 'VAT_PRICE_AMBIGUOUS' &&
+                w !== 'DISCOUNT_VALUE_NOT_DETECTED' &&
+                w !== 'prezzo_riga_non_rilevato'
+            );
+          }
         }
 
         // If product selected, auto-set default category if available
@@ -567,6 +707,70 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
     }
   };
 
+  const handleDeleteSession = async () => {
+    if (!session && !ocrProcess) return;
+    if (existingExpense) {
+      setErrorMessage('Impossibile eliminare una scansione già registrata a bilancio');
+      return;
+    }
+
+    const confirmed = window.confirm('Sei sicuro di voler eliminare questa scansione e i relativi dati OCR?');
+    if (!confirmed) return;
+
+    setIsSaving(true);
+    try {
+      if (session) {
+        await documentSessionRepository.delete(session.id);
+      } else if (ocrProcess) {
+        await ocrReceiptLineRepository.deleteUnconfirmedByOcrProcessId(ocrProcess.id);
+        await ocrProcessRepository.delete(ocrProcess.id);
+      }
+      onClose();
+    } catch (err: any) {
+      setErrorMessage(err?.message || 'Errore durante l\'eliminazione della scansione');
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const handleRerunOcr = async () => {
+    if (!session) return;
+    setIsLoading(true);
+    setErrorMessage(null);
+    setEditableLines([]);
+    setProgressText('Riavvio motore OCR...');
+    try {
+      if (ocrProcess) {
+        // Pulizia atomica delle righe precedenti non confermate per garantire idempotenza
+        await ocrReceiptLineRepository.deleteUnconfirmedByOcrProcessId(ocrProcess.id);
+        await ocrProcessRepository.update(ocrProcess.id, {
+          status: 'pending',
+          rawText: undefined,
+          detectedSupplier: undefined,
+          detectedDate: undefined,
+          detectedTotal: undefined,
+          errorMessage: null,
+        });
+      }
+      const updatedOcr = await ocrService.recognize(session.id, (prog) => {
+        if (prog.statusText) setProgressText(prog.statusText);
+        if (typeof prog.progressPercentage === 'number') {
+          setProgressPercentage(prog.progressPercentage);
+        }
+      });
+      if (updatedOcr && updatedOcr.rawText) {
+        await receiptParserService.parse(updatedOcr.id);
+      }
+      await loadReviewData();
+      setFeedbackMessage('Riconoscimento OCR completato con successo');
+      setTimeout(() => setFeedbackMessage(null), 3000);
+    } catch (err: any) {
+      setErrorMessage(`Errore durante il riesame OCR: ${err?.message || 'Errore imprevisto'}`);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   const executeConfirmClassifications = async () => {
     if (!ocrProcess) return;
 
@@ -691,10 +895,26 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
 
       const isDiscountOrReturn =
         line.lineTotal < 0 ||
-        /SCONTO|PROMO|ABBUONO|COUPON|BUONO|RESO|STORNO/i.test(line.description || '');
+        /SCONTO|PROMO|ABBUONO|COUPON|BUONO|RESO|STORNO|ARROTONDAMENTO/i.test(line.description || '');
 
-      if (!isDiscountOrReturn && line.unitPrice <= 0 && line.lineTotal <= 0) {
-        errors.push(`"${lineName}": importo riga non valido (prezzo unitario e totale <= 0).`);
+      const lineWarns = Array.isArray(line.warnings) ? line.warnings : [];
+      const hasUnresolvedPriceWarning =
+        lineWarns.includes('PRICE_NOT_DETECTED') ||
+        lineWarns.includes('PRICE_ASSOCIATION_UNCERTAIN') ||
+        lineWarns.includes('VAT_PRICE_AMBIGUOUS') ||
+        lineWarns.includes('DISCOUNT_VALUE_NOT_DETECTED') ||
+        lineWarns.includes('prezzo_riga_non_rilevato');
+
+      if (!isDiscountOrReturn) {
+        if (hasUnresolvedPriceWarning) {
+          errors.push(`"${lineName}": prezzo non rilevato o ambiguo dall'OCR. Inserisci manualmente il prezzo prima di confermare.`);
+        } else if (line.unitPrice <= 0 && line.lineTotal <= 0) {
+          errors.push(`"${lineName}": importo riga non valido (prezzo unitario e totale <= 0). Inserisci il prezzo prima di confermare.`);
+        }
+      }
+
+      if (lineWarns.includes('OCR_TEXT_SUSPECT')) {
+        errors.push(`"${lineName}": testo OCR sospetto o corrotto. Correggi la descrizione prima di confermare.`);
       }
     });
 
@@ -820,6 +1040,71 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
     }
   };
 
+  // Funzione per copiare l'intero stato diagnostico OCR grezzo e strutturato
+  const handleCopyDiagnostics = async () => {
+    try {
+      const finalSupplierName =
+        selectedSupplierId === 'new'
+          ? newSupplierName.trim()
+          : suppliers.find((s) => s.id === selectedSupplierId)?.name || detectedSupplierName;
+
+      const raw = ocrProcess?.rawText || '';
+      const metaObj = (ocrProcess?.metadata as Record<string, any>) || {};
+      const metaNorm = metaObj.normalizedLines;
+      const normalizedLines = Array.isArray(metaNorm) && metaNorm.length > 0
+        ? metaNorm
+        : (raw ? TextNormalizationModule.normalize(raw).normalizedLines : []);
+
+      const persistedDbLines = ocrProcess?.id
+        ? await ocrReceiptLineRepository.getByOcrProcessId(ocrProcess.id)
+        : [];
+
+      const diagData = {
+        timestamp: new Date().toISOString(),
+        ocrProcessId: ocrProcess?.id || null,
+        sessionId: session?.id || null,
+        documentTitle: (session?.metadata?.title as string) || null,
+        confidence: ocrProcess?.confidence || null,
+        selectedVariant: metaObj.selectedVariant || null,
+        variantScores: metaObj.variantScores || [],
+        detectedSupplier: detectedSupplierName,
+        selectedSupplier: finalSupplierName,
+        detectedDate: expenseDate,
+        isDateDetectedFromOcr,
+        detectedTotal: documentTotal,
+        paymentMethod,
+        rawText: raw,
+        normalizedLines,
+        persistedDbLinesCount: persistedDbLines.length,
+        extractedLines: editableLines.map((l, index) => ({
+          index: index + 1,
+          id: l.id,
+          originalText: l.originalText,
+          description: l.description,
+          quantity: l.quantity,
+          unitPrice: l.unitPrice,
+          lineTotal: l.lineTotal,
+          isNegative: l.lineTotal < 0,
+          confidence: l.confidence,
+          warnings: Array.isArray(l.warnings) ? l.warnings : [],
+          categoryId: l.categoryId,
+          productId: l.productId,
+          actionMode: l.actionMode,
+        })),
+        calculatedSumLines: roundedSumLines,
+        discrepancy: Math.abs(roundedDocTotal - roundedSumLines),
+        hasDiscrepancy: hasTotalDiscrepancy,
+        isDiscrepancyApproved,
+        validationErrors: getFinalValidationErrors(),
+      };
+      await navigator.clipboard.writeText(JSON.stringify(diagData, null, 2));
+      setCopySuccess(true);
+      setTimeout(() => setCopySuccess(false), 2500);
+    } catch (err) {
+      console.error('Errore nella copia della diagnostica:', err);
+    }
+  };
+
   // Image Viewer Helpers
   const activeSegment = segments[activeSegmentIndex];
   const activeAttachment = activeSegment
@@ -840,19 +1125,41 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
       maxWidth="5xl"
     >
       {isLoading ? (
-        <div className="py-16 flex flex-col items-center justify-center space-y-3">
-          <RefreshCw className="w-8 h-8 text-indigo-600 animate-spin" />
-          <p className="text-sm font-semibold text-slate-600 dark:text-slate-300">
-            Caricamento e classificazione dati OCR in corso...
-          </p>
+        <div className="py-16 flex flex-col items-center justify-center space-y-4">
+          <RefreshCw className="w-9 h-9 text-indigo-600 animate-spin" />
+          <div className="text-center max-w-md px-4 space-y-2">
+            <p className="text-sm font-semibold text-slate-700 dark:text-slate-200">
+              {progressText}
+            </p>
+            {progressPercentage > 0 && progressPercentage <= 100 && (
+              <div className="w-full bg-slate-200 dark:bg-slate-700 rounded-full h-2 overflow-hidden">
+                <div
+                  className="bg-indigo-600 h-2 rounded-full transition-all duration-300 ease-out"
+                  style={{ width: `${Math.min(100, Math.max(0, progressPercentage))}%` }}
+                />
+              </div>
+            )}
+          </div>
         </div>
       ) : (
         <div className="space-y-4">
-          {/* Error Banner */}
+          {/* Error Banner with Retry */}
           {errorMessage && (
-            <div className="flex items-center gap-2.5 p-3.5 bg-rose-50 dark:bg-rose-950/50 text-rose-700 dark:text-rose-300 rounded-2xl text-xs font-semibold border border-rose-200 dark:border-rose-900">
-              <AlertCircle className="w-4 h-4 shrink-0 text-rose-600" />
-              <span className="flex-1">{errorMessage}</span>
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3.5 bg-rose-50 dark:bg-rose-950/50 text-rose-700 dark:text-rose-300 rounded-2xl text-xs font-semibold border border-rose-200 dark:border-rose-900">
+              <div className="flex items-center gap-2.5">
+                <AlertCircle className="w-4 h-4 shrink-0 text-rose-600" />
+                <span>{errorMessage}</span>
+              </div>
+              {session && (
+                <button
+                  type="button"
+                  onClick={handleRerunOcr}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-bold transition-all shrink-0 cursor-pointer self-start sm:self-auto"
+                >
+                  <RefreshCw className="w-3.5 h-3.5" />
+                  Riprova OCR
+                </button>
+              )}
             </div>
           )}
 
@@ -1078,6 +1385,15 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
                       onChange={(e) => setExpenseDate(e.target.value)}
                       className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl px-3 py-2 font-medium text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
                     />
+                    {isDateDetectedFromOcr ? (
+                      <p className="text-[11px] text-emerald-600 dark:text-emerald-400 font-medium flex items-center gap-1">
+                        <CheckCircle2 className="w-3 h-3" /> Data rilevata da scontrino ({expenseDate})
+                      </p>
+                    ) : (
+                      <p className="text-[11px] text-amber-600 dark:text-amber-400 font-medium flex items-center gap-1">
+                        <AlertCircle className="w-3 h-3" /> Data presunta: verificare data reale su scontrino
+                      </p>
+                    )}
                   </div>
 
                   {/* Totale Documento */}
@@ -1104,12 +1420,12 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
                       onChange={(e) => setPaymentMethod(e.target.value as PaymentMethod)}
                       className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl px-3 py-2 font-medium text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500 cursor-pointer"
                     >
+                      <option value="cash">Contanti</option>
                       <option value="debitCard">Carta di Debito / Bancomat</option>
                       <option value="creditCard">Carta di Credito</option>
-                      <option value="cash">Contanti</option>
                       <option value="bankTransfer">Bonifico Bancario</option>
                       <option value="digitalWallet">Digital Wallet (Satispay, Apple Pay)</option>
-                      <option value="other">Altro</option>
+                      <option value="other">Altro / Da verificare</option>
                     </select>
                   </div>
                 </div>
@@ -1515,18 +1831,174 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
             </div>
           </div>
 
+          {/* Strumento di Diagnostica OCR (Non-invasivo per debug e verifica input reale Tesseract) */}
+          <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-900/50 overflow-hidden text-xs">
+            <button
+              type="button"
+              onClick={() => setShowDiagnostics(!showDiagnostics)}
+              className="w-full flex items-center justify-between p-3.5 hover:bg-slate-100/70 dark:hover:bg-slate-800/50 transition-colors text-left cursor-pointer"
+            >
+              <div className="flex items-center gap-2 font-bold text-slate-700 dark:text-slate-300">
+                <Terminal className="w-4 h-4 text-indigo-500" />
+                <span>Mostra diagnostica OCR (Raw Tesseract & Parser State)</span>
+                {ocrProcess && (
+                  <span className="text-[11px] font-normal text-slate-500 dark:text-slate-400">
+                    ({ocrProcess.rawText ? `${ocrProcess.rawText.length} car.` : '0 car.'} • {editableLines.length} righe)
+                  </span>
+                )}
+              </div>
+              <div className="flex items-center gap-1 text-slate-500">
+                <span className="text-[11px] font-semibold">{showDiagnostics ? 'Comprimi' : 'Espandi'}</span>
+                {showDiagnostics ? (
+                  <ChevronUp className="w-4 h-4" />
+                ) : (
+                  <ChevronDown className="w-4 h-4" />
+                )}
+              </div>
+            </button>
+
+            {showDiagnostics && (
+              <div className="p-4 border-t border-slate-200 dark:border-slate-800 space-y-3 bg-white dark:bg-slate-950">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-2 border-b border-slate-100 dark:border-slate-800">
+                  <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                    Visualizza il testo grezzo ricevuto direttamente da Tesseract nel browser e le righe analizzate. Questa sezione è dedicata al debug e non compare nella registrazione contabile.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={handleCopyDiagnostics}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold transition-all shrink-0 cursor-pointer shadow-xs self-start sm:self-auto"
+                  >
+                    {copySuccess ? (
+                      <>
+                        <Check className="w-3.5 h-3.5" />
+                        <span>Diagnostica copiata!</span>
+                      </>
+                    ) : (
+                      <>
+                        <Copy className="w-3.5 h-3.5" />
+                        <span>Copia diagnostica</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+
+                {/* Metadata & Variant Selection Details */}
+                {ocrProcess && (
+                  <div className="p-3 bg-slate-900 border border-slate-800 rounded-xl text-slate-300 font-mono text-[11px] space-y-2">
+                    <div className="text-amber-400 font-bold flex items-center justify-between">
+                      <span>Variante Selezionata: {(ocrProcess.metadata as Record<string, any>)?.selectedVariant || 'original'}</span>
+                      <span>Confidenza complessiva: {ocrProcess.confidence || 0}%</span>
+                    </div>
+                    {Array.isArray((ocrProcess.metadata as Record<string, any>)?.variantScores) &&
+                      (ocrProcess.metadata as Record<string, any>).variantScores.length > 0 && (
+                        <div className="space-y-1 pt-1 border-t border-slate-800">
+                          <div className="text-[10px] text-slate-400 font-semibold uppercase tracking-wider">
+                            Punteggi Varianti Pre-Processing:
+                          </div>
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+                            {(ocrProcess.metadata as Record<string, any>).variantScores.map((v: any, idx: number) => (
+                              <div
+                                key={idx}
+                                className={`p-1.5 rounded-lg border text-[10px] ${
+                                  v.variant === (ocrProcess.metadata as Record<string, any>)?.selectedVariant
+                                    ? 'bg-amber-950/40 border-amber-800/80 text-amber-200'
+                                    : 'bg-slate-950 border-slate-800 text-slate-400'
+                                }`}
+                              >
+                                <div className="font-bold flex items-center justify-between">
+                                  <span>{v.label || v.variant}</span>
+                                  <span>Score: {v.overallScore} (Conf: {v.confidence}%)</span>
+                                </div>
+                                {Array.isArray(v.reasons) && v.reasons.length > 0 && (
+                                  <div className="text-[9px] text-slate-400 truncate mt-0.5">
+                                    {v.reasons.join(', ')}
+                                  </div>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                  </div>
+                )}
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-700 dark:text-slate-300 mb-1 flex items-center justify-between">
+                      <span>1. Testo Grezzo OCR (rawText):</span>
+                      <span className="font-mono text-[10px] text-slate-400 font-normal">
+                        {ocrProcess?.rawText ? `${ocrProcess.rawText.split('\n').length} righe` : '0'}
+                      </span>
+                    </label>
+                    <pre className="p-3 bg-slate-950 text-emerald-400 font-mono text-[11px] rounded-xl overflow-auto max-h-56 whitespace-pre-wrap select-all border border-slate-800 leading-relaxed">
+                      {ocrProcess?.rawText || '(Nessun testo grezzo salvato nel processo OCR)'}
+                    </pre>
+                  </div>
+
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-700 dark:text-slate-300 mb-1 flex items-center justify-between">
+                      <span>2. Righe Normalizzate & Riconosciute:</span>
+                      <span className="font-mono text-[10px] text-slate-400 font-normal">
+                        {editableLines.length} elementi
+                      </span>
+                    </label>
+                    <pre className="p-3 bg-slate-950 text-cyan-300 font-mono text-[11px] rounded-xl overflow-auto max-h-56 whitespace-pre-wrap select-all border border-slate-800 leading-relaxed">
+                      {((ocrProcess?.metadata as Record<string, any>)?.normalizedLines || []).join('\n') ||
+                        editableLines
+                          .map(
+                            (l, idx) =>
+                              `#${idx + 1} | [${l.description}] ${l.quantity} x € ${l.unitPrice.toFixed(
+                                2
+                              )} = € ${l.lineTotal.toFixed(2)}${l.warnings?.length ? ` (${l.warnings.join(', ')})` : ''}`
+                          )
+                          .join('\n') ||
+                        '(Nessuna riga)'}
+                    </pre>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+
           {/* Modal Actions Footer */}
           <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-3 border-t border-slate-200 dark:border-slate-800">
-            <Button
-              type="button"
-              variant="secondary"
-              onClick={onClose}
-              disabled={isSaving}
-            >
-              Chiudi
-            </Button>
+            <div className="flex items-center gap-2">
+              <Button
+                type="button"
+                variant="secondary"
+                onClick={onClose}
+                disabled={isSaving}
+              >
+                Chiudi
+              </Button>
+
+              {!existingExpense && (session || ocrProcess) && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  onClick={handleDeleteSession}
+                  disabled={isSaving}
+                  icon={<Trash2 className="w-4 h-4 text-rose-500" />}
+                  className="text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/30"
+                >
+                  Elimina scansione
+                </Button>
+              )}
+            </div>
 
             <div className="flex flex-wrap items-center gap-3 w-full sm:w-auto justify-end">
+              {!existingExpense && session && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  onClick={handleRerunOcr}
+                  disabled={isSaving}
+                  icon={<RefreshCw className="w-4 h-4 text-indigo-500" />}
+                >
+                  Riprova OCR
+                </Button>
+              )}
+
               {!existingExpense && (
                 <Button
                   type="button"
@@ -1539,21 +2011,39 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
                 </Button>
               )}
 
-              <Button
-                type="button"
-                variant="secondary"
-                onClick={handleConfirmReview}
-                disabled={isSaving}
-                icon={
-                  isSaving ? (
-                    <RefreshCw className="w-4 h-4 animate-spin" />
-                  ) : (
-                    <Check className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
-                  )
-                }
-              >
-                Conferma revisione dati
-              </Button>
+              {(() => {
+                const valErrors = getFinalValidationErrors();
+                const isConfirmBlocked =
+                  isSaving ||
+                  (hasTotalDiscrepancy && !isDiscrepancyApproved) ||
+                  editableLines.length === 0 ||
+                  valErrors.length > 0;
+
+                return (
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    onClick={handleConfirmReview}
+                    disabled={isConfirmBlocked}
+                    title={
+                      hasTotalDiscrepancy && !isDiscrepancyApproved
+                        ? 'Discrepanza non approvata: spunta la casella di conferma per abilitare il pulsante'
+                        : valErrors.length > 0
+                        ? `Impossibile confermare: ${valErrors[0]}`
+                        : 'Conferma revisione dati'
+                    }
+                    icon={
+                      isSaving ? (
+                        <RefreshCw className="w-4 h-4 animate-spin" />
+                      ) : (
+                        <Check className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+                      )
+                    }
+                  >
+                    Conferma revisione dati
+                  </Button>
+                );
+              })()}
 
               {existingExpense ? (
                 <Button
@@ -1565,21 +2055,39 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
                   Registrazione già creata
                 </Button>
               ) : (
-                <Button
-                  type="button"
-                  variant="emerald"
-                  onClick={handleCreateAccountingRegistration}
-                  disabled={isSaving}
-                  icon={
-                    isSaving ? (
-                      <RefreshCw className="w-4 h-4 animate-spin" />
-                    ) : (
-                      <Sparkles className="w-4 h-4" />
-                    )
-                  }
-                >
-                  <span>{isSaving ? 'Registrazione in corso...' : 'Crea Registrazione Contabile'}</span>
-                </Button>
+                (() => {
+                  const valErrors = getFinalValidationErrors();
+                  const isBlocked =
+                    isSaving ||
+                    (hasTotalDiscrepancy && !isDiscrepancyApproved) ||
+                    editableLines.length === 0 ||
+                    valErrors.length > 0;
+
+                  return (
+                    <Button
+                      type="button"
+                      variant={isBlocked ? 'secondary' : 'emerald'}
+                      onClick={handleCreateAccountingRegistration}
+                      disabled={isBlocked}
+                      title={
+                        hasTotalDiscrepancy && !isDiscrepancyApproved
+                          ? 'Discrepanza non approvata: spunta la casella di conferma per abilitare la registrazione'
+                          : valErrors.length > 0
+                          ? `Impossibile registrare: ${valErrors[0]}`
+                          : 'Crea Spesa a bilancio'
+                      }
+                      icon={
+                        isSaving ? (
+                          <RefreshCw className="w-4 h-4 animate-spin" />
+                        ) : (
+                          <Sparkles className="w-4 h-4" />
+                        )
+                      }
+                    >
+                      <span>{isSaving ? 'Registrazione in corso...' : 'Crea Registrazione Contabile'}</span>
+                    </Button>
+                  );
+                })()
               )}
             </div>
           </div>

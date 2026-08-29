@@ -27,6 +27,8 @@ import type {
   ProductAlias,
   DocumentSession,
   DocumentPageSegment,
+  PaymentMethodDefinition,
+  PaymentEvidence,
 } from '../types';
 
 export class GestioneCasaDatabase extends Dexie {
@@ -57,6 +59,8 @@ export class GestioneCasaDatabase extends Dexie {
   documentPageSegments!: EntityTable<DocumentPageSegment, 'id'>;
   contactRequests!: EntityTable<ContactRequestDocument, 'id'>;
   localLicenses!: EntityTable<LocalLicenseState, 'id'>;
+  paymentMethods!: EntityTable<PaymentMethodDefinition, 'id'>;
+  paymentEvidences!: EntityTable<PaymentEvidence, 'id'>;
 
   constructor() {
     super('gestioneCasa');
@@ -112,6 +116,11 @@ export class GestioneCasaDatabase extends Dexie {
 
     this.version(9).stores({
       localLicenses: 'id, status, lastSuccessfulOnlineValidation, updatedAt',
+    });
+
+    this.version(10).stores({
+      paymentMethods: 'id, &code, macroCategory, isSystem, enabled',
+      paymentEvidences: 'id, expenseId, documentType, paymentMethodId, dateTime, [expenseId+documentType]',
     });
   }
 }

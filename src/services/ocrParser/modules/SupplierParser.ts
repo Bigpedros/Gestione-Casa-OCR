@@ -31,41 +31,17 @@ export class SupplierParser implements ReceiptParserModule<string> {
     'CLIENTE',
   ];
 
-  private knownBrands = [
-    'DESPAR',
-    'EUROSPAR',
-    'INTERSPAR',
-    'ESSELUNGA',
-    'CONAD',
-    'COOP',
-    'IPERCOOP',
-    'LIDL',
-    'ALDI',
-    'CARREFOUR',
-    'EUROSPIN',
-    'PENNY',
-    'PAM',
-    'PANORAMA',
-    'TIGOTA',
-    'ACQUA & SAPONE',
-    'DECATHLON',
-    'LEROY MERLIN',
-    'MEDIAWORLD',
-    'UNIEURO',
-    'IKEA',
-    'MD',
-    'TODIS',
-    'CRAI',
-    'SELEX',
-    'TIGROS',
-    'BENNET',
-    'FARMACIA',
-    'PARAFARMACIA',
-    'AUTOGRILL',
-    'CHEF EXPRESS',
-    'MCDONALD',
-    'BURGER KING',
-  ];
+  /**
+   * Normalizzazione generica OCR di caratteri confusi frequenti (0/O, 1/I, 5/S)
+   */
+  private normalizeOcrLetters(text: string): string {
+    return text
+      .toUpperCase()
+      .replace(/\b0([A-Z]+)\b/g, 'O$1')
+      .replace(/\b([A-Z]+)0\b/g, '$1O')
+      .replace(/\b1([A-Z]+)\b/g, 'I$1')
+      .replace(/\b([A-Z]+)1\b/g, '$1I');
+  }
 
   public parse(context: ReceiptParserContext): ParsedField<string> {
     const lines = context.normalizedLines;
@@ -78,7 +54,13 @@ export class SupplierParser implements ReceiptParserModule<string> {
     }
 
     const maxLines = Math.min(8, lines.length);
-    const candidates: Array<{ name: string; score: number; lineIndex: number; sourceText: string }> = [];
+    const candidates: Array<{
+      name: string;
+      score: number;
+      lineIndex: number;
+      sourceText: string;
+      isLowConfidence?: boolean;
+    }> = [];
 
     for (let i = 0; i < maxLines; i++) {
       const line = lines[i];
@@ -89,37 +71,45 @@ export class SupplierParser implements ReceiptParserModule<string> {
       if (isExcluded) continue;
 
       // Se la riga è troppo corta o contiene solo numeri/date/punteggiatura
-      if (line.replace(/[^a-zA-Zà-ùÀ-Ù]/g, '').length < 3) continue;
+      if (line.replace(/[^a-zA-Zà-ùÀ-Ù0-9]/g, '').length < 3) continue;
 
       let score = 50 - i * 5; // Punteggio base decrescente con la posizione
 
-      // Punti extra per forme societarie (S.R.L., S.P.A., ecc.)
-      if (/\b(S\.?R\.?L\.?|S\.?P\.?A\.?|S\.?N\.?C\.?|S\.?A\.?S\.?|SOC\.?\s*COOP\.?)\b/i.test(line)) {
-        score += 40;
-      }
-
-      // Punti extra per brand o marchi noti
-      const brandFound = this.knownBrands.find((b) => upperLine.includes(b));
-      if (brandFound) {
-        score += 45;
+      // Punti per forme societarie (S.R.L., S.P.A., ecc.)
+      const isCorporateForm = /\b(S\.?R\.?L\.?|S\.?P\.?A\.?|S\.?N\.?C\.?|S\.?A\.?S\.?|SOC\.?\s*COOP\.?)\b/i.test(line);
+      if (isCorporateForm) {
+        score += 30;
       }
 
       // Prossimità a P.IVA o indirizzo nelle righe successive (+15 punti)
+      let hasAddressOrVatNearby = false;
       for (let j = i + 1; j < Math.min(i + 4, lines.length); j++) {
-        if (/P\.?IVA|VIA|CORSO|PIAZZA|TEL/i.test(lines[j])) {
+        if (/\b(?:P\.?\s*IVA|PARTITA\s*IVA|VIA|CORSO|PIAZZA|VIALE|TEL)\b/i.test(lines[j])) {
           score += 15;
+          hasAddressOrVatNearby = true;
           break;
         }
       }
 
-      // Pulizia nome candidato (rimuovi eventuali caratteri di disturbo iniziali)
-      const cleanName = line.replace(/^[*\-_.\s]+/, '').trim();
+      // Se è in prima/seconda riga con caratteri alfabetici validi
+      if (i === 0 && line.replace(/[^A-Za-z]/g, '').length >= 3) {
+        score += 20;
+      }
+
+      // Pulizia nome candidato (rimuovi eventuali caratteri di disturbo iniziali/finali)
+      const cleanName = line.replace(/^[*\-_\s]+/, '').replace(/[*\-_\s]+$/, '').trim();
+
+      // Applica normalizzazione contestuale dei caratteri
+      const contextualName = this.normalizeOcrLetters(cleanName);
+
+      const isLowConf = !isCorporateForm && !hasAddressOrVatNearby && i > 2;
 
       candidates.push({
-        name: cleanName,
+        name: contextualName,
         score,
         lineIndex: i,
         sourceText: line,
+        isLowConfidence: isLowConf,
       });
     }
 
@@ -134,8 +124,13 @@ export class SupplierParser implements ReceiptParserModule<string> {
     // Ordina per punteggio decrescente
     candidates.sort((a, b) => b.score - a.score);
     const best = candidates[0];
-    const confidence = Math.min(95, Math.max(20, best.score));
+    const confidence = Math.min(90, Math.max(20, best.score));
     const alternatives = candidates.slice(1, 4).map((c) => c.name);
+
+    const warnings: string[] = [];
+    if (confidence < 60 || best.isLowConfidence) {
+      warnings.push('fornitore_da_verificare');
+    }
 
     return {
       value: best.name,
@@ -143,6 +138,7 @@ export class SupplierParser implements ReceiptParserModule<string> {
       lineIndex: best.lineIndex,
       sourceText: best.sourceText,
       alternatives,
+      warnings: warnings.length > 0 ? warnings : undefined,
     };
   }
 }

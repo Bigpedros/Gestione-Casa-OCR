@@ -7,6 +7,12 @@ import {
   expenseRepository,
 } from '../repositories';
 import { OCRProcess, OCRProgress, OCRProgressStatus } from '../types';
+import {
+  createReceiptImageVariants,
+  evaluateReceiptOcrQuality,
+  ReceiptVariantName,
+  OcrQualityEvaluation,
+} from '../utils/imagePreprocessing';
 
 interface ActiveProcessEntry {
   sessionId: string;
@@ -26,6 +32,7 @@ export type OCRRecognitionFunction = (
 
 class OCRService {
   private activeProcesses = new Map<string, ActiveProcessEntry>();
+  private activePromises = new Map<string, Promise<OCRProcess>>();
   private mockEngine: OCRRecognitionFunction | null = null;
 
   /**
@@ -39,6 +46,24 @@ class OCRService {
    * Riconosce il testo di una DocumentSession in stato ready o draft.
    */
   public async recognize(
+    sessionId: string,
+    onProgress?: (progress: OCRProgress) => void
+  ): Promise<OCRProcess> {
+    if (this.activePromises.has(sessionId)) {
+      return this.activePromises.get(sessionId)!;
+    }
+
+    const taskPromise = this.executeRecognize(sessionId, onProgress);
+    this.activePromises.set(sessionId, taskPromise);
+
+    try {
+      return await taskPromise;
+    } finally {
+      this.activePromises.delete(sessionId);
+    }
+  }
+
+  private async executeRecognize(
     sessionId: string,
     onProgress?: (progress: OCRProgress) => void
   ): Promise<OCRProcess> {
@@ -132,7 +157,21 @@ class OCRService {
     this.emitProgress(processEntry, 'loading_model', 0, 0, 'Inizializzazione motore OCR locale...');
 
     let worker: Worker | null = null;
-    const pageResults: Array<{ text: string; confidence: number; sequenceIndex: number }> = [];
+    let workerInitError: Error | null = null;
+    const pageResults: Array<{
+      text: string;
+      confidence: number;
+      sequenceIndex: number;
+      selectedVariant?: ReceiptVariantName;
+      variantScores?: Array<{
+        variant: ReceiptVariantName;
+        label: string;
+        confidence: number;
+        overallScore: number;
+        reasons: string[];
+        snippet: string;
+      }>;
+    }> = [];
 
     try {
       // Se non c'è un mockEngine, crea il Worker Tesseract locale
@@ -156,10 +195,21 @@ class OCRService {
               }
             },
           });
+
+          // Configurazione parametri Tesseract per scontrini a colonne
+          try {
+            await worker.setParameters({
+              preserve_interword_spaces: '1',
+              user_defined_dpi: '300',
+            });
+          } catch (paramErr) {
+            console.warn('[OCRService] worker.setParameters non critico fallito:', paramErr);
+          }
+
           processEntry.worker = worker;
         } catch (workerErr: any) {
-          // Fallback se il browser o l'ambiente non supporta Tesseract WASM direttamente
-          console.warn('[OCRService] Impossible creare Tesseract worker:', workerErr);
+          console.warn('[OCRService] Impossibile creare Tesseract worker:', workerErr);
+          workerInitError = new Error(`Inizializzazione motore OCR fallita: ${workerErr?.message || 'Worker Tesseract non disponibile'}`);
         }
       }
 
@@ -193,6 +243,15 @@ class OCRService {
 
         let pageText = '';
         let pageConfidence = 0;
+        let pageSelectedVariant: ReceiptVariantName = 'original';
+        let pageVariantScores: Array<{
+          variant: ReceiptVariantName;
+          label: string;
+          confidence: number;
+          overallScore: number;
+          reasons: string[];
+          snippet: string;
+        }> = [];
 
         if (this.mockEngine) {
           // Utilizza motore mock (per test di unità)
@@ -213,21 +272,93 @@ class OCRService {
           );
           pageText = mockRes.text;
           pageConfidence = mockRes.confidence;
+          pageSelectedVariant = 'original';
+          pageVariantScores.push({
+            variant: 'original',
+            label: 'Mock Engine',
+            confidence: pageConfidence,
+            overallScore: pageConfidence,
+            reasons: ['Esecuzione con mockEngine'],
+            snippet: pageText.slice(0, 100),
+          });
         } else if (worker) {
-          // Esecuzione Tesseract WASM offline in Web Worker
-          const res = await worker.recognize(attachment.storageKey);
-          pageText = res.data.text || '';
-          pageConfidence = Math.round(res.data.confidence || 0);
+          // 1. Generazione non-distruttiva delle varianti dell'immagine
+          const variants = await createReceiptImageVariants(attachment.storageKey, {
+            rotationDegrees: seg.rotationDegrees || 0,
+            maxDimension: 2400,
+          });
+
+          // Testiamo le varianti generate (prioritizzando la conservazione dell'originale e contrasto dolce)
+          interface VariantCandidate {
+            name: ReceiptVariantName;
+            label: string;
+            text: string;
+            confidence: number;
+            evaluation: OcrQualityEvaluation;
+            dataUrl: string;
+          }
+          const candidates: VariantCandidate[] = [];
+
+          for (let vIdx = 0; vIdx < variants.length; vIdx++) {
+            const v = variants[vIdx];
+            try {
+              const res = await worker.recognize(v.dataUrl);
+              const txt = res.data.text || '';
+              const conf = Math.round(res.data.confidence || 0);
+              const evaluation = evaluateReceiptOcrQuality(txt, conf);
+
+              candidates.push({
+                name: v.name,
+                label: v.label,
+                text: txt,
+                confidence: conf,
+                evaluation,
+                dataUrl: v.dataUrl,
+              });
+
+              // Se la prima variante ha già un punteggio eccellente (> 85), possiamo terminare in anticipo per velocità
+              if (evaluation.overallScore >= 85 && conf >= 70) {
+                break;
+              }
+            } catch (vErr) {
+              console.warn(`[OCRService] Errore riconoscimento variante ${v.name}:`, vErr);
+            }
+          }
+
+          if (candidates.length > 0) {
+            // Ordiniamo le varianti in base al punteggio complessivo oggettivo
+            candidates.sort((a, b) => b.evaluation.overallScore - a.evaluation.overallScore);
+            const winner = candidates[0];
+
+            pageText = winner.text;
+            pageConfidence = winner.confidence;
+            pageSelectedVariant = winner.name;
+
+            pageVariantScores = candidates.map((c) => ({
+              variant: c.name,
+              label: c.label,
+              confidence: c.confidence,
+              overallScore: c.evaluation.overallScore,
+              reasons: c.evaluation.reasons,
+              snippet: c.text.slice(0, 120).replace(/\n+/g, ' '),
+            }));
+          } else {
+            // Fallback diretto sull'allegato senza varianti
+            const res = await worker.recognize(attachment.storageKey);
+            pageText = res.data.text || '';
+            pageConfidence = Math.round(res.data.confidence || 0);
+            pageSelectedVariant = 'original';
+          }
         } else {
-          // Se non è stato possibile inizializzare il worker né c'è un mock, genera fallback testo grezzo
-          pageText = `[Testo simulato OCR per ${seg.originalFileName}]`;
-          pageConfidence = 85;
+          throw workerInitError || new Error('Nessun motore OCR disponibile o inizializzato per elaborare l\'immagine');
         }
 
         pageResults.push({
           text: pageText,
           confidence: pageConfidence,
           sequenceIndex: seg.sequenceIndex,
+          selectedVariant: pageSelectedVariant,
+          variantScores: pageVariantScores,
         });
 
         // Aggiorna lo stato del segmento
@@ -261,6 +392,9 @@ class OCRService {
           ? Math.round(pageResults.reduce((acc, p) => acc + p.confidence, 0) / pageResults.length)
           : 0;
 
+      const primarySelectedVariant = pageResults[0]?.selectedVariant || 'original';
+      const allVariantScores = pageResults.flatMap((p) => p.variantScores || []);
+
       // 7. Aggiorna OCRProcess e DocumentSession (Nessuna interpretazione / Nessun Expense creato)
       const now = new Date().toISOString();
       const updatedOcrProcess = await ocrProcessRepository.update(ocrProcess.id, {
@@ -269,7 +403,11 @@ class OCRService {
         confidence: avgConfidence,
         processedAt: now,
         errorMessage: null,
-        // NON valorizzare detectedSupplier, detectedDate, detectedTotal
+        metadata: {
+          ...ocrProcess.metadata,
+          selectedVariant: primarySelectedVariant,
+          variantScores: allVariantScores,
+        } as any,
       });
 
       await documentSessionRepository.update(sessionId, {

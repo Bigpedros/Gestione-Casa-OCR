@@ -1,3 +1,5 @@
+import { NormalizedOcrText, NormalizedOcrLine } from '../types';
+
 export interface TextNormalizationResult {
   originalText: string;
   normalizedText: string;
@@ -8,6 +10,42 @@ export interface TextNormalizationResult {
 
 export class TextNormalizationModule {
   public name = 'TextNormalizationModule';
+
+  /**
+   * Produce la struttura canonica e immutabile NormalizedOcrText
+   * preservando per ciascuna riga il puntatore esatto `rawIndex` e il `rawText` originale.
+   */
+  public static normalizeToStructuredOcrText(rawText: string): NormalizedOcrText {
+    const normResult = this.normalize(rawText);
+    const rawLines = normResult.lines;
+    const lines: NormalizedOcrLine[] = [];
+
+    let currentRawIdx = 0;
+    for (const normLine of normResult.normalizedLines) {
+      let matchedRawIdx = currentRawIdx;
+      for (let r = currentRawIdx; r < rawLines.length; r++) {
+        const rawTrimmed = rawLines[r].trim();
+        if (rawTrimmed.length > 0) {
+          matchedRawIdx = r;
+          currentRawIdx = r + 1;
+          break;
+        }
+      }
+      lines.push({
+        rawIndex: matchedRawIdx,
+        rawText: rawLines[matchedRawIdx] ?? normLine,
+        normalizedText: normLine,
+      });
+    }
+
+    return {
+      rawText: normResult.originalText,
+      normalizedText: normResult.normalizedText,
+      rawLines,
+      lines,
+      transformations: normResult.transformations,
+    };
+  }
 
   public static normalize(rawText: string): TextNormalizationResult {
     if (!rawText || rawText.trim().length === 0) {

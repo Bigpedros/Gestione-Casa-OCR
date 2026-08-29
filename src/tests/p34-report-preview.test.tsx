@@ -21,7 +21,7 @@ describe('P-34: Anteprima del Report economico (UI R02)', () => {
     const createBtn = screen.getByRole('button', { name: /Crea report/i });
     const openSavedBtn = screen.getByRole('button', { name: /Apri report salvato/i });
     const printBtn = screen.getByRole('button', { name: /Stampa il report visualizzato/i });
-    const exportPdfBtn = screen.getByRole('button', { name: /Esporta o Stampa in PDF/i });
+    const exportPdfBtn = screen.getByRole('button', { name: /Esporta in formato PDF/i });
     const saveBtn = screen.getByRole('button', { name: /Salva questo report/i });
     const closeMonthBtn = screen.getByRole('button', { name: /Chiudi Mese/i });
 

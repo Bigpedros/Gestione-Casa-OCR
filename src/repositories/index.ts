@@ -31,6 +31,8 @@ import type {
   RecordMetadata,
   Product,
   ProductAlias,
+  PaymentMethodDefinition,
+  PaymentEvidence,
 } from '../types';
 
 export const contributorRepository = {
@@ -783,7 +785,7 @@ export const ocrReceiptLineRepository = {
   delete: (id: string) => db.ocrReceiptLines.delete(id),
   deleteUnconfirmedByOcrProcessId: async (ocrProcessId: string) => {
     const lines = await db.ocrReceiptLines.where('ocrProcessId').equals(ocrProcessId).toArray();
-    const toDelete = lines.filter((l) => l.reviewStatus === 'pending' || l.reviewStatus === 'rejected');
+    const toDelete = lines.filter((l) => l.reviewStatus !== 'confirmed');
     const idsToDelete = toDelete.map((l) => l.id);
     if (idsToDelete.length > 0) {
       await db.ocrReceiptLines.bulkDelete(idsToDelete);
@@ -868,16 +870,32 @@ export const documentSessionRepository = {
   delete: async (id: string) => {
     await db.transaction(
       'rw',
-      [db.documentSessions, db.documentPageSegments, db.attachments, db.ocrProcesses],
+      [db.documentSessions, db.documentPageSegments, db.attachments, db.ocrProcesses, db.ocrReceiptLines],
       async () => {
         const session = await db.documentSessions.get(id);
+        if (!session) return;
+        if (session.ocrProcessId) {
+          const proc = await db.ocrProcesses.get(session.ocrProcessId);
+          if (proc?.expenseId) {
+            throw new Error('Impossibile eliminare una scansione già registrata a bilancio');
+          }
+        }
         const segments = await db.documentPageSegments.where('sessionId').equals(id).toArray();
         for (const seg of segments) {
           if (seg.attachmentId) {
-            await db.attachments.delete(seg.attachmentId);
+            const att = await db.attachments.get(seg.attachmentId);
+            if (
+              att &&
+              (att.entityType === 'documentPageSegment' ||
+                att.entityType === 'documentSession' ||
+                att.entityType === 'unlinked')
+            ) {
+              await db.attachments.delete(seg.attachmentId);
+            }
           }
         }
-        if (session?.ocrProcessId) {
+        if (session.ocrProcessId) {
+          await db.ocrReceiptLines.where('ocrProcessId').equals(session.ocrProcessId).delete();
           await db.ocrProcesses.delete(session.ocrProcessId);
         }
         await db.documentPageSegments.where('sessionId').equals(id).delete();
@@ -1318,6 +1336,88 @@ export const localLicenseRepository = {
   },
   clear: (): Promise<void> => db.localLicenses.delete('current'),
 };
+
+export const paymentMethodRepository = {
+  getAll: (): Promise<PaymentMethodDefinition[]> => db.paymentMethods.toArray(),
+  getActive: async (): Promise<PaymentMethodDefinition[]> => {
+    const all = await db.paymentMethods.toArray();
+    return all.filter((pm) => Boolean(pm.enabled));
+  },
+  getById: (id: string): Promise<PaymentMethodDefinition | undefined> => db.paymentMethods.get(id),
+  getByCode: (code: string): Promise<PaymentMethodDefinition | undefined> =>
+    db.paymentMethods.where('code').equals(code).first(),
+  create: async (
+    data: Omit<PaymentMethodDefinition, 'id' | 'metadata'> & { id?: string }
+  ): Promise<PaymentMethodDefinition> => {
+    const now = new Date().toISOString();
+    const id = data.id || `pm-custom-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+    const item: PaymentMethodDefinition = {
+      ...data,
+      id,
+      metadata: { createdAt: now, updatedAt: now, version: 1 },
+    };
+    await db.paymentMethods.add(item);
+    return item;
+  },
+  update: async (
+    id: string,
+    data: Partial<PaymentMethodDefinition>
+  ): Promise<PaymentMethodDefinition> => {
+    const now = new Date().toISOString();
+    const existing = await db.paymentMethods.get(id);
+    if (!existing) throw new Error(`Metodo di pagamento ${id} non trovato`);
+    const updated: PaymentMethodDefinition = {
+      ...existing,
+      ...data,
+      metadata: {
+        ...existing.metadata,
+        updatedAt: now,
+        version: existing.metadata.version + 1,
+      },
+    };
+    await db.paymentMethods.put(updated);
+    return updated;
+  },
+  delete: (id: string): Promise<void> => db.paymentMethods.delete(id),
+};
+
+export const paymentEvidenceRepository = {
+  getAll: (): Promise<PaymentEvidence[]> => db.paymentEvidences.toArray(),
+  getById: (id: string): Promise<PaymentEvidence | undefined> => db.paymentEvidences.get(id),
+  getByExpenseId: (expenseId: string): Promise<PaymentEvidence[]> =>
+    db.paymentEvidences.where('expenseId').equals(expenseId).toArray(),
+  create: async (
+    data: Omit<PaymentEvidence, 'id' | 'metadata'> & { id?: string }
+  ): Promise<PaymentEvidence> => {
+    const now = new Date().toISOString();
+    const id = data.id || `pe-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+    const item: PaymentEvidence = {
+      ...data,
+      id,
+      metadata: { createdAt: now, updatedAt: now, version: 1 },
+    };
+    await db.paymentEvidences.add(item);
+    return item;
+  },
+  update: async (id: string, data: Partial<PaymentEvidence>): Promise<PaymentEvidence> => {
+    const now = new Date().toISOString();
+    const existing = await db.paymentEvidences.get(id);
+    if (!existing) throw new Error(`PaymentEvidence ${id} non trovata`);
+    const updated: PaymentEvidence = {
+      ...existing,
+      ...data,
+      metadata: {
+        ...existing.metadata,
+        updatedAt: now,
+        version: existing.metadata.version + 1,
+      },
+    };
+    await db.paymentEvidences.put(updated);
+    return updated;
+  },
+  delete: (id: string): Promise<void> => db.paymentEvidences.delete(id),
+};
+
 
 
 

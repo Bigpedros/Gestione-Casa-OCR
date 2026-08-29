@@ -7,6 +7,7 @@ import {
   supplierRepository,
   projectRepository,
   documentSessionRepository,
+  ocrProcessRepository,
   fixedExpenseRepository,
 } from '../../repositories';
 import { budgetService } from '../../services/budgetService';
@@ -76,7 +77,32 @@ export const ExpensesPage: React.FC = () => {
   const pendingReviewSessions = useLiveQuery(
     async () => {
       const all = await documentSessionRepository.getAll();
-      return all.filter((s) => s.status === 'ready' || s.status === 'ready_for_review');
+      const ocrProcesses = await ocrProcessRepository.getAll();
+      const ocrMap = new Map(ocrProcesses.map((p) => [p.id, p]));
+
+      return all
+        .filter((s) => {
+          if (s.status === 'reviewed' || s.status === 'cancelled' || s.expenseId) return false;
+          const proc = s.ocrProcessId ? ocrMap.get(s.ocrProcessId) : undefined;
+          if (proc?.expenseId) return false;
+          return s.status === 'ready' || s.status === 'ready_for_review' || s.status === 'completed' || s.status === 'failed';
+        })
+        .map((s) => {
+          const proc = s.ocrProcessId ? ocrMap.get(s.ocrProcessId) : undefined;
+          const isReady = Boolean(
+            (s.status === 'ready_for_review' || s.status === 'completed') &&
+            proc?.status === 'completed' &&
+            proc?.rawText &&
+            proc.rawText.trim().length > 0
+          );
+          const isFailed = s.status === 'failed' || proc?.status === 'failed';
+          return {
+            ...s,
+            ocrProcess: proc,
+            isReady,
+            isFailed,
+          };
+        });
     },
     [],
   );
@@ -537,34 +563,58 @@ export const ExpensesPage: React.FC = () => {
       </div>
 
       {/* Banner per documenti OCR in attesa di revisione */}
-      {pendingReviewSessions && pendingReviewSessions.length > 0 && (
-        <div className="p-4 bg-amber-50/90 border border-amber-200 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-xs">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-amber-500 text-white flex items-center justify-center shrink-0 shadow-xs">
-              <FileSearch className="w-5 h-5" />
+      {pendingReviewSessions && pendingReviewSessions.length > 0 && (() => {
+        const readyCount = pendingReviewSessions.filter((s) => s.isReady).length;
+        const failedCount = pendingReviewSessions.filter((s) => s.isFailed).length;
+        const pendingCount = pendingReviewSessions.length - readyCount - failedCount;
+
+        let title = `Documenti OCR pronti per la revisione (${readyCount})`;
+        let subtitle = 'Verifica ed approva i dati estratti dai documenti prima di procedere al salvataggio finale.';
+        let buttonText = 'Rivedi dati estratti';
+
+        if (readyCount === 0 && pendingCount > 0) {
+          title = `Documenti in attesa di elaborazione OCR (${pendingCount})`;
+          subtitle = 'Documenti acquisiti non ancora elaborati. Apri per avviare il riconoscimento o completare la revisione.';
+          buttonText = 'Avvia ed elabora OCR';
+        } else if (readyCount === 0 && failedCount > 0) {
+          title = `Documenti con errore OCR (${failedCount})`;
+          subtitle = 'Uno o più documenti hanno riscontrato un errore durante la scansione. Apri per riprovare o modificare.';
+          buttonText = 'Gestisci errori OCR';
+        } else if (readyCount > 0 && (pendingCount > 0 || failedCount > 0)) {
+          title = `Documenti OCR: ${readyCount} pronti per la revisione, ${pendingCount + failedCount} da completare`;
+          subtitle = 'Verifica i documenti elaborati o gestisci le acquisizioni in sospeso.';
+          buttonText = 'Rivedi documenti';
+        }
+
+        return (
+          <div className="p-4 bg-amber-50/90 border border-amber-200 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-xs">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-amber-500 text-white flex items-center justify-center shrink-0 shadow-xs">
+                <FileSearch className="w-5 h-5" />
+              </div>
+              <div>
+                <h4 className="font-bold text-sm text-slate-900">
+                  {title}
+                </h4>
+                <p className="text-xs text-slate-600">
+                  {subtitle}
+                </p>
+              </div>
             </div>
-            <div>
-              <h4 className="font-bold text-sm text-slate-900">
-                Documenti OCR pronti per la revisione ({pendingReviewSessions.length})
-              </h4>
-              <p className="text-xs text-slate-600">
-                Verifica ed approva i dati estratti dai documenti prima di procedere al salvataggio finale.
-              </p>
-            </div>
+            <Button
+              variant="amber"
+              icon={<FileSearch className="w-4 h-4" />}
+              onClick={() => {
+                setReviewSessionId(pendingReviewSessions[0].id);
+                setReviewOcrProcessId(pendingReviewSessions[0].ocrProcessId || null);
+                setIsReviewModalOpen(true);
+              }}
+            >
+              {buttonText}
+            </Button>
           </div>
-          <Button
-            variant="amber"
-            icon={<FileSearch className="w-4 h-4" />}
-            onClick={() => {
-              setReviewSessionId(pendingReviewSessions[0].id);
-              setReviewOcrProcessId(pendingReviewSessions[0].ocrProcessId || null);
-              setIsReviewModalOpen(true);
-            }}
-          >
-            Rivedi dati estratti
-          </Button>
-        </div>
-      )}
+        );
+      })()}
 
       {/* Filtri Bar Periodo (Mese, Anno) */}
       <div className="flex flex-wrap items-center justify-between gap-3 bg-white p-4 rounded-2xl border border-slate-200 shadow-xs">

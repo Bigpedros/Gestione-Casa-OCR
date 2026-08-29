@@ -354,9 +354,31 @@ export class ProductClassificationService {
     const proposedBrand = lineFp.brand;
     const proposedUom = lineFp.unitOfMeasure;
 
+    const lineWarnings: string[] = Array.isArray((line.metadata as Record<string, any>)?.warnings)
+      ? (line.metadata as Record<string, any>).warnings
+      : [];
+    const hasUnsafeWarnings =
+      lineWarnings.includes('VAT_PRICE_AMBIGUOUS') ||
+      lineWarnings.includes('PRICE_NOT_DETECTED') ||
+      lineWarnings.includes('LOW_CONFIDENCE') ||
+      lineWarnings.includes('OCR_TEXT_SUSPECT') ||
+      lineWarnings.includes('DISCOUNT_VALUE_NOT_DETECTED') ||
+      lineWarnings.includes('prezzo_riga_non_rilevato');
+
+    const isZeroPriceOrSuspicious =
+      line.unitPrice === 0 ||
+      line.lineTotal === 0 ||
+      (line.confidence !== undefined && line.confidence < 45) ||
+      hasUnsafeWarnings ||
+      alphaNumDesc.length < 3;
+
     const isAdjustmentOrDiscountLine =
       line.lineTotal < 0 ||
-      /SCONTO|ABBUONO|PROMO|PROMOZIONE|COUPON|BUONO|ARROTONDAMENTO|RESO|STORNO|RESTITUITO/i.test(line.description || line.originalText);
+      /SCONTO|ABBUONO|PROMO|PROMOZIONE|COUPON|BUONO|ARROTONDAMENTO|RESO|STORNO|RESTITUITO/i.test(
+        line.description || line.originalText
+      );
+
+    const shouldPreventNewProductProposal = isAdjustmentOrDiscountLine || isZeroPriceOrSuspicious;
 
     return {
       lineId: line.id,
@@ -366,12 +388,12 @@ export class ProductClassificationService {
       lineTotal: line.lineTotal,
       matchedProduct: null,
       matchedAlias: null,
-      confidence: topCandidate ? topCandidate.score : 0,
-      confidenceLevel: isAdjustmentOrDiscountLine ? 'unresolved' : confidenceLevel,
+      confidence: topCandidate ? topCandidate.score : (line.confidence ?? 0),
+      confidenceLevel: shouldPreventNewProductProposal ? 'unresolved' : confidenceLevel,
       matchType: 'none',
       proposedCategory: defaultUnclassifiedCat,
       proposedSubcategory: null,
-      proposedNewProduct: isAdjustmentOrDiscountLine
+      proposedNewProduct: shouldPreventNewProductProposal
         ? null
         : {
             normalizedName: normDesc,
@@ -387,10 +409,10 @@ export class ProductClassificationService {
               : 'Nessuna corrispondenza trovata nel catalogo prodotti',
           },
       candidateMatches: uniqueCandidates,
-      hasConflict,
-      conflictType,
+      hasConflict: hasConflict || isZeroPriceOrSuspicious,
+      conflictType: conflictType || (isZeroPriceOrSuspicious ? 'short_description' : undefined),
       conflictDetails,
-      warnings,
+      warnings: Array.from(new Set([...warnings, ...lineWarnings])),
     };
   }
 
@@ -494,51 +516,85 @@ export class ProductClassificationService {
               createdAliasesCount++;
             }
           } else if (decision.action === 'create_new') {
-            // Controllo anti-duplicato per nome normalizzato
-            const existingProduct = await productRepository.getByNormalizedName(cleanNormName);
+            const isDiscountOrReturn =
+              decision.lineTotal < 0 ||
+              decision.unitPrice < 0 ||
+              /\b(?:SCONTO|ABBUONO|PROMO|PROMOZIONE|COUPON|BUONO|ARROTONDAMENTO|RESO|STORNO)\b/i.test(rawDesc);
 
-            if (existingProduct) {
-              finalProductId = existingProduct.id;
-            } else {
-              // Creazione nuovo prodotto solo su conferma esplicita
-              const details = decision.newProductDetails;
-              const newProd = await productRepository.create({
-                displayName: details?.displayName || decision.description,
-                normalizedName: cleanNormName,
-                brand: details?.brand || ProductFingerprintService.extractBrand(rawDesc) || null,
-                barcode: details?.barcode || ProductFingerprintService.extractBarcode(rawDesc) || null,
-                unitOfMeasure:
-                  details?.unitOfMeasure ||
-                  ProductFingerprintService.extractUnitOfMeasure(rawDesc).unitOfMeasure ||
-                  null,
-                categoryId: decision.categoryId || details?.categoryId || null,
-                subcategoryId: decision.subcategoryId || details?.subcategoryId || null,
-              });
-              finalProductId = newProd.id;
-              createdProductsCount++;
-            }
+            // Impedisce la creazione a catalogo per sconti, resi, righe con percentuali IVA o importo non valido
+            const hasVatInName = /\b(?:22(?:[.,]00)?|10(?:[.,]00)?|4(?:[.,]00)?|5(?:[.,]00)?)\s*%/i.test(rawDesc);
+            const isValidForCatalog =
+              !isDiscountOrReturn &&
+              !hasVatInName &&
+              decision.unitPrice > 0;
 
-            // Crea alias per il nuovo prodotto creato o riutilizzato
-            const existingAliases = await productAliasRepository.getByProduct(finalProductId);
-            const aliasExists = existingAliases.some(
-              (a) => a.normalizedText === normText || a.originalText.toUpperCase().trim() === rawDesc.toUpperCase().trim()
-            );
+            if (isValidForCatalog) {
+              // Controllo anti-duplicato per nome normalizzato
+              const existingProduct = await productRepository.getByNormalizedName(cleanNormName);
 
-            if (!aliasExists && normText.length > 1) {
-              await productAliasRepository.create({
-                productId: finalProductId,
-                originalText: decision.originalText || decision.description,
-                normalizedText: normText,
-                supplierId: supplierId || null,
-                confidence: 100,
-                confirmedByUser: true,
-              });
-              createdAliasesCount++;
+              if (existingProduct) {
+                finalProductId = existingProduct.id;
+              } else {
+                // Creazione nuovo prodotto solo su conferma esplicita
+                const details = decision.newProductDetails;
+                let cleanDisplayName = (details?.displayName || decision.description || '')
+                  .replace(/\b(?:22(?:[.,]00)?|10(?:[.,]00)?|4(?:[.,]00)?|5(?:[.,]00)?)\s*%/gi, '')
+                  .replace(/\s+/g, ' ')
+                  .trim();
+
+                if (!cleanDisplayName) cleanDisplayName = decision.description;
+
+                const newProd = await productRepository.create({
+                  displayName: cleanDisplayName,
+                  normalizedName: cleanNormName,
+                  brand: details?.brand || ProductFingerprintService.extractBrand(rawDesc) || null,
+                  barcode: details?.barcode || ProductFingerprintService.extractBarcode(rawDesc) || null,
+                  unitOfMeasure:
+                    details?.unitOfMeasure ||
+                    ProductFingerprintService.extractUnitOfMeasure(rawDesc).unitOfMeasure ||
+                    null,
+                  categoryId: decision.categoryId || details?.categoryId || null,
+                  subcategoryId: decision.subcategoryId || details?.subcategoryId || null,
+                });
+                finalProductId = newProd.id;
+                createdProductsCount++;
+              }
+
+              // Crea alias per il nuovo prodotto creato o riutilizzato
+              const existingAliases = await productAliasRepository.getByProduct(finalProductId);
+              const aliasExists = existingAliases.some(
+                (a) => a.normalizedText === normText || a.originalText.toUpperCase().trim() === rawDesc.toUpperCase().trim()
+              );
+
+              if (!aliasExists && normText.length > 1) {
+                await productAliasRepository.create({
+                  productId: finalProductId,
+                  originalText: decision.originalText || decision.description,
+                  normalizedText: normText,
+                  supplierId: supplierId || null,
+                  confidence: 100,
+                  confirmedByUser: true,
+                });
+                createdAliasesCount++;
+              }
             }
           }
 
           // Aggiorna o crea riga scontrino nel DB
           if (decision.lineId && !decision.lineId.startsWith('temp-line-')) {
+            const existingLine = await ocrReceiptLineRepository.getById(decision.lineId);
+            const prevMeta = (existingLine?.metadata as Record<string, any>) || {};
+            const cleanWarnings = Array.isArray(prevMeta.warnings)
+              ? prevMeta.warnings.filter(
+                  (w: string) =>
+                    w !== 'PRICE_NOT_DETECTED' &&
+                    w !== 'PRICE_ASSOCIATION_UNCERTAIN' &&
+                    w !== 'VAT_PRICE_AMBIGUOUS' &&
+                    w !== 'DISCOUNT_VALUE_NOT_DETECTED' &&
+                    w !== 'prezzo_riga_non_rilevato'
+                )
+              : [];
+
             await ocrReceiptLineRepository.update(decision.lineId, {
               description: decision.description,
               quantity: decision.quantity,
@@ -546,6 +602,11 @@ export class ProductClassificationService {
               lineTotal: decision.lineTotal,
               productId: finalProductId,
               reviewStatus: 'confirmed',
+              metadata: {
+                ...prevMeta,
+                warnings: decision.lineTotal > 0 ? cleanWarnings : prevMeta.warnings,
+                priceNotDetected: decision.lineTotal > 0 ? false : prevMeta.priceNotDetected,
+              } as any,
             });
             updatedLinesCount++;
           } else {
@@ -559,6 +620,10 @@ export class ProductClassificationService {
               confidence: decision.confidence || 100,
               reviewStatus: 'confirmed',
               productId: finalProductId,
+              metadata: {
+                warnings: [],
+                priceNotDetected: false,
+              } as any,
             });
             updatedLinesCount++;
           }
@@ -808,6 +873,19 @@ export class ProductClassificationService {
             }
 
             if (decision.lineId && !decision.lineId.startsWith('temp-line-')) {
+              const existingLine = await ocrReceiptLineRepository.getById(decision.lineId);
+              const prevMeta = (existingLine?.metadata as Record<string, any>) || {};
+              const cleanWarnings = Array.isArray(prevMeta.warnings)
+                ? prevMeta.warnings.filter(
+                    (w: string) =>
+                      w !== 'PRICE_NOT_DETECTED' &&
+                      w !== 'PRICE_ASSOCIATION_UNCERTAIN' &&
+                      w !== 'VAT_PRICE_AMBIGUOUS' &&
+                      w !== 'DISCOUNT_VALUE_NOT_DETECTED' &&
+                      w !== 'prezzo_riga_non_rilevato'
+                  )
+                : [];
+
               await ocrReceiptLineRepository.update(decision.lineId, {
                 description: decision.description,
                 quantity: decision.quantity,
@@ -815,6 +893,11 @@ export class ProductClassificationService {
                 lineTotal: decision.lineTotal,
                 productId: finalProductId,
                 reviewStatus: 'confirmed',
+                metadata: {
+                  ...prevMeta,
+                  warnings: decision.lineTotal > 0 ? cleanWarnings : prevMeta.warnings,
+                  priceNotDetected: decision.lineTotal > 0 ? false : prevMeta.priceNotDetected,
+                } as any,
               });
             } else {
               await ocrReceiptLineRepository.create({
@@ -827,6 +910,10 @@ export class ProductClassificationService {
                 confidence: decision.confidence || 100,
                 reviewStatus: 'confirmed',
                 productId: finalProductId,
+                metadata: {
+                  warnings: [],
+                  priceNotDetected: false,
+                } as any,
               });
             }
           }
@@ -836,6 +923,35 @@ export class ProductClassificationService {
         const ocrLines = await ocrReceiptLineRepository.getByOcrProcessId(ocrProc.id);
         const confirmedLines = ocrLines.filter((l) => l.reviewStatus === 'confirmed');
         const linesToImport = confirmedLines.length > 0 ? confirmedLines : ocrLines;
+
+        // REGOLA CECCOTTI BLOCCANTE: Prezzo non rilevato ≠ Prezzo Zero
+        // Una riga con prezzo sconosciuto/non rilevato non può produrre un ExpenseItem da € 0,00.
+        // L'approvazione di una semplice discrepanza contabile NON bypassa questo blocco.
+        for (const line of linesToImport) {
+          const lineDesc = line.description || line.originalText || 'Riga articolo';
+          const lineMeta = (line.metadata as Record<string, any>) || {};
+          const lineWarns: string[] = Array.isArray(lineMeta.warnings) ? lineMeta.warnings : [];
+
+          const isModifierOrDiscount =
+            (line.lineTotal && line.lineTotal < 0) ||
+            /SCONTO|PROMO|ABBUONO|COUPON|BUONO|RESO|STORNO|ARROTONDAMENTO/i.test(lineDesc);
+
+          const hasUnresolvedPriceWarning =
+            lineWarns.includes('PRICE_NOT_DETECTED') ||
+            lineWarns.includes('PRICE_ASSOCIATION_UNCERTAIN') ||
+            lineWarns.includes('VAT_PRICE_AMBIGUOUS') ||
+            lineWarns.includes('DISCOUNT_VALUE_NOT_DETECTED') ||
+            lineWarns.includes('prezzo_riga_non_rilevato') ||
+            lineMeta.priceNotDetected === true;
+
+          if (!isModifierOrDiscount && (line.lineTotal <= 0 || line.unitPrice <= 0 || hasUnresolvedPriceWarning)) {
+            if (hasUnresolvedPriceWarning) {
+              throw new Error(
+                `Impossibile confermare la registrazione contabile: la riga "${lineDesc}" ha un prezzo non rilevato o ambiguo dall'OCR. Inserisci un prezzo valido prima di confermare.`
+              );
+            }
+          }
+        }
 
         if (!supplierId && effectiveSupplierName) {
           const matchedSup = await supplierRepository.getByNameOrAlias(effectiveSupplierName);

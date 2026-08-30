@@ -12,3 +12,4 @@ export * from './modules/DiscountParser';
 export * from './modules/PaymentMethodParser';
 export * from './modules/LineItemParser';
 export * from './modules/ReceiptConsistencyValidator';
+export * from './modules/PaymentEvidenceParser';

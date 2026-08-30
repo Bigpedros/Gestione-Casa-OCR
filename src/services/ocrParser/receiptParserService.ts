@@ -12,6 +12,8 @@ import {
   LineItemComparisonDifference,
   LineItemParseResultV2,
   ReceiptZones,
+  ShadowPaymentEvidenceResult,
+  PaymentEvidenceParseResult,
 } from './types';
 import { TextNormalizationModule } from './modules/TextNormalizationModule';
 import { SupplierParser } from './modules/SupplierParser';
@@ -28,6 +30,7 @@ import { ReceiptConsistencyValidator } from './modules/ReceiptConsistencyValidat
 import { DocumentTypeClassifier } from './modules/DocumentTypeClassifier';
 import { ReceiptZoneSegmenter } from './modules/ReceiptZoneSegmenter';
 import { LineItemParserV2 } from './modules/LineItemParserV2';
+import { PaymentEvidenceParser } from './modules/PaymentEvidenceParser';
 import { productClassificationService } from '../productClassification/ProductClassificationService';
 import { DocumentCategory } from '../../types';
 
@@ -45,6 +48,8 @@ class ReceiptParserService {
 
   private lastShadowComparison: ShadowV2ComparisonResult | null = null;
   private lastShadowResult: LineItemParseResultV2 | null = null;
+  private lastPaymentEvidenceShadow: ShadowPaymentEvidenceResult | null = null;
+  private lastPaymentEvidenceShadowResult: PaymentEvidenceParseResult | null = null;
 
   /**
    * Restituisce l'ultimo risultato del confronto shadow V1 vs V2.
@@ -58,6 +63,20 @@ class ReceiptParserService {
    */
   public getLastShadowResult(): LineItemParseResultV2 | null {
     return this.lastShadowResult;
+  }
+
+  /**
+   * Restituisce l'ultimo risultato del parsing PaymentEvidence in shadow mode (Fase P4-C1).
+   */
+  public getLastPaymentEvidenceShadow(): ShadowPaymentEvidenceResult | null {
+    return this.lastPaymentEvidenceShadow;
+  }
+
+  /**
+   * Restituisce l'ultimo risultato puro PaymentEvidenceParseResult in shadow mode.
+   */
+  public getLastPaymentEvidenceShadowResult(): PaymentEvidenceParseResult | null {
+    return this.lastPaymentEvidenceShadowResult;
   }
 
   /**
@@ -181,6 +200,12 @@ class ReceiptParserService {
         differences: [],
       };
       this.lastShadowResult = null;
+      this.lastPaymentEvidenceShadow = {
+        executed: false,
+        documentCategory,
+        result: null,
+      };
+      this.lastPaymentEvidenceShadowResult = null;
 
       return this.createEmptyDraft(context.overallOcrConfidence, [
         {
@@ -280,10 +305,58 @@ class ReceiptParserService {
     this.lastShadowComparison = shadowComparison;
     this.lastShadowResult = shadowV2Result;
 
+    // =========================================================================
+    // FASE P4-C2: INTEGRAZIONE UFFICIALE DEL PAYMENT EVIDENCE PARSER
+    // - Esecuzione per documentCategory === 'PAYMENT_PROOF'.
+    // - Per COMMERCIAL_RECEIPT, INVOICE_OR_BILL, UNKNOWN: NON viene eseguito
+    //   e paymentEvidence è impostato a null.
+    // - paymentEvidence diventa parte del risultato ufficiale ParsedReceiptDraft
+    //   per i documenti PAYMENT_PROOF, senza creare righe sintetiche fittizie,
+    //   senza persistenza contabile Dexie (demandata a P4-C3) e senza mappare
+    //   artificialmente i campi.
+    // - Se si verifica un'eccezione tecnica runtime, la pipeline prosegue senza
+    //   crashare impostando paymentEvidence a null e registrando l'errore.
+    // =========================================================================
+    let shadowPaymentEvidence: ShadowPaymentEvidenceResult | null = null;
+    let officialPaymentEvidence: PaymentEvidenceParseResult | null = null;
+
+    if (documentCategory === 'PAYMENT_PROOF') {
+      try {
+        const structuredNorm = TextNormalizationModule.normalizeToStructuredOcrText(normResult.originalText);
+        const peResult = PaymentEvidenceParser.parse(structuredNorm, classification);
+        officialPaymentEvidence = peResult;
+        shadowPaymentEvidence = {
+          executed: true,
+          documentCategory,
+          result: peResult,
+        };
+      } catch (technicalErr) {
+        console.warn('[ReceiptParserService] Errore tecnico runtime in PaymentEvidenceParser:', technicalErr);
+        officialPaymentEvidence = null;
+        shadowPaymentEvidence = {
+          executed: true,
+          documentCategory,
+          result: null,
+          error: String(technicalErr),
+        };
+      }
+    } else {
+      officialPaymentEvidence = null;
+      shadowPaymentEvidence = {
+        executed: false,
+        documentCategory,
+        result: null,
+      };
+    }
+
+    this.lastPaymentEvidenceShadow = shadowPaymentEvidence;
+    this.lastPaymentEvidenceShadowResult = shadowPaymentEvidence.result;
+
     context.metadata = {
       ...context.metadata,
       shadowV2: shadowV2Result,
       shadowComparison,
+      shadowPaymentEvidence,
       isV2Official: documentCategory === 'COMMERCIAL_RECEIPT' && !fallbackUsed,
       fallbackUsed,
     };
@@ -323,6 +396,7 @@ class ReceiptParserService {
         }
       ] : [],
       overallConfidence: preliminaryConfidence,
+      paymentEvidence: officialPaymentEvidence,
     };
 
     // 3. Esecuzione del modulo di validazione coerenza

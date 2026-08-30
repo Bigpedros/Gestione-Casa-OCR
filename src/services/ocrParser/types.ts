@@ -62,6 +62,7 @@ export interface ParsedReceiptDraft {
   lines: ParsedReceiptLine[];
   warnings: ParserWarning[];
   overallConfidence: number;
+  paymentEvidence?: PaymentEvidenceParseResult | null;
 }
 
 export interface ReceiptParserModule<T> {
@@ -316,5 +317,17 @@ export interface ShadowV2ComparisonResult {
     trailingMetadataCount: number;
     ambiguousCount: number;
   };
+}
+
+/**
+ * =========================================================================
+ * ARCHITETTURA REGOLA CECCOTTI - BLOCCO P4-C1: SHADOW MODE PAYMENT EVIDENCE
+ * =========================================================================
+ */
+export interface ShadowPaymentEvidenceResult {
+  readonly executed: boolean;
+  readonly documentCategory: DocumentCategory;
+  readonly result: PaymentEvidenceParseResult | null;
+  readonly error?: string;
 }
 

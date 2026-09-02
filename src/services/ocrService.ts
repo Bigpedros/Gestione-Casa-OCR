@@ -196,11 +196,12 @@ class OCRService {
             },
           });
 
-          // Configurazione parametri Tesseract per scontrini a colonne
+          // Configurazione parametri Tesseract per scontrini e ricevute POS (colonna singola, conservazione spazi)
           try {
             await worker.setParameters({
               preserve_interword_spaces: '1',
               user_defined_dpi: '300',
+              tessedit_pageseg_mode: '4' as any,
             });
           } catch (paramErr) {
             console.warn('[OCRService] worker.setParameters non critico fallito:', paramErr);
@@ -316,8 +317,9 @@ class OCRService {
                 dataUrl: v.dataUrl,
               });
 
-              // Se la prima variante ha già un punteggio eccellente (> 85), possiamo terminare in anticipo per velocità
-              if (evaluation.overallScore >= 85 && conf >= 70) {
+              // Se la prima variante ha già un punteggio eccellente (> 88), confidenza elevata e importo/totale rilevato, possiamo terminare in anticipo
+              const hasAmountEvidence = /\b(?:TOTALE|IMPORTO|IMP\.?|EUR|EURO|€)\b/i.test(txt) && /\b\d+[.,]\d{2}\b/.test(txt);
+              if (evaluation.overallScore >= 88 && conf >= 75 && hasAmountEvidence) {
                 break;
               }
             } catch (vErr) {

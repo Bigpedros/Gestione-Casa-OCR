@@ -618,9 +618,9 @@ export class DocumentTypeClassifier {
       }
     }
 
-    // Esito / Transazione eseguita
+    // Esito / Transazione eseguita / PIN Verificato
     const outcomeRegex =
-      /TRANSAZIONE\s+ESEGUITA|OPERAZIONE\s+ESEGUITA|PAGAMENTO\s+APPROVATO|TRANSAZIONE\s+ACCETTATA|PAGAMENTO\s+ESEGUITO|ESITO\s*:\s*OK|ESITO\s+POSITIVO|APPROVED/i;
+      /TRANSAZIONE\s+ESEGUITA|OPERAZIONE\s+ESEGUITA|PAGAMENTO\s+APPROVATO|TRANSAZIONE\s+ACCETTATA|PAGAMENTO\s+ESEGUITO|PIN\s+VERIFICATO|ESITO\s*:\s*OK|ESITO\s+POSITIVO|APPROVED/i;
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
       if (outcomeRegex.test(line.normalizedText)) {
@@ -633,6 +633,16 @@ export class DocumentTypeClassifier {
         });
         break;
       }
+    }
+
+    // Protocolli e circuiti di pagamento elettronico / POS (es. SEPA-FAST, PAGOBANCOMAT, C-LESS)
+    if (/\b(?:SEPA-FAST|SEPA\s+FAST|PAGOBANCOMAT|BANCOMAT\s+C-LESS|DEBIT\s+MASTERCARD|VISA\s+DEBIT)\b/i.test(upperFull)) {
+      evidences.push({
+        category: 'PAYMENT_PROOF',
+        signal: 'POS_CIRCUIT_OR_PROTOCOL',
+        weight: 25,
+        rawSnippet: 'Circuito / Protocollo POS rilevato',
+      });
     }
 
     // Quietanza di pagamento / Attestazione

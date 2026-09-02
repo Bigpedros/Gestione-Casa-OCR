@@ -680,7 +680,10 @@ export class ProductClassificationService {
     }
 
     // 2. PRECONDIZIONI & IDEMPOTENZA (Punto 11 - Sezione 3)
-    if (!ocrProc.confirmedByUser && (!decisions || decisions.length === 0)) {
+    const docCategory = session?.detectedDocumentCategory || (ocrProc.metadata as Record<string, any>)?.documentCategory;
+    const isPaymentProof = docCategory === 'PAYMENT_PROOF';
+
+    if (!ocrProc.confirmedByUser && !isPaymentProof && (!decisions || decisions.length === 0)) {
       throw new Error(
         `Impossibile creare la registrazione contabile: la revisione OCR non è stata ancora confermata dall'utente`
       );
@@ -746,6 +749,8 @@ export class ProductClassificationService {
       [
         db.categories,
         db.documentSessions,
+        db.documentPageSegments,
+        db.attachments,
         db.ocrProcesses,
         db.ocrReceiptLines,
         db.products,
@@ -1102,6 +1107,47 @@ export class ProductClassificationService {
           confirmedByUser: true,
         });
 
+        // Propagazione collegamento allegati (Attachment -> Expense)
+        const attachmentIdsToLink = new Set<string>();
+        if (ocrProc.attachmentId) {
+          attachmentIdsToLink.add(ocrProc.attachmentId);
+        }
+        if (session?.id) {
+          const sessionSegments = await db.documentPageSegments
+            .where('sessionId')
+            .equals(session.id)
+            .toArray();
+          for (const seg of sessionSegments) {
+            if (seg.attachmentId) {
+              attachmentIdsToLink.add(seg.attachmentId);
+            }
+          }
+          // Supporta anche allegati creati con entityId === session.id
+          const directSessionAttachments = await db.attachments
+            .where('entityId')
+            .equals(session.id)
+            .toArray();
+          for (const att of directSessionAttachments) {
+            attachmentIdsToLink.add(att.id);
+          }
+        }
+
+        for (const attId of attachmentIdsToLink) {
+          const existingAtt = await db.attachments.get(attId);
+          if (existingAtt) {
+            await db.attachments.update(attId, {
+              entityType: 'expense',
+              entityId: expense.id,
+              expenseId: expense.id,
+              metadata: {
+                ...existingAtt.metadata,
+                updatedAt: now,
+                version: (existingAtt.metadata?.version || 1) + 1,
+              },
+            });
+          }
+        }
+
         // Audit Log finale esteso (Punto 11 - Sezione 7)
         await db.auditLogs.add({
           id: `audit-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
@@ -1138,3 +1184,68 @@ export class ProductClassificationService {
 }
 
 export const productClassificationService = new ProductClassificationService();
+
+/**
+ * Funzione di self-healing per riallineare i collegamenti Attachment -> Expense
+ * generati da sessioni OCR pregresse in cui l'attachment era rimasto orfano o unlinked.
+ */
+export async function repairOcrAttachmentExpenseLinks(): Promise<number> {
+  const sessionsWithExpense = await db.documentSessions
+    .filter((s) => Boolean(s.expenseId))
+    .toArray();
+
+  let repairedCount = 0;
+  const now = new Date().toISOString();
+
+  for (const session of sessionsWithExpense) {
+    if (!session.expenseId) continue;
+    const expenseId = session.expenseId;
+
+    // Cerca segmenti di pagina
+    const segments = await db.documentPageSegments
+      .where('sessionId')
+      .equals(session.id)
+      .toArray();
+
+    const attachmentIds = new Set<string>();
+    for (const seg of segments) {
+      if (seg.attachmentId) attachmentIds.add(seg.attachmentId);
+    }
+
+    // Cerca allegati diretti con entityId == sessionId
+    const directSessionAtts = await db.attachments
+      .where('entityId')
+      .equals(session.id)
+      .toArray();
+    for (const att of directSessionAtts) {
+      attachmentIds.add(att.id);
+    }
+
+    // Cerca allegato dal processo OCR
+    if (session.ocrProcessId) {
+      const proc = await db.ocrProcesses.get(session.ocrProcessId);
+      if (proc?.attachmentId) {
+        attachmentIds.add(proc.attachmentId);
+      }
+    }
+
+    for (const attId of attachmentIds) {
+      const att = await db.attachments.get(attId);
+      if (att && (!att.expenseId || att.entityType === 'unlinked' || att.entityId !== expenseId)) {
+        await db.attachments.update(attId, {
+          entityType: 'expense',
+          entityId: expenseId,
+          expenseId: expenseId,
+          metadata: {
+            ...att.metadata,
+            updatedAt: now,
+            version: (att.metadata?.version || 1) + 1,
+          },
+        });
+        repairedCount++;
+      }
+    }
+  }
+
+  return repairedCount;
+}

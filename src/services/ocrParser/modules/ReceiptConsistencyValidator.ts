@@ -1,22 +1,60 @@
-import { ParsedReceiptDraft, ParserWarning } from '../types';
+import { ParsedReceiptDraft, ParserWarning, ReceiptParserContext } from '../types';
+import {
+  MAX_CONFIDENCE_UNKNOWN_CATEGORY,
+  MAX_CONFIDENCE_CRITICAL_OCR_QUALITY,
+  MAX_CONFIDENCE_NO_RELIABLE_LINES,
+  OCR_QUALITY_SCORE_CRITICAL_LOW,
+  MANUAL_REVIEW_CONFIDENCE_THRESHOLD,
+} from '../constants';
 
 export const MONEY_TOLERANCE = 0.05; // Tolleranza monetaria centralizzata (5 centesimi)
 
 export class ReceiptConsistencyValidator {
   public name = 'ReceiptConsistencyValidator';
 
-  public static validate(draft: ParsedReceiptDraft): { warnings: ParserWarning[]; adjustedConfidence: number } {
+  public static validate(
+    draft: ParsedReceiptDraft,
+    context?: ReceiptParserContext
+  ): { warnings: ParserWarning[]; adjustedConfidence: number; requiresManualReview: boolean } {
     const warnings: ParserWarning[] = [...draft.warnings];
     let penalty = 0;
+    let maxConfidenceCap = 100;
 
-    // 1. Verifica testo troppo scarso
-    if (draft.lines.length === 0 && !draft.total.value) {
+    const docCategory = context?.documentType || context?.metadata?.classification?.category;
+    const qualityScore = context?.ocrQualityScore;
+
+    // 0. Safety Gate: Document Category UNKNOWN
+    if (docCategory === 'UNKNOWN') {
       warnings.push({
-        code: 'SCANTY_TEXT_WARNING',
-        message: 'Testo estratto insufficiente per comporre un documento di spesa valido',
+        code: 'UNKNOWN_DOCUMENT_CATEGORY',
+        message: 'Tipologia documento non identificata con certezza: richiesta revisione manuale',
         severity: 'high',
       });
-      penalty += 30;
+      maxConfidenceCap = Math.min(maxConfidenceCap, MAX_CONFIDENCE_UNKNOWN_CATEGORY);
+    }
+
+    // 0.1 Safety Gate: OCR Quality Score critico
+    if (qualityScore !== undefined && qualityScore < OCR_QUALITY_SCORE_CRITICAL_LOW) {
+      warnings.push({
+        code: 'CRITICAL_OCR_QUALITY',
+        message: `Qualità OCR gravemente compromessa (${qualityScore}/100): affidabilità limitata`,
+        severity: 'high',
+      });
+      maxConfidenceCap = Math.min(maxConfidenceCap, MAX_CONFIDENCE_CRITICAL_OCR_QUALITY);
+    }
+
+    // 1. Verifica testo troppo scarso o assenza righe affidabili
+    if (draft.lines.length === 0) {
+      maxConfidenceCap = Math.min(maxConfidenceCap, MAX_CONFIDENCE_NO_RELIABLE_LINES);
+      if (!draft.total.value || draft.total.value <= 0) {
+        warnings.push({
+          code: 'SCANTY_TEXT_WARNING',
+          message: 'Testo estratto insufficiente per comporre un documento di spesa valido',
+          severity: 'high',
+        });
+        penalty += 30;
+        maxConfidenceCap = Math.min(maxConfidenceCap, MAX_CONFIDENCE_CRITICAL_OCR_QUALITY);
+      }
     }
 
     // 2. Verifica totale mancante
@@ -64,8 +102,13 @@ export class ReceiptConsistencyValidator {
       }
     }
 
-    // 5. Coerenza Quantità x Prezzo Unitario vs Totale Riga
+    // 5. Coerenza Quantità x Prezzo Unitario vs Totale Riga & Regola Ceccotti
+    let hasUnresolvedPrice = false;
     for (const line of draft.lines) {
+      if (line.warnings?.includes('PRICE_NOT_DETECTED')) {
+        hasUnresolvedPrice = true;
+      }
+
       if (line.quantity > 0 && line.unitPrice > 0 && line.lineTotal !== 0 && !line.isNegative) {
         const disc = line.discount || 0;
         const expectedLineTotal = Math.round((line.quantity * line.unitPrice - disc) * 100) / 100;
@@ -83,6 +126,15 @@ export class ReceiptConsistencyValidator {
           penalty += 5;
         }
       }
+    }
+
+    if (hasUnresolvedPrice) {
+      warnings.push({
+        code: 'UNRESOLVED_PRICE_WARNING',
+        message: 'Una o più righe articolo presentano un prezzo non rilevato: richiesta revisione manuale (Regola Ceccotti)',
+        severity: 'high',
+        field: 'lines',
+      });
     }
 
     // 6. Data futura improbabile (> 1 anno nel futuro)
@@ -121,11 +173,19 @@ export class ReceiptConsistencyValidator {
       }
     }
 
-    const calculatedConfidence = Math.max(0, Math.min(100, draft.overallConfidence - penalty));
+    const calculatedConfidence = Math.max(0, Math.min(maxConfidenceCap, draft.overallConfidence - penalty));
+
+    const hasHighSeverityWarning = warnings.some((w) => w.severity === 'high');
+    const requiresManualReview =
+      calculatedConfidence < MANUAL_REVIEW_CONFIDENCE_THRESHOLD ||
+      hasHighSeverityWarning ||
+      hasUnresolvedPrice ||
+      docCategory === 'UNKNOWN';
 
     return {
       warnings,
       adjustedConfidence: calculatedConfidence,
+      requiresManualReview,
     };
   }
 }

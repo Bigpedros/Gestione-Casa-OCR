@@ -1,4 +1,5 @@
 import { OCRLineReviewStatus, EntityId, MoneyAmount, DocumentCategory, PaymentMethod } from '../../types';
+import type { OcrQualityEvaluation } from '../../utils/imagePreprocessing';
 
 export interface ReceiptParserContext {
   rawText: string;
@@ -6,6 +7,8 @@ export interface ReceiptParserContext {
   lines: string[];
   normalizedLines: string[];
   overallOcrConfidence: number;
+  ocrQualityScore?: number;
+  ocrQualityEvaluation?: OcrQualityEvaluation;
   documentType?: string;
   sourceMode?: string;
   processingMode?: string;
@@ -49,6 +52,7 @@ export interface ParsedReceiptLine {
 }
 
 export interface ParsedReceiptDraft {
+  documentCategory: DocumentCategory;
   supplier: ParsedField<string>;
   address: ParsedField<string>;
   taxIdentifier: ParsedField<string>;
@@ -63,6 +67,7 @@ export interface ParsedReceiptDraft {
   warnings: ParserWarning[];
   overallConfidence: number;
   paymentEvidence?: PaymentEvidenceParseResult | null;
+  requiresManualReview?: boolean;
 }
 
 export interface ReceiptParserModule<T> {

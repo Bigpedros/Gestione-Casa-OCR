@@ -11,6 +11,7 @@ import {
   productRepository,
   auditLogRepository,
 } from '../repositories';
+import { productClassificationService } from '../services/productClassification';
 
 describe('Revisione Obbligatoria Dati OCR (TEST-OCR-REVIEW)', () => {
   beforeEach(async () => {
@@ -252,5 +253,45 @@ describe('Revisione Obbligatoria Dati OCR (TEST-OCR-REVIEW)', () => {
     const mismatchDocTotal = 25.00;
     const isMismatching = Math.abs(computedTotal - mismatchDocTotal) >= 0.01;
     expect(isMismatching).toBe(true);
+  });
+
+  it('TEST-REV-005: Validazione PAYMENT_PROOF / ricevute POS senza righe articolo', async () => {
+    // Sessione e OCR di tipo PAYMENT_PROOF (es. ricevuta POS)
+    const session = await documentSessionRepository.create({
+      documentType: 'receipt',
+      detectedDocumentCategory: 'PAYMENT_PROOF',
+      sourceMode: 'singleImage',
+      processingMode: 'singleReceipt',
+      status: 'ready_for_review',
+    });
+
+    const ocrProc = await ocrProcessRepository.create({
+      attachmentId: 'att-pos-1',
+      status: 'completed',
+      rawText: 'POS NEXI\nTOTALE 25.00 EUR\nAUT 123456',
+      detectedSupplier: 'NEXI POS',
+      detectedDate: '2026-09-01',
+      detectedTotal: 25.00,
+      confirmationRequired: true,
+      confirmedByUser: true,
+    });
+
+    await documentSessionRepository.update(session.id, { ocrProcessId: ocrProc.id });
+
+    // Creazione registrazione contabile senza alcuna riga articolo (0 ocrReceiptLines)
+    const exp = await productClassificationService.createAccountingRegistration({
+      ocrProcessId: ocrProc.id,
+      sessionId: session.id,
+      expenseDate: '2026-09-01',
+      documentTotal: 25.00,
+      supplierName: 'NEXI POS',
+    });
+
+    expect(exp).toBeDefined();
+    expect(exp.amount).toBe(25.00);
+    expect(exp.description).toContain('NEXI POS');
+
+    const createdItems = await db.expenseItems.where('expenseId').equals(exp.id).toArray();
+    expect(createdItems.length).toBe(0);
   });
 });

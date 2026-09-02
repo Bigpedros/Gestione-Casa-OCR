@@ -10,7 +10,7 @@ export class VatParser implements ReceiptParserModule<number> {
       return { value: null, confidence: 0 };
     }
 
-    const vatKeywords = /TOTALE\s+IVA|TOT\.\s*IVA|IMPOSTA|IVA\s+\d{1,2}%/i;
+    const vatKeywords = /(?:TOTALE\s+IVA|TOT\.\s*IVA|IMPOSTA|IVA\s+\d{1,2}%|DI\s+CUI\s+IVA|\bIVA\b)/i;
     const amountRegex = /(?:€\s*)?(\d{1,4}(?:[.,]\d{3})*[.,]\d{2})\b/;
 
     let vatSum = 0;

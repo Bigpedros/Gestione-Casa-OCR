@@ -122,9 +122,9 @@ TRANSAZIONE ESEGUITA`;
       expect(line.normalizedDescription).not.toBe('Ricevuta di Pagamento');
     }
 
-    // Verifica campi ufficiali invariati
+    // Verifica campi ufficiali (il metodo di pagamento per PAYMENT_PROOF è sincronizzato con il valore canonico di PaymentEvidence)
     expect(draft.total.value).toBe(45.00);
-    expect(draft.paymentMethod.value).toBe('carta');
+    expect(draft.paymentMethod.value).toBe('debitCard');
   });
 
   // =========================================================================

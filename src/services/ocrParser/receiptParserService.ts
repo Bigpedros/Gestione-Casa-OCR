@@ -15,6 +15,7 @@ import {
   ShadowPaymentEvidenceResult,
   PaymentEvidenceParseResult,
 } from './types';
+import type { OcrQualityEvaluation } from '../../utils/imagePreprocessing';
 import { TextNormalizationModule } from './modules/TextNormalizationModule';
 import { SupplierParser } from './modules/SupplierParser';
 import { AddressParser } from './modules/AddressParser';
@@ -33,8 +34,9 @@ import { LineItemParserV2 } from './modules/LineItemParserV2';
 import { PaymentEvidenceParser } from './modules/PaymentEvidenceParser';
 import { productClassificationService } from '../productClassification/ProductClassificationService';
 import { DocumentCategory } from '../../types';
+import { evaluateReceiptOcrQuality } from '../../utils/imagePreprocessing';
 
-class ReceiptParserService {
+export class ReceiptParserService {
   private supplierParser = new SupplierParser();
   private addressParser = new AddressParser();
   private taxIdentifierParser = new TaxIdentifierParser();
@@ -103,6 +105,7 @@ class ReceiptParserService {
     const normResult = TextNormalizationModule.normalize(rawText);
     const draft = this.parseText(rawText, {
       overallOcrConfidence: ocrProcess.confidence || 85,
+      ocrQualityScore: (ocrProcess.metadata as any)?.ocrQualityScore,
       ocrProcessId,
     });
 
@@ -116,6 +119,7 @@ class ReceiptParserService {
       confirmedByUser: false,
       metadata: {
         ...ocrProcess.metadata,
+        documentCategory: draft.documentCategory,
         detectedPaymentMethod: draft.paymentMethod?.value || null,
         normalizedLines: normResult.normalizedLines,
       } as any,
@@ -160,6 +164,8 @@ class ReceiptParserService {
     rawText: string,
     options?: {
       overallOcrConfidence?: number;
+      ocrQualityScore?: number;
+      ocrQualityEvaluation?: OcrQualityEvaluation;
       documentType?: string;
       sourceMode?: string;
       processingMode?: string;
@@ -172,12 +178,19 @@ class ReceiptParserService {
     const classification = DocumentTypeClassifier.classify(normResult.originalText);
     const documentCategory = ((options?.documentType || classification.category) as DocumentCategory);
 
+    const ocrConfidence = options?.overallOcrConfidence ?? 85;
+    const ocrQualityEval =
+      options?.ocrQualityEvaluation ?? evaluateReceiptOcrQuality(normResult.originalText, ocrConfidence);
+    const ocrQualityScore = options?.ocrQualityScore ?? ocrQualityEval.overallScore;
+
     const context: ReceiptParserContext = {
       rawText: normResult.originalText,
       normalizedText: normResult.normalizedText,
       lines: normResult.lines,
       normalizedLines: normResult.normalizedLines,
-      overallOcrConfidence: options?.overallOcrConfidence ?? 85,
+      overallOcrConfidence: ocrConfidence,
+      ocrQualityScore,
+      ocrQualityEvaluation: ocrQualityEval,
       documentType: documentCategory,
       sourceMode: options?.sourceMode,
       processingMode: options?.processingMode,
@@ -207,13 +220,17 @@ class ReceiptParserService {
       };
       this.lastPaymentEvidenceShadowResult = null;
 
-      return this.createEmptyDraft(context.overallOcrConfidence, [
-        {
-          code: 'EMPTY_TEXT',
-          message: 'Il testo fornito è vuoto',
-          severity: 'high',
-        },
-      ]);
+      return this.createEmptyDraft(
+        context.overallOcrConfidence,
+        [
+          {
+            code: 'EMPTY_TEXT',
+            message: 'Il testo fornito è vuoto',
+            severity: 'high',
+          },
+        ],
+        documentCategory
+      );
     }
 
     // 1. Esecuzione dei moduli di estrazione legacy (V1 ufficiale)
@@ -352,6 +369,41 @@ class ReceiptParserService {
     this.lastPaymentEvidenceShadow = shadowPaymentEvidence;
     this.lastPaymentEvidenceShadowResult = shadowPaymentEvidence.result;
 
+    // Sincronizzazione campi standard da PaymentEvidence per PAYMENT_PROOF
+    if (documentCategory === 'PAYMENT_PROOF' && officialPaymentEvidence) {
+      if (officialPaymentEvidence.merchantOrBeneficiary) {
+        supplier.value = officialPaymentEvidence.merchantOrBeneficiary;
+        supplier.confidence = Math.round((officialPaymentEvidence.fieldConfidence.merchantOrBeneficiary || 0.85) * 100);
+        supplier.warnings = [];
+      } else {
+        supplier.value = null;
+        supplier.confidence = 0;
+        supplier.warnings = ['fornitore_non_identificato'];
+      }
+      const effectiveAmount = officialPaymentEvidence.totalCharged ?? officialPaymentEvidence.amount;
+      if (effectiveAmount !== null && effectiveAmount > 0) {
+        total.value = effectiveAmount;
+        total.confidence = Math.round((officialPaymentEvidence.fieldConfidence.amount || 0.90) * 100);
+        total.warnings = [];
+      }
+      if (officialPaymentEvidence.dateTime) {
+        const dateStr = officialPaymentEvidence.dateTime.substring(0, 10);
+        if (/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
+          dateTime.date.value = dateStr;
+          dateTime.date.confidence = Math.round((officialPaymentEvidence.fieldConfidence.dateTime || 0.90) * 100);
+          dateTime.date.warnings = [];
+        }
+        if (officialPaymentEvidence.dateTime.length > 10) {
+          dateTime.time.value = officialPaymentEvidence.dateTime.substring(11, 16);
+          dateTime.time.confidence = Math.round((officialPaymentEvidence.fieldConfidence.dateTime || 0.90) * 100);
+        }
+      }
+      const officialPaymentMethod = officialPaymentEvidence.paymentMethodHint?.macroCategoryHint;
+      if (officialPaymentMethod) {
+        paymentMethod.value = officialPaymentMethod;
+      }
+    }
+
     context.metadata = {
       ...context.metadata,
       shadowV2: shadowV2Result,
@@ -377,6 +429,7 @@ class ReceiptParserService {
     const preliminaryConfidence = Math.round((context.overallOcrConfidence + avgFieldConfidence) / 2);
 
     const initialDraft: ParsedReceiptDraft = {
+      documentCategory,
       supplier,
       address,
       taxIdentifier,
@@ -399,13 +452,39 @@ class ReceiptParserService {
       paymentEvidence: officialPaymentEvidence,
     };
 
-    // 3. Esecuzione del modulo di validazione coerenza
-    const validation = ReceiptConsistencyValidator.validate(initialDraft);
+    // 3. Esecuzione del modulo di validazione coerenza e Safety Gate
+    const validation = ReceiptConsistencyValidator.validate(initialDraft, context);
     initialDraft.warnings = validation.warnings;
     initialDraft.overallConfidence = validation.adjustedConfidence;
+    initialDraft.requiresManualReview = validation.requiresManualReview;
 
     return initialDraft;
   }
+
+  private static readonly SHADOW_TOKEN_MIN_LENGTH = 3;
+  private static readonly SHADOW_DISTINCT_TOKEN_MIN_LENGTH = 5;
+  private static readonly SHADOW_TOKEN_OVERLAP_THRESHOLD = 0.4;
+  private static readonly SHADOW_GENERIC_STRUCTURAL_WORDS = new Set([
+    'ARTICOLO',
+    'PRODOTTO',
+    'SCONTO',
+    'PREZZO',
+    'IMPORTO',
+    'TOTALE',
+    'SUBTOTALE',
+    'EURO',
+    'PEZZI',
+    'PESO',
+    'QUANTITA',
+    'VALORE',
+    'ALIQUOTA',
+    'IVA',
+    'PZ',
+    'GR',
+    'KG',
+    'LT',
+    'ML',
+  ]);
 
   /**
    * Esegue il confronto non modificativo tra le righe estratte da V1 e quelle da V2.
@@ -429,7 +508,7 @@ class ReceiptParserService {
       const v1 = v1Lines[i];
       const normV1Desc = v1.normalizedDescription.toUpperCase().replace(/\s+/g, ' ').trim();
 
-      // Cerchiamo una corrispondenza in V2 (prima per similarità su descrizione, poi per indice/prezzo)
+      // Cerchiamo una corrispondenza semantica in V2
       let bestV2Idx = -1;
       let bestScore = 0;
 
@@ -438,31 +517,51 @@ class ReceiptParserService {
         const v2 = v2Lines[j];
         const normV2Desc = v2.normalizedDescription.toUpperCase().replace(/\s+/g, ' ').trim();
 
-        // Matching esatto o inclusione
+        // 1. Matching esatto tra descrizioni normalizzate
         if (normV1Desc === normV2Desc) {
           bestV2Idx = j;
           bestScore = 1.0;
           break;
         }
 
-        // Calcolo overlap token
-        const v1Words = normV1Desc.split(' ').filter((w) => w.length > 2);
-        const v2Words = normV2Desc.split(' ').filter((w) => w.length > 2);
+        // Tokenizzazione
+        const v1Words = normV1Desc.split(' ').filter((w) => w.length >= ReceiptParserService.SHADOW_TOKEN_MIN_LENGTH);
+        const v2Words = normV2Desc.split(' ').filter((w) => w.length >= ReceiptParserService.SHADOW_TOKEN_MIN_LENGTH);
         const commonWords = v1Words.filter((w) => v2Words.includes(w));
-        const overlapScore = v1Words.length > 0 ? commonWords.length / Math.max(v1Words.length, v2Words.length) : 0;
 
-        if (overlapScore > 0.4 && overlapScore > bestScore) {
+        // 2. Overlap lessicale significativo
+        const maxTokens = Math.max(v1Words.length, v2Words.length);
+        const overlapScore = maxTokens > 0 ? commonWords.length / maxTokens : 0;
+
+        if (overlapScore > ReceiptParserService.SHADOW_TOKEN_OVERLAP_THRESHOLD && overlapScore > bestScore) {
           bestScore = overlapScore;
           bestV2Idx = j;
         }
-      }
 
-      // Fallback matching posizionale se prezzi identici
-      if (bestV2Idx === -1 && i < v2Lines.length && !matchedV2Indices.has(i)) {
-        const v2Candidate = v2Lines[i];
-        if (Math.abs(v1.lineTotal - v2Candidate.lineTotal) < 0.01) {
-          bestV2Idx = i;
-          bestScore = 0.5;
+        // 3. Caso distintivo a singolo token (es. "NUTELLA 9506 1’89 IBRIDO" vs "NUTELLA"):
+        // Richiede:
+        // - almeno una delle due descrizioni è composta da esattamente un solo token significativo
+        // - token comune identico di lunghezza sufficiente (>= 5 caratteri)
+        // - token non appartenente a dizionario di termini generici/strutturali
+        // - entrambi i prezzi rilevati, non null, positivi e coincidenti al centesimo
+        if (bestScore < 0.85 && Math.min(v1Words.length, v2Words.length) === 1 && commonWords.length >= 1) {
+          const hasDistinctiveToken = commonWords.some(
+            (token) =>
+              token.length >= ReceiptParserService.SHADOW_DISTINCT_TOKEN_MIN_LENGTH &&
+              !ReceiptParserService.SHADOW_GENERIC_STRUCTURAL_WORDS.has(token)
+          );
+
+          const hasValidPrices =
+            v1.lineTotal !== null &&
+            v2.lineTotal !== null &&
+            v1.lineTotal > 0 &&
+            v2.lineTotal > 0 &&
+            Math.abs(v1.lineTotal - v2.lineTotal) < 0.01;
+
+          if (hasDistinctiveToken && hasValidPrices && 0.85 > bestScore) {
+            bestScore = 0.85;
+            bestV2Idx = j;
+          }
         }
       }
 
@@ -573,9 +672,14 @@ class ReceiptParserService {
     };
   }
 
-  private createEmptyDraft(confidence: number, warnings: ParserWarning[]): ParsedReceiptDraft {
+  private createEmptyDraft(
+    confidence: number,
+    warnings: ParserWarning[],
+    documentCategory: DocumentCategory
+  ): ParsedReceiptDraft {
     const emptyField = <T>(): ParsedField<T> => ({ value: null, confidence: 0 });
     return {
+      documentCategory,
       supplier: emptyField(),
       address: emptyField(),
       taxIdentifier: emptyField(),

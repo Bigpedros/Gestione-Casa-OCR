@@ -239,13 +239,36 @@ export const processReceiptImage = async (
     }
 
     if (variant === 'gentle_contrast' || enhanceContrast) {
-      // Calcola min e max per histogram stretching gentile (evita binarizzazione brutale che distrugge matrice di punti)
-      let minLum = 255;
-      let maxLum = 0;
-      for (let p = 0; p < w * h; p += 4) {
-        const v = grayBuffer[p];
-        if (v < minLum) minLum = v;
-        if (v > maxLum) maxLum = v;
+      // Calcolo robusto dei percentili 1% e 99% per histogram stretching gentile
+      // Evita che punti specularmente bianchi o angoli scuri schiaccino la dinamica dei caratteri termici
+      const hist = new Uint32Array(256);
+      const totalPixels = w * h;
+      for (let p = 0; p < totalPixels; p++) {
+        const v = Math.min(255, Math.max(0, Math.round(grayBuffer[p])));
+        hist[v]++;
+      }
+
+      const p1Cutoff = Math.floor(totalPixels * 0.01);
+      const p99Cutoff = Math.floor(totalPixels * 0.99);
+
+      let cum = 0;
+      let minLum = 0;
+      let maxLum = 255;
+
+      for (let i = 0; i < 256; i++) {
+        cum += hist[i];
+        if (cum >= p1Cutoff && minLum === 0) {
+          minLum = i;
+        }
+        if (cum >= p99Cutoff) {
+          maxLum = i;
+          break;
+        }
+      }
+
+      if (maxLum <= minLum) {
+        minLum = 0;
+        maxLum = 255;
       }
 
       const lumRange = Math.max(30, maxLum - minLum);
@@ -451,6 +474,7 @@ export const evaluateReceiptOcrQuality = (
   const hasKnownSupplier = knownSuppliers.some((s) => upper.includes(s));
   const hasDocCommerciale = upper.includes('DOCUMENTO COMMERCIALE') || upper.includes('SCONTRINO') || upper.includes('RICEVUTA');
   const hasVatOrTax = /\b(?:P\.?\s*IVA|PARTITA\s+IVA|CODICE\s+FISCALE|C\.?\s*F\.?)\b/i.test(upper) || /\b\d{11}\b/.test(upper);
+  const hasPosHeader = /\b(?:POS|BANCOMAT|PAGOBANCOMAT|MASTERCARD|VISA|NEXI|SEPA|SEPA-FAST|MEMORIA\s+CLIENTE|COPIA\s+CLIENTE|TRANSAZIONE)\b/i.test(upper);
 
   if (hasKnownSupplier) {
     headerScore += 12;
@@ -458,6 +482,9 @@ export const evaluateReceiptOcrQuality = (
   } else if (hasDocCommerciale) {
     headerScore += 6;
     reasons.push('Documento commerciale individuato (+6)');
+  } else if (hasPosHeader) {
+    headerScore += 6;
+    reasons.push('Intestazione ricevuta POS / pagamento individuata (+6)');
   }
   if (hasVatOrTax) {
     headerScore += 8;
@@ -483,17 +510,27 @@ export const evaluateReceiptOcrQuality = (
     }
   }
 
-  // 4. Totale / Subtotale / Contanti / Resto (0 - 20)
+  // 4. Totale / Subtotale / Importo POS / Pagamento Approvato (0 - 20)
   let totalScore = 0;
-  const hasTotale = /\bTOTALE(?:\s+COMPLESSIVO|\s+EURO|\s+EUR|\s*€)?\b/i.test(upper);
+  const hasTotale = /\b(?:TOTALE(?:\s+COMPLESSIVO|\s+EURO|\s+EUR|\s*€)?|TOTAL|TOT\.?)\b/i.test(upper);
+  const hasImporto = /\b(?:IMPORTO(?:\s+DOVUTO|\s+EURO|\s+EUR|\s+PAGATO|\s*€)?|IMP\.?\s*(?:EUR|EURO|€)?)\b/i.test(upper);
+  const hasExplicitCurrencyAmount = /\b(?:EUR|EURO|€)\s*\d+[.,]\d{2}\b/i.test(upper) || /\b\d+[.,]\d{2}\s*(?:EUR|EURO|€)\b/i.test(upper);
   const hasSubtotale = /\bSUBTOTALE\b/i.test(upper);
   const hasContanti = /\b(?:CONTANT[EI]|PAGAMENTO\s+CONTANTE|CASH)\b/i.test(upper);
   const hasResto = /\bRESTO\b/i.test(upper);
+  const hasPaymentOutcome = /\b(?:PAGAMENTO\s+(?:APPROVATO|ESEGUITO|CONFERMATO)|TRANSAZIONE\s+(?:ESEGUITA|APPROVATA|CONCLUSA)|PIN\s+VERIFICATO|AUT\.?\s*CODE)\b/i.test(upper);
 
   if (hasTotale) {
     totalScore += 10;
     reasons.push('Sezione Totale presente (+10)');
+  } else if (hasImporto) {
+    totalScore += 10;
+    reasons.push('Sezione Importo POS presente (+10)');
+  } else if (hasExplicitCurrencyAmount) {
+    totalScore += 8;
+    reasons.push('Importo monetario esplicito presente (+8)');
   }
+
   if (hasSubtotale) {
     totalScore += 4;
     reasons.push('Subtotale presente (+4)');
@@ -504,17 +541,20 @@ export const evaluateReceiptOcrQuality = (
   } else if (hasContanti || hasResto) {
     totalScore += 3;
     reasons.push('Dettaglio pagamento presente (+3)');
+  } else if (hasPaymentOutcome && totalScore < 20) {
+    totalScore += 4;
+    reasons.push('Esito transazione POS approvato (+4)');
   }
   totalScore = Math.min(20, totalScore);
 
   // 5. Metodo di Pagamento (0 - 5)
   let paymentScore = 0;
-  if (/\b(?:CONTANT[EI]|PAGOBANCOMAT|BANCOMAT|CARTA|POS|VISA|MASTERCARD)\b/i.test(upper)) {
+  if (/\b(?:CONTANT[EI]|PAGOBANCOMAT|BANCOMAT|CARTA|POS|VISA|MASTERCARD|DEBIT|CREDIT|MAESTRO|AMEX)\b/i.test(upper)) {
     paymentScore = 5;
     reasons.push('Metodo di pagamento individuato (+5)');
   }
 
-  // 6. Righe Articolo con Prezzo Riconoscibili (0 - 15)
+  // 6. Righe Articolo con Prezzo o Righe Strutturate POS (0 - 15)
   let itemCountScore = 0;
   const lines = rawText.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
   let validProductLines = 0;
@@ -528,8 +568,22 @@ export const evaluateReceiptOcrQuality = (
     }
   }
 
-  itemCountScore = Math.min(15, validProductLines * 2);
-  reasons.push(`Righe prodotto stimate: ${validProductLines} (+${itemCountScore}/15)`);
+  if (validProductLines > 0) {
+    itemCountScore = Math.min(15, validProductLines * 2);
+    reasons.push(`Righe prodotto stimate: ${validProductLines} (+${itemCountScore}/15)`);
+  } else if (hasPosHeader || hasPaymentOutcome) {
+    // Per ricevute POS / prove di pagamento, valuta i campi strutturali POS
+    let posFieldsCount = 0;
+    if (/\b(?:STAN|TID|TPV|TERMINALE)\b/i.test(upper)) posFieldsCount++;
+    if (/\b(?:AUT\.?\s*CODE|AUTORIZZAZIONE|AUTH)\b/i.test(upper)) posFieldsCount++;
+    if (/\b(?:CARTA|PAGOBANCOMAT|MASTERCARD|VISA|DEBIT|CREDIT|\*{4})\b/i.test(upper)) posFieldsCount++;
+    if (/\b(?:VENDITA|ACQUISTO|C-LESS|CONTACTLESS)\b/i.test(upper)) posFieldsCount++;
+    if (hasPaymentOutcome) posFieldsCount += 2;
+    itemCountScore = Math.min(15, posFieldsCount * 3);
+    if (itemCountScore > 0) {
+      reasons.push(`Campi strutturali POS individuati: ${posFieldsCount} (+${itemCountScore}/15)`);
+    }
+  }
 
   // 7. Penalità Rumore / Caratteri Spuri (-20)
   let garbagePenalty = 0;

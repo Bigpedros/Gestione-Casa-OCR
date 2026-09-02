@@ -3,6 +3,7 @@ import { receiptParserService } from '../services/ocrParser';
 import { ReceiptZoneSegmenter } from '../services/ocrParser/modules/ReceiptZoneSegmenter';
 import { LineItemParserV2 } from '../services/ocrParser/modules/LineItemParserV2';
 import { TODIS_REAL_RAW_TEXT } from './fixtures/todisRealRawFixture';
+import type { ParsedReceiptLine, ParsedLineItemV2, LineItemParseResultV2 } from '../services/ocrParser/types';
 
 describe('Fase P4-B1: Shadow Mode ReceiptZoneSegmenter + LineItemParserV2', () => {
   // Test 1: Shadow V2 viene eseguito SOLO per COMMERCIAL_RECEIPT
@@ -195,11 +196,117 @@ PAGAMENTO CONTANTI            10,00
     expect(comparison?.executed).toBe(true);
     expect(comparison?.v1Count).toBe(7);
     expect(comparison?.v2Count).toBe(10);
-    expect(comparison?.matchedCount).toBe(4);
-    expect(comparison?.lostInV2Count).toBe(3); // 3 righe rumore di V1 escluse da V2
-    expect(comparison?.addedInV2Count).toBe(6); // 6 articoli reali recuperati da V2
+    expect(comparison?.matchedCount).toBe(5);
+    expect(comparison?.lostInV2Count).toBe(2); // 2 righe di puro rumore in V1 (+ Lao È, O AZZ a) scartate da V2
+    expect(comparison?.addedInV2Count).toBe(5); // 5 articoli reali recuperati da V2
     expect(comparison?.v2Summary?.articleCount).toBe(9);
     expect(comparison?.v2Summary?.discountCount).toBe(1); // ARROTONDAMENTO
+
+    // Invarianti strutturali
+    expect(comparison!.matchedCount + comparison!.lostInV2Count).toBe(comparison!.v1Count);
+    expect(comparison!.matchedCount + comparison!.addedInV2Count).toBe(comparison!.v2Count);
+
+    // Dimostrazione match NUTELLA (matchata correttamente con evidenza di pulizia descrizione V1->V2)
+    const nutellaLost = comparison?.differences.find(
+      (d) => d.type === 'LOST_IN_V2' && d.v1Line?.normalizedDescription.includes('NUTELLA')
+    );
+    const nutellaAdded = comparison?.differences.find(
+      (d) => d.type === 'ADDED_IN_V2' && d.v2Line?.normalizedDescription.includes('NUTELLA')
+    );
+    expect(nutellaLost).toBeUndefined(); // NUTELLA non è persa
+    expect(nutellaAdded).toBeUndefined(); // NUTELLA non è aggiunta non matchata
+    const nutellaMatch = comparison?.differences.find(
+      (d) => d.type === 'DESCRIPTION_MISMATCH' && d.v1Line?.normalizedDescription.includes('NUTELLA')
+    );
+    expect(nutellaMatch).toBeDefined();
+    expect(nutellaMatch?.v1Line?.lineTotal).toBe(1.89);
+    expect(nutellaMatch?.v2Line?.lineTotal).toBe(1.89);
+
+    // Dimostrazione assenza falsi abbinamenti posizionali
+    const laoDiff = comparison?.differences.find((d) => d.v1Line?.normalizedDescription.includes('Lao'));
+    expect(laoDiff?.type).toBe('LOST_IN_V2'); // "+ Lao È" è correttamente persa (rumore), non abbinata a SHOPPERS
+
+    const shoppersMatch = comparison?.differences.find(
+      (d) => d.v1Line?.normalizedDescription.includes('SHOPPERS') && d.v2Line?.normalizedDescription.includes('TRAMEZZINI')
+    );
+    expect(shoppersMatch).toBeUndefined(); // SHOPPERS non è mai abbinata a PANE TRAMEZZINI
+
+    // Test Negativo Obbligatorio: due descrizioni multi-token con 1 solo token in comune e stesso prezzo non devono matchare
+    const v1LatteLine: ParsedReceiptLine = {
+      originalText: 'LATTE INTERO FRESCO 1,59',
+      normalizedDescription: 'LATTE INTERO FRESCO',
+      quantity: 1,
+      unitOfMeasure: null,
+      unitPrice: 1.59,
+      lineTotal: 1.59,
+      isNegative: false,
+      pageIndex: 0,
+      lineIndex: 1,
+      confidence: 90,
+      reviewStatus: 'pending',
+    };
+
+    const v2LatteItem: ParsedLineItemV2 = {
+      id: 'mock-latte',
+      type: 'ARTICLE',
+      rawIndices: [1],
+      rawLines: [{ rawIndex: 1, rawText: 'LATTE SCREMATO UHT 1,59', normalizedText: 'LATTE SCREMATO UHT 1,59' }],
+      rawText: 'LATTE SCREMATO UHT 1,59',
+      normalizedText: 'LATTE SCREMATO UHT 1,59',
+      description: 'LATTE SCREMATO UHT',
+      quantity: 1,
+      unitOfMeasure: null,
+      unitPrice: 1.59,
+      lineTotal: 1.59,
+      vatRate: 4,
+      discount: null,
+      isNegative: false,
+      reasons: ['standard_article_candidate'],
+      warnings: [],
+      monetaryEvidence: { lineTotalEvidence: 'CERTAIN', unitPriceEvidence: 'CERTAIN' },
+      confidence: { description: 0.9, quantity: 0.9, unitPrice: 0.9, lineTotal: 0.9, vat: 0.9, overall: 0.9 },
+    };
+
+    const v2LatteLine: ParsedReceiptLine = {
+      ...v1LatteLine,
+      originalText: 'LATTE SCREMATO UHT 1,59',
+      normalizedDescription: 'LATTE SCREMATO UHT',
+    };
+
+    const v2LatteResult: LineItemParseResultV2 = {
+      items: [v2LatteItem],
+      legacyLines: [v2LatteLine],
+      unparsedNoiseLines: [],
+      overallConfidence: 90,
+      summary: {
+        articleCount: 1,
+        discountCount: 0,
+        unknownCount: 0,
+        certainPriceCount: 1,
+        uncertainPriceCount: 0,
+      },
+    };
+
+    const dummyZones: any = {
+      header: [],
+      body: [],
+      totalsFooter: [],
+      trailingMetadata: [],
+      ambiguous: [],
+      allLines: [],
+    };
+
+    const latteComp = receiptParserService.compareV1VsV2(
+      [v1LatteLine],
+      v2LatteResult,
+      dummyZones,
+      'COMMERCIAL_RECEIPT'
+    );
+
+    // Entrambe hanno >1 token (3 e 3), overlap 1/3 (0.33 <= 0.4), ramo singolo token inapplicabile -> NON MATCHANO
+    expect(latteComp.matchedCount).toBe(0);
+    expect(latteComp.lostInV2Count).toBe(1);
+    expect(latteComp.addedInV2Count).toBe(1);
   });
 
   // Test 8: Caso con quantità / moltiplicatore / prezzo unitario

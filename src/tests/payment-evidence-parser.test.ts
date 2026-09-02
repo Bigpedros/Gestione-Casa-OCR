@@ -387,5 +387,53 @@ Codice di riferimento 9A2B3C4D`;
       expect(classification.category).toBe('UNKNOWN'); // Bloccato dal classifier!
       expect(classification.category).not.toBe('PAYMENT_PROOF');
     });
+
+    it('P4-D1-E2E-R1 Documento A (POS NEXI PagoBANCOMAT): riconosce FARMACIA LA NAVE e non promuove NEXI a merchant', () => {
+      const nexiPosText = `NEXI
+BANCOMAT C-LESS
+MARINO
+FARMACIA LA NAVE
+DATA 01/09/2026 ORA 12:54
+STAN: 025918
+AUT. 839201
+IMPORTO: EUR 8,02
+PAGOBANCOMAT
+TRANSAZIONE ESEGUITA`;
+
+      const classification = DocumentTypeClassifier.classify(nexiPosText);
+      expect(classification.category).toBe('PAYMENT_PROOF');
+
+      const parsedEvidence = PaymentEvidenceParser.parse(nexiPosText, classification);
+      expect(parsedEvidence.subtype).toBe('POS_RECEIPT');
+      expect(parsedEvidence.amount).toBe(8.02);
+      expect(parsedEvidence.totalCharged).toBe(8.02);
+      expect(parsedEvidence.dateTime).toBe('2026-09-01T12:54:00');
+      expect(parsedEvidence.merchantOrBeneficiary).toBe('FARMACIA LA NAVE');
+      expect(parsedEvidence.merchantOrBeneficiary).not.toBe('NEXI');
+      expect(parsedEvidence.merchantOrBeneficiary).not.toBe('MARINO');
+      expect(parsedEvidence.transactionReference).toBe('025918');
+      expect(parsedEvidence.paymentMethodHint.circuitOrBrand).toBe('PagoBANCOMAT');
+    });
+
+    it('P4-D1-E2E-R1 Documento B (SEPA-FAST senza evidenza importo nel testo): Fail-Safe preservato e nessuna allucinazione merchant', () => {
+      const sepaFastPartialText = `SEPA-FAST
+911-000935-05 i pe PARO
+12/08/2026 18:32
+DEBIT MASTERCARD
+AUT: 994821
+PIN VERIFICATO`;
+
+      const classification = DocumentTypeClassifier.classify(sepaFastPartialText);
+      expect(classification.category).toBe('PAYMENT_PROOF');
+
+      const parsedEvidence = PaymentEvidenceParser.parse(sepaFastPartialText, classification);
+      expect(parsedEvidence.subtype).toBe('POS_RECEIPT');
+      // Fail-Safe fondamentale: nessun importo rilevato -> amount null, blocco salvataggio automatico
+      expect(parsedEvidence.amount).toBeNull();
+      expect(parsedEvidence.warnings).toContain('AMOUNT_NOT_DETECTED');
+      // Nessuna promozione di SEPA-FAST o codici a merchant
+      expect(parsedEvidence.merchantOrBeneficiary).toBeNull();
+      expect(parsedEvidence.paymentMethodHint.circuitOrBrand).toBe('Mastercard');
+    });
   });
 });

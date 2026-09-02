@@ -862,12 +862,15 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
       errors.push('Totale scontrino non valido (deve essere un importo maggiore di 0 €).');
     }
 
-    if (!editableLines || editableLines.length === 0) {
+    const docCategory = session?.detectedDocumentCategory || (ocrProcess?.metadata as Record<string, any>)?.documentCategory;
+    const isPaymentProof = docCategory === 'PAYMENT_PROOF';
+
+    if (!isPaymentProof && (!editableLines || editableLines.length === 0)) {
       errors.push('Il documento non contiene alcuna riga articolo.');
     }
 
-    // 2. Quadratura
-    if (hasTotalDiscrepancy && !isDiscrepancyApproved) {
+    // 2. Quadratura (solo se sono presenti righe o non è una ricevuta POS/PAYMENT_PROOF senza righe)
+    if (editableLines.length > 0 && hasTotalDiscrepancy && !isDiscrepancyApproved) {
       errors.push(
         `Discrepanza sul totale scontrino non approvata: somma righe (€ ${roundedSumLines.toFixed(
           2
@@ -2015,8 +2018,7 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
                 const valErrors = getFinalValidationErrors();
                 const isConfirmBlocked =
                   isSaving ||
-                  (hasTotalDiscrepancy && !isDiscrepancyApproved) ||
-                  editableLines.length === 0 ||
+                  (editableLines.length > 0 && hasTotalDiscrepancy && !isDiscrepancyApproved) ||
                   valErrors.length > 0;
 
                 return (
@@ -2026,7 +2028,7 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
                     onClick={handleConfirmReview}
                     disabled={isConfirmBlocked}
                     title={
-                      hasTotalDiscrepancy && !isDiscrepancyApproved
+                      editableLines.length > 0 && hasTotalDiscrepancy && !isDiscrepancyApproved
                         ? 'Discrepanza non approvata: spunta la casella di conferma per abilitare il pulsante'
                         : valErrors.length > 0
                         ? `Impossibile confermare: ${valErrors[0]}`
@@ -2059,8 +2061,7 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
                   const valErrors = getFinalValidationErrors();
                   const isBlocked =
                     isSaving ||
-                    (hasTotalDiscrepancy && !isDiscrepancyApproved) ||
-                    editableLines.length === 0 ||
+                    (editableLines.length > 0 && hasTotalDiscrepancy && !isDiscrepancyApproved) ||
                     valErrors.length > 0;
 
                   return (
@@ -2070,7 +2071,7 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
                       onClick={handleCreateAccountingRegistration}
                       disabled={isBlocked}
                       title={
-                        hasTotalDiscrepancy && !isDiscrepancyApproved
+                        editableLines.length > 0 && hasTotalDiscrepancy && !isDiscrepancyApproved
                           ? 'Discrepanza non approvata: spunta la casella di conferma per abilitare la registrazione'
                           : valErrors.length > 0
                           ? `Impossibile registrare: ${valErrors[0]}`

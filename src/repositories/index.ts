@@ -713,12 +713,19 @@ export const ocrProcessRepository = {
     const item: OCRProcess = {
       ...data,
       id,
-      metadata: { createdAt: now, updatedAt: now, version: 1 },
+      metadata: {
+        createdAt: now,
+        updatedAt: now,
+        version: 1,
+      },
     };
     await db.ocrProcesses.add(item);
     return item;
   },
-  update: async (id: string, updates: Partial<OCRProcess>) => {
+  update: async (
+    id: string,
+    updates: Partial<Omit<OCRProcess, 'metadata'>> & { metadata?: Partial<RecordMetadata> & Record<string, any> }
+  ) => {
     const existing = await db.ocrProcesses.get(id);
     if (!existing) throw new Error('Processo OCR non trovato');
     const now = new Date().toISOString();
@@ -727,6 +734,7 @@ export const ocrProcessRepository = {
       ...updates,
       metadata: {
         ...existing.metadata,
+        ...(updates.metadata ?? {}),
         updatedAt: now,
         version: existing.metadata.version + 1,
       },

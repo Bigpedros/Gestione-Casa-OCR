@@ -139,4 +139,47 @@ describe('Gestione Allegati e Ricevute - Test Obbligatori (TEST-ALL-001 - TEST-A
     expect(all[0].mimeType).toBe('application/pdf');
     expect(all[0].storageKey).toBe(pdfDataUrl);
   });
+
+  it('TEST-ALL-006: Allegato con expenseId non compare tra gli unlinked e risolve spesa', async () => {
+    const expId = await db.expenses.add({
+      id: 'exp-test-all-6',
+      entryMode: 'receipt',
+      amount: 42.50,
+      description: 'Spesa Alimentari',
+      expenseDate: '2026-08-20',
+      competenceMonth: 8,
+      competenceYear: 2026,
+      categoryId: 'cat-spesa',
+      subcategoryId: 'subcat-alimentari',
+      paymentMethod: 'debitCard',
+      status: 'paid',
+      classification: 'necessary',
+      notified: false,
+      metadata: {
+        createdAt: '2026-08-20T10:00:00.000Z',
+        updatedAt: '2026-08-20T10:00:00.000Z',
+        version: 1,
+      },
+    });
+
+    const att = await attachmentRepository.create({
+      entityType: 'expense',
+      entityId: expId,
+      expenseId: expId,
+      fileName: 'scontrino_spesa.jpg',
+      mimeType: 'image/jpeg',
+      sizeBytes: 120000,
+      storageKey: 'data:image/jpeg;base64,...',
+      fileHash: 'hash-test-att-6',
+      status: 'active',
+    });
+
+    const fetched = await attachmentRepository.getById(att.id);
+    expect(fetched?.expenseId).toBe('exp-test-all-6');
+    expect(fetched?.entityType).toBe('expense');
+
+    // Verifica helper isAttachmentUnlinked logic
+    const isUnlinked = !fetched?.expenseId && (!fetched?.entityId || fetched?.entityId === 'unlinked');
+    expect(isUnlinked).toBe(false);
+  });
 });

@@ -16,8 +16,8 @@ export class PaymentMethodParser implements ReceiptParserModule<string> {
     },
     {
       key: 'carta',
-      regex: /\b(?:CARTA\s+CREDITO|CARTA\s+DI\s+CREDITO|CREDITO|CONTACTLESS|POS|VISA|MASTERCARD|PAYPASS|MAESTRO|POSTEPAY)\b/i,
-      confidence: 85,
+      regex: /\b(?:PAGAMENTO\s+ELETTRONICO|PAG\.?\s*ELETTRONICO|ELETTRONICO|CARTA\s+ELETTRONICA|CARTA\s+CREDITO|CARTA\s+DI\s+CREDITO|CREDITO|CONTACTLESS|POS|VISA|MASTERCARD|PAYPASS|MAESTRO|POSTEPAY)\b/i,
+      confidence: 90,
     },
     {
       key: 'bonifico',
@@ -42,10 +42,12 @@ export class PaymentMethodParser implements ReceiptParserModule<string> {
   ];
 
   public parse(context: ReceiptParserContext): ParsedField<string> {
-    const lines = context.normalizedLines;
-    if (!lines || lines.length === 0) {
+    const rawLines = context.normalizedLines;
+    if (!rawLines || rawLines.length === 0) {
       return { value: null, confidence: 0 };
     }
+
+    const lines = rawLines.map((l) => l.replace(/^[‘'"`«“\s*_\-|]+/, '').trim());
 
     // 1. Controllo prioritario sui contanti: se compare RESTO o CONTANTI nel documento, è contanti al 100%
     for (let i = lines.length - 1; i >= 0; i--) {
@@ -55,7 +57,7 @@ export class PaymentMethodParser implements ReceiptParserModule<string> {
           value: 'contanti',
           confidence: 95,
           lineIndex: i,
-          sourceText: line,
+          sourceText: rawLines[i],
         };
       }
     }
@@ -73,7 +75,7 @@ export class PaymentMethodParser implements ReceiptParserModule<string> {
             value: item.key,
             confidence: item.confidence,
             lineIndex: i,
-            sourceText: line,
+            sourceText: rawLines[i],
           };
         }
       }
@@ -89,7 +91,7 @@ export class PaymentMethodParser implements ReceiptParserModule<string> {
             value: item.key,
             confidence: item.confidence - 10,
             lineIndex: i,
-            sourceText: line,
+            sourceText: rawLines[i],
           };
         }
       }

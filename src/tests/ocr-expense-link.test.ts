@@ -7,6 +7,7 @@ import {
   documentSessionRepository,
   expenseRepository,
   productRepository,
+  attachmentRepository,
 } from '../repositories';
 import { productClassificationService } from '../services/productClassification';
 import { budgetService } from '../services/budgetService';
@@ -753,5 +754,60 @@ describe('Punto 12 — Collegamento Definitivo dello Scontrino alle Uscite (TEST
     const items = await db.expenseItems.toArray();
     expect(expenses.length).toBe(0);
     expect(items.length).toBe(0);
+  });
+
+  it('21. Propagazione automatica di expenseId all\'Attachment collegato', async () => {
+    const session = await documentSessionRepository.create({
+      status: 'ready_for_review',
+      documentType: 'receipt',
+      sourceMode: 'singleImage',
+    });
+
+    const att = await attachmentRepository.create({
+      fileName: 'scontrino-todis.jpg',
+      mimeType: 'image/jpeg',
+      sizeBytes: 1024,
+      storageKey: 'data:image/jpeg;base64,...',
+      entityType: 'unlinked',
+      entityId: session.id,
+      status: 'active',
+      fileHash: 'hash-test-21',
+    });
+
+    const ocrProc = await ocrProcessRepository.create({
+      attachmentId: att.id,
+      status: 'completed',
+      confirmationRequired: true,
+      confirmedByUser: true,
+      detectedSupplier: 'TODIS',
+      detectedTotal: 15.30,
+      detectedDate: '2026-09-01',
+    });
+
+    await documentSessionRepository.update(session.id, { ocrProcessId: ocrProc.id });
+
+    await ocrReceiptLineRepository.create({
+      ocrProcessId: ocrProc.id,
+      originalText: 'LATTE FRESCO 1.30',
+      description: 'LATTE FRESCO',
+      quantity: 1,
+      unitPrice: 1.30,
+      lineTotal: 1.30,
+      confidence: 90,
+      reviewStatus: 'confirmed',
+    });
+
+    const exp = await productClassificationService.createAccountingRegistration({
+      ocrProcessId: ocrProc.id,
+      sessionId: session.id,
+      expenseDate: '2026-09-01',
+      documentTotal: 1.30,
+    });
+
+    const updatedAtt = await db.attachments.get(att.id);
+    expect(updatedAtt).toBeDefined();
+    expect(updatedAtt?.expenseId).toBe(exp.id);
+    expect(updatedAtt?.entityType).toBe('expense');
+    expect(updatedAtt?.entityId).toBe(exp.id);
   });
 });

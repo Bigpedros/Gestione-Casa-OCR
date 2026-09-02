@@ -37,7 +37,8 @@ describe('SOTTO-BLOCCO 2C: Confronto Deterministico Legacy vs LineItemParserV2',
     const legacyResultFromFullDoc = legacyParser.parse(legacyContextFullDoc);
 
     // Invarianti di confronto tra i due parser
-    expect(legacyResultFromParsedBody.length).toBe(8);
+    // legacyResultFromParsedBody estrae 9 righe (articoli con e senza prezzo preservati sotto Regola Ceccotti P4-D1-R1)
+    expect(legacyResultFromParsedBody.length).toBe(9);
     expect(legacyResultFromFullDoc.length).toBe(7);
 
     // Invarianti V2 sul BODY TODIS

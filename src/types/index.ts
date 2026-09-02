@@ -335,6 +335,7 @@ export interface Attachment {
   id: EntityId;
   entityType: 'expense' | 'fixedExpense' | 'project' | 'report' | 'unlinked' | string;
   entityId: EntityId;
+  expenseId?: EntityId | null;
   fileName: string;
   description?: string;
   mimeType: 'image/jpeg' | 'image/png' | 'image/webp' | 'application/pdf' | string;

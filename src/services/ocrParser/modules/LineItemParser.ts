@@ -289,12 +289,41 @@ export class LineItemParser implements ReceiptParserModule<ParsedReceiptLine> {
         }
         hasEncounteredFirstItem = true;
       } else {
-        // Se la riga non ha prezzo ma è il nome di un prodotto (es. SHOPPERS, PATATINE, PANE TRAMEZZINI)
-        const hasMinLetters = line.replace(/[^A-Za-z]/g, '').length >= 3;
+        // Look-ahead: se la riga è una descrizione prodotto plausibile (senza prezzo)
+        // ed è immediatamente seguita da una specifica quantitativa/peso/prezzo (es. "500G 2,50 A" o "2 X 3,00 6,00 A"),
+        // combiniamo temporaneamente le due righe e le parsiamo come singolo articolo.
+        const cleanDesc = line.replace(/^[0-9*.\-\s‘'"`«“()[\]#~|\\<>]+/, '').replace(/[*\-_\s‘'"`«“()[\]#~|\\<>]+$/, '').trim();
+        const lettersCount = (cleanDesc.match(/[A-Za-zÀ-ÿ]/g) || []).length;
+        const hasMinLetters = lettersCount >= 3;
         const isSuspect = this.isSuspectNoise(line);
+        const isHeaderLike = headerCheck.test(upper) || this.headerExclusions.some((exc) => upper.includes(exc));
 
+        if (hasMinLetters && !isHeaderLike && !isFooterMatch && !isIsolatedTotal && !isSuspect && i + 1 < lines.length) {
+          const nextLine = lines[i + 1];
+          const isNextSpecification =
+            /^(?:(?:\d+(?:[.,]\d{1,3})?)\s*(?:kg|g|gr|l|ml|lt|pz|pezzi)?\s*(?:[xX*]\s*\d+[.,]\d{2}\s*)?)?-?\d+[.,]\d{2}(?:\s*[A-D])?$/i.test(
+              nextLine.trim()
+            ) ||
+            /^(?:QT\.?|QUANTITA'?\s*)?(\d+(?:[.,]\d{1,3})?)\s*(kg|g|l|ml|pz|pezzi)?\s*[xX*]\s*(\d+[.,]\d{2})(?:\s*[A-D])?$/i.test(
+              nextLine.trim()
+            );
+
+          if (isNextSpecification) {
+            const combinedText = `${line} ${nextLine}`;
+            const combinedItem = this.parseItemLine(combinedText, i, returnRegex.test(upper));
+            if (combinedItem && combinedItem.lineTotal > 0) {
+              parsedLines.push(combinedItem);
+              hasEncounteredFirstItem = true;
+              i++; // Salta la riga successiva consumata
+              continue;
+            }
+          }
+        }
+
+        // Se la riga non ha prezzo ma è il nome di un prodotto (es. SHOPPERS, PATATINE, PANE TRAMEZZINI)
+        const allowUnpriced = hasEncounteredTableHeader ? !hasEncounteredFirstItem : hasEncounteredFirstItem;
         if (
-          (hasEncounteredTableHeader || hasEncounteredFirstItem || i > 0) &&
+          allowUnpriced &&
           hasMinLetters &&
           !headerCheck.test(upper) &&
           !isFooterMatch &&
@@ -302,7 +331,7 @@ export class LineItemParser implements ReceiptParserModule<ParsedReceiptLine> {
         ) {
           parsedLines.push({
             originalText: line,
-            normalizedDescription: line.replace(/^[0-9*.\-\s]+(?=[A-Za-z])/, '').trim(),
+            normalizedDescription: cleanDesc,
             quantity: 1,
             unitPrice: 0,
             lineTotal: 0,
@@ -313,7 +342,6 @@ export class LineItemParser implements ReceiptParserModule<ParsedReceiptLine> {
             reviewStatus: 'pending',
             warnings: ['PRICE_NOT_DETECTED', 'LOW_CONFIDENCE'],
           });
-          hasEncounteredFirstItem = true;
         }
       }
     }
@@ -333,7 +361,7 @@ export class LineItemParser implements ReceiptParserModule<ParsedReceiptLine> {
     const words = line.split(/\s+/).filter(Boolean);
     const nonNumericWords = words.filter((w) => !/\d/.test(w) && !/^[xX*]$/.test(w));
     if (nonNumericWords.length >= 4) {
-      const singleCharWords = nonNumericWords.filter((w) => w.length <= 2).length;
+      const singleCharWords = nonNumericWords.filter((w) => w.length === 1).length;
       if (singleCharWords / nonNumericWords.length > 0.6) {
         return true;
       }
@@ -345,8 +373,10 @@ export class LineItemParser implements ReceiptParserModule<ParsedReceiptLine> {
    * Rileva se una stringa è testo OCR fortemente sospetto o corrotto
    */
   private isSuspectNoise(line: string): boolean {
-    const weirdSymbols = (line.match(/[~|\\{}_^<>]/g) || []).length;
-    if (weirdSymbols > 3) return true;
+    const weirdSymbols = (line.match(/[~|\\{}_^<>@#$%*+=]/g) || []).length;
+    if (weirdSymbols > 2) return true;
+    const cleanLetters = line.replace(/[^A-Za-zÀ-ÿ]/g, '');
+    if (cleanLetters.length < 2 && line.trim().length > 3) return true;
     return false;
   }
 
@@ -464,7 +494,7 @@ export class LineItemParser implements ReceiptParserModule<ParsedReceiptLine> {
     // Rimuoviamo le aliquote IVA standard esplicite con %
     const vatRegex = /\b(?:22(?:[.,]00)?|10(?:[.,]00)?|4(?:[.,]00)?|5(?:[.,]00)?|0(?:[.,]00)?)\s*%/gi;
     const genericVatRegex = /\b\d{1,2}(?:[.,]\d{1,2})?\s*%/g;
-    let lineWithoutVat = line.replace(vatRegex, ' ').replace(genericVatRegex, ' ');
+    let lineWithoutVat = line.replace(vatRegex, ' ').replace(genericVatRegex, ' ').replace(/[’']/g, '.');
 
     // Cerchiamo tutti i token monetari decimali nella riga
     let moneyMatches = Array.from(

@@ -539,9 +539,9 @@ export class PaymentEvidenceParser {
   } {
     const lines = ocrText.lines;
 
-    // 1. Label esplicite di beneficiario / ente creditore / esercente / destinatario
+    // 1. Label esplicite di beneficiario / ente creditore / esercente / destinatario / merchant
     const beneficiaryLabelRegex =
-      /\b(?:BENEFICIARIO|ENTE\s+CREDITORE|DESTINATARIO|ESERCENTE|PUNTO\s+VENDITA|A\s+FAVORE\s+DI|INTESTATARIO|INTESTATO\s+A|SERVIZIO)\s*[:\s]+(.+)$/i;
+      /\b(?:BENEFICIARIO|ENTE\s+CREDITORE|DESTINATARIO|ESERCENTE|PUNTO\s+VENDITA|P\.?\s*VENDITA|A\s+FAVORE\s+DI|INTESTATARIO|INTESTATO\s+A|SERVIZIO|MERCHANT)\s*[:\s]+(.+)$/i;
 
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
@@ -549,7 +549,7 @@ export class PaymentEvidenceParser {
       if (match) {
         let name = match[1].trim();
         // Rimuove eventuali etichette residue
-        name = name.replace(/\b(?:IBAN|DATA|IMPORTO|CODICE|CF|PIVA)\b.*$/i, '').trim();
+        name = name.replace(/\b(?:IBAN|DATA|IMPORTO|CODICE|CF|PIVA|STAN|TID|AUT)\b.*$/i, '').trim();
         if (name.length >= 2) {
           return {
             beneficiary: name,
@@ -559,11 +559,11 @@ export class PaymentEvidenceParser {
       }
     }
 
-    // 2. Se è un Bonifico Bancario ma la label era a capo successivo
+    // 2. Se è un Bonifico Bancario o PagoPA ma la label era a capo successivo
     if (subtype === 'BANK_TRANSFER_RECEIPT' || subtype === 'PAGOPA_RECEIPT') {
       for (let i = 0; i < lines.length; i++) {
         const norm = lines[i].normalizedText.toUpperCase();
-        if (/^(?:BENEFICIARIO|ENTE\s+CREDITORE|DESTINATARIO)\s*:?$/i.test(norm)) {
+        if (/^(?:BENEFICIARIO|ENTE\s+CREDITORE|DESTINATARIO|ESERCENTE)\s*:?$/i.test(norm)) {
           if (i + 1 < lines.length && lines[i + 1].rawText.trim().length >= 3) {
             return {
               beneficiary: lines[i + 1].rawText.trim(),
@@ -574,24 +574,117 @@ export class PaymentEvidenceParser {
       }
     }
 
-    // 3. Se è POS o Punto Vendita, il nome dell'esercente è tipicamente nelle prime 3 righe
+    // 3. Ricevute POS, Sisal o Prove di Pagamento generiche:
+    // Discriminazione semantica tra Provider POS / Gestore / Circuito e Merchant Commerciale reale
     if (subtype === 'POS_RECEIPT' || subtype === 'SISAL_OR_AUTHORIZED_POINT' || subtype === 'GENERIC_PAYMENT_PROOF') {
-      for (let i = 0; i < Math.min(lines.length, 4); i++) {
-        const lineText = lines[i].rawText.trim();
-        const norm = lines[i].normalizedText.toUpperCase();
-        // Ignora intestazioni generiche POS / TERMINALE / SCONTRINO / MEMORIA CLIENTE
-        if (
-          !/\b(?:POS|TERMINALE|MEMORIA\s+CLIENTE|COPIA\s+CLIENTE|RICEVUTA|BANCOMAT|PAGAMENTO|TRANSAZIONE|ACQUISTO)\b/.test(
-            norm
-          ) &&
-          !/\d{4,}/.test(norm) &&
-          lineText.length >= 3
-        ) {
-          return {
-            beneficiary: lineText,
-            confidence: 0.75,
-          };
+      // Regex di esclusione per provider POS, circuiti di carte e termini operativi/tecnici
+      const paymentProviderRegex =
+        /\b(?:NEXI|SEPA-?FAST|SEPA|SUMUP|AXERVE|INGENICO|WORLDLINE|SIA|EQUENS|SETTEFI|MONEYNET|PAYPAL|STRIPE|VERIFONE|PAX|GLOBAL\s+PAYMENTS|BANCOMAT\s+PAY|SATISPAY|MOONEY|LIS|SISALPAY|SISTEMA\s+PAGAMENTI)\b/i;
+      const cardSchemeRegex =
+        /\b(?:PAGOBANCOMAT|BANCOMAT|MASTERCARD|DEBIT\s+MASTERCARD|CREDIT\s+MASTERCARD|VISA|VISA\s+DEBIT|VISA\s+ELECTRON|V-?PAY|MAESTRO|AMEX|AMERICAN\s+EXPRESS|CIRRUS|DINERS|JCB|UNIONPAY)\b/i;
+      const posOperationalRegex =
+        /\b(?:POS|TERMINALE|TPV|TID|STAN|AUT\.?\s*CODE|AUTH\s*CODE|AUTORIZZAZIONE|APPLICAZIONE|AID|ATC|ARQC|TC|C-?LESS|CONTACTLESS|CHIP|MAG|FALLBACK|ACQUISTO|VENDITA|STORNO|PREAUTORIZZAZIONE|TRANSAZIONE|OPERAZIONE|ESITO|PAGAMENTO|RICEVUTA|QUIETANZA|MEMORIA\s+CLIENTE|COPIA\s+CLIENTE|COPIA\s+ESERCENTE|SCONTRINO\s+ESERCENTE|RICEVUTA\s+CLIENTE|RICEVUTA\s+POS|SCONTRINO|DOCUMENTO|BIGLIETTO|ARRIVEDERCI|GRAZIE)\b/i;
+      const addressIndicatorsRegex =
+        /\b(?:VIA|CORSO|PIAZZA|VIALE|LARGO|STRADA|VICOLO|PIAZZALE|LOCALITA|LOC\.?|KM|FRAZIONE|SNC)\b/i;
+      const commercialKeywordsRegex =
+        /\b(?:FARMACIA|PARAFARMACIA|SUPERMERCATO|IPERMERCATO|MINIMARKET|MARKET|BAR|CAFFE|RISTORANTE|PIZZERIA|TRATTORIA|OSTERIA|GELATERIA|PASTICCERIA|PANIFICIO|FORNO|TABACCHI|TABACCHERIA|EDICOLA|LIBRERIA|LAVANDERIA|STUDIO|POLIAMBULATORIO|AMBULATORIO|OTTICA|BOUTIQUE|NEGOZIO|HOTEL|ALBERGO|AUTOFFICINA|OFFICINA|DISTRIBUTORE|GARAGE|CINEMA|TEATRO|PALESTRA|CENTRO|STORE|SHOP|MERCATO)\b/i;
+      const corporateSuffixRegex =
+        /\b(?:S\.?R\.?L\.?|S\.?P\.?A\.?|S\.?N\.?C\.?|S\.?A\.?S\.?|SOC\.?\s*COOP\.?|S\.?T\.?P\.?|DITTA|S\.?S\.?|ONLUS|E\.?T\.?S\.?)\b/i;
+
+      interface MerchantCandidate {
+        text: string;
+        score: number;
+        lineIndex: number;
+      }
+      const candidates: MerchantCandidate[] = [];
+
+      const searchLinesCount = Math.min(lines.length, 8);
+      for (let i = 0; i < searchLinesCount; i++) {
+        const raw = lines[i].rawText.trim();
+        const norm = lines[i].normalizedText.toUpperCase().trim();
+
+        if (raw.length < 3) continue;
+
+        // Scarta se la riga è solo una sequenza di numeri o codici tecnici (es. "911-000935-05 i pe PARO", "12/08/2026")
+        const digitRatio = (norm.match(/\d/g) || []).length / norm.length;
+        if (digitRatio > 0.35) continue;
+
+        // Se la riga contiene provider di pagamento o circuito carta SENZA un suffisso/keyword commerciale
+        const hasProvider = paymentProviderRegex.test(norm);
+        const hasCardScheme = cardSchemeRegex.test(norm);
+        const hasPosOp = posOperationalRegex.test(norm);
+        const hasCommercialKeyword = commercialKeywordsRegex.test(norm);
+        const hasCorporateSuffix = corporateSuffixRegex.test(norm);
+
+        // Se è una riga puramente tecnica POS / provider / circuito -> scarta
+        if ((hasProvider || hasCardScheme || hasPosOp) && !hasCommercialKeyword && !hasCorporateSuffix) {
+          continue;
         }
+
+        // Se è puramente un indirizzo stradale isolato
+        if (addressIndicatorsRegex.test(norm) && !hasCommercialKeyword && !hasCorporateSuffix) {
+          continue;
+        }
+
+        let score = 0;
+
+        // Punteggio keyword commerciale (es. "FARMACIA LA NAVE", "BAR IL GABBIANO")
+        if (hasCommercialKeyword) {
+          score += 35;
+        }
+
+        // Punteggio forma societaria (es. "S.R.L.", "S.P.A.")
+        if (hasCorporateSuffix) {
+          score += 30;
+        }
+
+        // Punteggio per struttura nome pluri-parola alfabetica (es. "LA NAVE", "BELLA NAPOLI")
+        const words = raw.split(/\s+/).filter((w) => w.length >= 2);
+        const alphaOnly = raw.replace(/[^A-Za-z]/g, '');
+        if (words.length >= 2 && alphaOnly.length >= 5) {
+          score += 15;
+        } else if (words.length === 1 && alphaOnly.length >= 4 && !hasProvider && !hasCardScheme && !hasPosOp) {
+          score += 5;
+        }
+
+        // Bonus se la riga successiva o precedente sembra un indirizzo o località
+        const prevNorm = i > 0 ? lines[i - 1].normalizedText.toUpperCase() : '';
+        const nextNorm = i + 1 < lines.length ? lines[i + 1].normalizedText.toUpperCase() : '';
+        if (addressIndicatorsRegex.test(prevNorm) || addressIndicatorsRegex.test(nextNorm)) {
+          score += 10;
+        }
+
+        // Bonus posizione (prime 3 righe)
+        if (i <= 2) {
+          score += 10;
+        } else if (i <= 4) {
+          score += 5;
+        }
+
+        // Penalità se contiene frammenti di parole POS
+        if (hasPosOp) {
+          score -= 15;
+        }
+
+        if (score >= 25) {
+          // Pulizia del nome candidato
+          let cleanText = raw.replace(/^[*#\-_:;.]+|\s+[*#\-_:;.]+$/g, '').trim();
+          candidates.push({
+            text: cleanText,
+            score,
+            lineIndex: i,
+          });
+        }
+      }
+
+      if (candidates.length > 0) {
+        candidates.sort((a, b) => b.score - a.score);
+        const best = candidates[0];
+        const conf = Math.min(0.95, Math.max(0.70, 0.65 + best.score * 0.005));
+        return {
+          beneficiary: best.text,
+          confidence: conf,
+        };
       }
     }
 

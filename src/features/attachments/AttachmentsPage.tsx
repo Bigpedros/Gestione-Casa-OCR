@@ -1,7 +1,8 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { attachmentRepository, expenseRepository, supplierRepository, documentSessionRepository, ocrProcessRepository } from '../../repositories';
+import { attachmentRepository, expenseRepository, supplierRepository } from '../../repositories';
+import { repairOcrAttachmentExpenseLinks } from '../../services/productClassification/ProductClassificationService';
 import { formatDate, formatCurrency, formatFileSize } from '../../utils/formatters';
 import {
   PageHeader,
@@ -24,12 +25,12 @@ import {
   File,
   ChevronDown,
   ScanLine,
-  FileSearch,
   ArrowLeft,
 } from 'lucide-react';
 import type { Attachment, Expense } from '../../types';
 import { ScanReceiptModal } from './ScanReceiptModal';
 import { OcrReviewModal } from './OcrReviewModal';
+import { PendingOcrReviewBanner } from './PendingOcrReviewBanner';
 import { ROUTES } from '../../app/routes';
 
 export const AttachmentsPage: React.FC = () => {
@@ -37,40 +38,6 @@ export const AttachmentsPage: React.FC = () => {
   const expenses = useLiveQuery(() => expenseRepository.getAll(), []);
   const suppliers = useLiveQuery(() => supplierRepository.getAll(), []);
   const [activeFilterTab, setActiveFilterTab] = useState<'all' | 'receipts' | 'documents' | 'unlinked'>('all');
-
-  // Pending review sessions
-  const pendingReviewSessions = useLiveQuery(
-    async () => {
-      const all = await documentSessionRepository.getAll();
-      const ocrProcesses = await ocrProcessRepository.getAll();
-      const ocrMap = new Map(ocrProcesses.map((p) => [p.id, p]));
-
-      return all
-        .filter((s) => {
-          if (s.status === 'reviewed' || s.status === 'cancelled' || s.expenseId) return false;
-          const proc = s.ocrProcessId ? ocrMap.get(s.ocrProcessId) : undefined;
-          if (proc?.expenseId) return false;
-          return s.status === 'ready' || s.status === 'ready_for_review' || s.status === 'completed' || s.status === 'failed';
-        })
-        .map((s) => {
-          const proc = s.ocrProcessId ? ocrMap.get(s.ocrProcessId) : undefined;
-          const isReady = Boolean(
-            (s.status === 'ready_for_review' || s.status === 'completed') &&
-            proc?.status === 'completed' &&
-            proc?.rawText &&
-            proc.rawText.trim().length > 0
-          );
-          const isFailed = s.status === 'failed' || proc?.status === 'failed';
-          return {
-            ...s,
-            ocrProcess: proc,
-            isReady,
-            isFailed,
-          };
-        });
-    },
-    [],
-  );
 
   // Menu dropdown state for "+ Nuovo Allegato"
   const [isMenuOpen, setIsMenuOpen] = useState(false);
@@ -80,6 +47,11 @@ export const AttachmentsPage: React.FC = () => {
   const [reviewSessionId, setReviewSessionId] = useState<string | null>(null);
   const [reviewOcrProcessId, setReviewOcrProcessId] = useState<string | null>(null);
   const [isReviewModalOpen, setIsReviewModalOpen] = useState<boolean>(false);
+
+  // Auto-repair orphan / unlinked OCR attachments when page loads
+  useEffect(() => {
+    repairOcrAttachmentExpenseLinks().catch(console.error);
+  }, []);
 
   // Hidden input refs for photo, gallery, file
   const cameraInputRef = useRef<HTMLInputElement>(null);
@@ -93,6 +65,12 @@ export const AttachmentsPage: React.FC = () => {
   const [uploadDescription, setUploadDescription] = useState('');
   const [uploadExpenseId, setUploadExpenseId] = useState<string>('');
   const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
+
+  const isAttachmentUnlinked = (a: Attachment): boolean => {
+    if (a.expenseId) return false;
+    if (a.entityType === 'expense' && a.entityId && a.entityId !== 'unlinked') return false;
+    return true;
+  };
 
   const totalSizeBytes = React.useMemo(() => {
     return (attachments || []).reduce((acc, att) => acc + (att.sizeBytes || 0), 0);
@@ -111,9 +89,7 @@ export const AttachmentsPage: React.FC = () => {
   }, [attachments]);
 
   const unlinkedCount = React.useMemo(() => {
-    return (attachments || []).filter(
-      (a) => !a.entityId || a.entityId === 'unlinked' || a.entityType === 'unlinked'
-    ).length;
+    return (attachments || []).filter(isAttachmentUnlinked).length;
   }, [attachments]);
 
   const filteredAttachments = React.useMemo(() => {
@@ -130,9 +106,7 @@ export const AttachmentsPage: React.FC = () => {
       );
     }
     if (activeFilterTab === 'unlinked') {
-      return attachments.filter(
-        (a) => !a.entityId || a.entityId === 'unlinked' || a.entityType === 'unlinked'
-      );
+      return attachments.filter(isAttachmentUnlinked);
     }
     return attachments;
   }, [attachments, activeFilterTab]);
@@ -253,9 +227,15 @@ export const AttachmentsPage: React.FC = () => {
     }
   };
 
-  const findExpense = (expenseId?: string): Expense | undefined => {
-    if (!expenseId || expenseId === 'unlinked') return undefined;
-    return expenses?.find((e) => e.id === expenseId);
+  const findExpense = (attOrId?: Attachment | string): Expense | undefined => {
+    if (!attOrId) return undefined;
+    if (typeof attOrId === 'object') {
+      const targetId = attOrId.expenseId || (attOrId.entityType === 'expense' ? attOrId.entityId : undefined);
+      if (!targetId || targetId === 'unlinked') return undefined;
+      return expenses?.find((e) => e.id === targetId);
+    }
+    if (attOrId === 'unlinked') return undefined;
+    return expenses?.find((e) => e.id === attOrId);
   };
 
   return (
@@ -406,58 +386,13 @@ export const AttachmentsPage: React.FC = () => {
       )}
 
       {/* Banner per documenti OCR in attesa di revisione */}
-      {pendingReviewSessions && pendingReviewSessions.length > 0 && (() => {
-        const readyCount = pendingReviewSessions.filter((s) => s.isReady).length;
-        const failedCount = pendingReviewSessions.filter((s) => s.isFailed).length;
-        const pendingCount = pendingReviewSessions.length - readyCount - failedCount;
-
-        let title = `Documenti OCR pronti per la revisione (${readyCount})`;
-        let subtitle = 'Confronta il documento originale ed i dati proposti prima della conferma definitiva.';
-        let buttonText = 'Rivedi dati estratti';
-
-        if (readyCount === 0 && pendingCount > 0) {
-          title = `Documenti in attesa di elaborazione OCR (${pendingCount})`;
-          subtitle = 'Documenti acquisiti non ancora elaborati. Apri per avviare il riconoscimento o completare la revisione.';
-          buttonText = 'Avvia ed elabora OCR';
-        } else if (readyCount === 0 && failedCount > 0) {
-          title = `Documenti con errore OCR (${failedCount})`;
-          subtitle = 'Uno o più documenti hanno riscontrato un errore durante la scansione. Apri per riprovare o modificare.';
-          buttonText = 'Gestisci errori OCR';
-        } else if (readyCount > 0 && (pendingCount > 0 || failedCount > 0)) {
-          title = `Documenti OCR: ${readyCount} pronti per la revisione, ${pendingCount + failedCount} da completare`;
-          subtitle = 'Verifica i documenti elaborati o gestisci le acquisizioni in sospeso.';
-          buttonText = 'Rivedi documenti';
-        }
-
-        return (
-          <div className="p-4 bg-amber-50/90 dark:bg-amber-950/50 border border-amber-200 dark:border-amber-900 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-xs">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-xl bg-amber-500 text-white flex items-center justify-center shrink-0 shadow-xs">
-                <FileSearch className="w-5 h-5" />
-              </div>
-              <div>
-                <h4 className="font-bold text-sm text-slate-900 dark:text-white">
-                  {title}
-                </h4>
-                <p className="text-xs text-slate-600 dark:text-slate-400">
-                  {subtitle}
-                </p>
-              </div>
-            </div>
-            <Button
-              variant="amber"
-              icon={<FileSearch className="w-4 h-4" />}
-              onClick={() => {
-                setReviewSessionId(pendingReviewSessions[0].id);
-                setReviewOcrProcessId(pendingReviewSessions[0].ocrProcessId || null);
-                setIsReviewModalOpen(true);
-              }}
-            >
-              {buttonText}
-            </Button>
-          </div>
-        );
-      })()}
+      <PendingOcrReviewBanner
+        onOpenReview={(sessionId, ocrProcId) => {
+          setReviewSessionId(sessionId);
+          setReviewOcrProcessId(ocrProcId);
+          setIsReviewModalOpen(true);
+        }}
+      />
 
       {/* Stats & Retention Policy Bar (013-L) */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
@@ -562,7 +497,7 @@ export const AttachmentsPage: React.FC = () => {
                 </tr>
               ) : (
                 filteredAttachments.map((att) => {
-                  const linkedExpense = findExpense(att.entityId);
+                  const linkedExpense = findExpense(att);
                   const supplier = linkedExpense?.supplierId
                     ? suppliers?.find((s) => s.id === linkedExpense.supplierId)
                     : undefined;

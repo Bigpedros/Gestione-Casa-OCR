@@ -260,9 +260,12 @@ export class ReceiptZoneSegmenter {
     const u = text.toUpperCase();
     return (
       (u.includes('DESCRIZIONE') && (u.includes('EURO') || u.includes('PREZZO') || u.includes('IVA') || u.includes('IMPORTO'))) ||
+      (u.includes('DESTZINE') && (u.includes('PREZZO') || u.includes('PRAGZOL') || u.includes('EURO'))) ||
+      (u.includes('DESCR') && (u.includes('IVA') || u.includes('IMA') || u.includes('PREZZO'))) ||
       (u.includes('ARTICOLO') && (u.includes('PREZZO') || u.includes('EURO') || u.includes('TOTALE'))) ||
       (u.includes('Q.TA') && (u.includes('PREZZO') || u.includes('DESCRIZIONE'))) ||
-      /^DESCRIZIONE\s+IVA\s+EURO$/i.test(u)
+      /^DESCRIZIONE\s+IVA\s+EURO$/i.test(u) ||
+      /^PESCRZIONE\s+IMA\s+PREZZO/i.test(u)
     );
   }
 
@@ -272,8 +275,8 @@ export class ReceiptZoneSegmenter {
       /\b(?:S\.?R\.?L\.?|S\.?P\.?A\.?|S\.?N\.?C\.?|S\.?A\.?S\.?|S\.?R\.?\])\b/i.test(u) ||
       /\b(?:P\.?\s*IVA|P\.?\s*I\.?\s*V\.?\s*A\.?|PP\s*IVA|PARTITA\s*IVA|COD\.?\s*FISC|C\.?\s*F\.?)\b/i.test(u) ||
       /\b(?:VIA|CORSO|PIAZZA|VIALE|LARGO|STRADA|LOC\.?|FRAZ\.?)\b.*\b\d+/i.test(u) ||
-      /\b(?:DOCUMENTO\s+COMMERCIALE|SCONTRINO\s+FISCALE|RICEVUTA\s+FISCALE)\b/i.test(u) ||
-      /\b(?:DI\s+VENDITA\s+[O0]\s+PRESTAZIONE)\b/i.test(u) ||
+      /\b(?:DOCUMENTO\s+COMMERCIALE|DOCIMENTO\s+COMMERCIALE|DOCIMENTO|SCONTRINO\s+FISCALE|RICEVUTA\s+FISCALE)\b/i.test(u) ||
+      /\b(?:DI\s+VENDITA\s+[O0]\s+PRESTAZIONE|VENDITA\s+[O0]\s+PRESTAZIONE)\b/i.test(u) ||
       /\b(?:CASSA|CASSIERE|OPERATORE|TERMINALE|REGISTRATORE)\b/i.test(u) ||
       /\b(?:TEL|FAX|EMAIL|PEC|CAP)\b/i.test(u)
     );
@@ -337,7 +340,7 @@ export class ReceiptZoneSegmenter {
   }
 
   private static isTotalsStartAnchor(text: string): boolean {
-    const u = text.toUpperCase();
+    const u = text.toUpperCase().replace(/^[‘'"`«“\s*_\-|]+/, '').trim();
     return (
       /\b(?:SUBTOTALE|SUB-TOTALE|SUB\s*TOTALE)\b/i.test(u) ||
       /\b(?:NUMERO\s+(?:DI\s+)?ARTICOLI|NUM\.?\s*ARTICOLI|N\.?\s*ARTICOLI|ARTICOLI\s+\d+|N\.?\s*PEZZI)\b/i.test(u) ||
@@ -347,23 +350,23 @@ export class ReceiptZoneSegmenter {
   }
 
   private static isPostSubtotalModifier(text: string): boolean {
-    const u = text.toUpperCase();
+    const u = text.toUpperCase().replace(/^[‘'"`«“\s*_\-|]+/, '').trim();
     return (
       /\b(?:SCONTO|BUONO|ARROTONDAMENTO|ABBUONO)\b/i.test(u)
     );
   }
 
   private static isPaymentOrRestoAnchor(text: string): boolean {
-    const u = text.toUpperCase();
+    const u = text.toUpperCase().replace(/^[‘'"`«“\s*_\-|]+/, '').trim();
     return (
-      /\b(?:PAGAMENTO|PAGATO|CONTANTE|CONTANTI|CARTA|BANCOMAT|CREDITO|RESTO|IMPORTO\s+PAGATO|IMPORTO\s+NAGATO)\b/i.test(u)
+      /\b(?:PAGAMENTO\s+ELETTRONICO|PAG\.?\s*ELETTRONICO|PAGAMENTO|PAGATO|CONTANTE|CONTANTI|CARTA|BANCOMAT|CREDITO|RESTO|IMPORTO\s+PAGATO|IMPORTO\s+NAGATO)\b/i.test(u)
     );
   }
 
   private static isFinalTotalOrPayment(text: string): boolean {
-    const u = text.toUpperCase();
+    const u = text.toUpperCase().replace(/^[‘'"`«“\s*_\-|]+/, '').trim();
     return (
-      /\b(?:TOTALE\s+COMPLESSIVO|TOTALE|PAGAMENTO|RESTO|IMPORTO\s+PAGATO|IMPORTO\s+NAGATO)\b/i.test(u)
+      /\b(?:TOTALE\s+COMPLESSIVO|TOTALE|PAGAMENTO\s+ELETTRONICO|PAG\.?\s*ELETTRONICO|PAGAMENTO|RESTO|IMPORTO\s+PAGATO|IMPORTO\s+NAGATO)\b/i.test(u)
     );
   }
 

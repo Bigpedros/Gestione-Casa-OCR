@@ -9,6 +9,11 @@ import {
   ReceiptZones,
 } from '../types';
 import { OCRLineReviewStatus } from '../../../types';
+import {
+  ITEM_MIN_ALPHA_RATIO,
+  ITEM_MAX_NOISE_RATIO,
+  ITEM_MIN_LETTERS,
+} from '../constants';
 
 /**
  * =========================================================================
@@ -287,7 +292,17 @@ export class LineItemParserV2 {
     );
 
     // 6. Verifica se è rumore isolato o continuazione pura / multilinea
-    const hasLetters = /[A-Za-z\u00C0-\u017F]{2,}/.test(descriptionCandidate);
+    const cleanDesc = descriptionCandidate.trim();
+    const lettersCount = (cleanDesc.match(/[A-Za-z\u00C0-\u017F]/g) || []).length;
+    const hasLetters = lettersCount >= ITEM_MIN_LETTERS;
+    const alphaRatio = cleanDesc.length > 0 ? lettersCount / cleanDesc.length : 0;
+    const noiseCount = (cleanDesc.match(/[~|\\{}_^<>*+=$"“'‘`()[\]@!%#?]/g) || []).length;
+    const noiseRatio = cleanDesc.length > 0 ? noiseCount / cleanDesc.length : 0;
+    const words = cleanDesc.split(/\s+/).filter((w) => w.replace(/[^A-Za-z\u00C0-\u017F]/g, '').length >= 2);
+    const hasValidWords =
+      words.some((w) => w.replace(/[^A-Za-z\u00C0-\u017F]/g, '').length >= 3) ||
+      (words.length >= 2 && lettersCount >= 5);
+
     const hasVat = vatRateCandidate !== null;
     const hasPrice = monetaryResult.evidence === 'CERTAIN' || monetaryResult.evidence === 'PLAUSIBLE';
     const isModifier = type !== 'ARTICLE';
@@ -299,18 +314,31 @@ export class LineItemParserV2 {
     // d. Riga di solo prezzo totale isolato (es. "6,00")
     const isWeightOnly = !hasVat && !hasPrice && !isModifier && /^\s*\d+(?:[.,]\d+)?\s*(?:KG|G|GR|L|ML|PZ|CT|CF)\s*$/i.test(normText);
     const isUnitPriceOnly = !hasVat && !isModifier && /^\s*[xX*]\s*\d+[.,]\d{2}/i.test(normText);
-    const isPriceOnly = !hasLetters && !hasVat && hasPrice;
+    const isPriceOnly = !hasLetters && hasPrice;
 
     const isPureContinuationOrMultiplier =
-      !hasLetters && (multiplierCandidate !== null || hasPrice || isWeightOnly || isUnitPriceOnly);
+      !hasLetters && (multiplierCandidate !== null || hasPrice || isWeightOnly || isUnitPriceOnly || isPriceOnly);
+
+    const isStructuralTerm =
+      !hasVat &&
+      /\b(?:DOCUMENTO|DOCIMENTO|COMMERCIALE|SCONTRINO|RICEVUTA|FATTURA|PRESTAZIONE|VENDITA|DI\s+VENDITA|DESCRIZIONE\s+IVA|DESTZINE|DESCRZINE|PREZZO|PRAGZOL|IMPORTO|PAGAMENTO|ELETTRONICO|CONTANTE|RESTO|TOTALE|SUBTOTALE|ARRIVEDERCI|GRAZIE|MATRICOLA|CASSIERE|OPERATORE|TERMINALE|P\.?\s*IVA|PARTITA\s*IVA|CODICE\s*FISCALE|C\.?\s*F\.?)\b/i.test(
+        cleanDesc
+      );
+
+    const isUnpricedLegitimateProduct =
+      hasLetters &&
+      alphaRatio >= ITEM_MIN_ALPHA_RATIO &&
+      noiseRatio <= ITEM_MAX_NOISE_RATIO &&
+      hasValidWords &&
+      !isStructuralTerm;
 
     const isNoise =
-      !hasLetters &&
-      !hasVat &&
-      multiplierCandidate === null &&
-      monetaryResult.evidence === 'MISSING' &&
+      !isPureContinuationOrMultiplier &&
+      !isPriceOnly &&
       !isWeightOnly &&
-      !isUnitPriceOnly;
+      !isUnitPriceOnly &&
+      (!hasLetters || !isUnpricedLegitimateProduct) &&
+      (monetaryResult.evidence === 'MISSING' || (!hasLetters && multiplierCandidate === null));
 
     return {
       line,
@@ -594,7 +622,10 @@ export class LineItemParserV2 {
         ? continuation.monetaryEvidence
         : parent.monetaryEvidence;
 
-    const warnings = Array.from(new Set([...parent.warnings, ...continuation.warnings]));
+    let warnings = Array.from(new Set([...parent.warnings, ...continuation.warnings]));
+    if (monetaryEvidence.lineTotalEvidence === 'CERTAIN' || monetaryEvidence.lineTotalEvidence === 'PLAUSIBLE') {
+      warnings = warnings.filter((w) => w !== 'PRICE_NOT_DETECTED' && w !== 'LOW_CONFIDENCE');
+    }
     const reasons = [...parent.reasons, `merged_continuation_line_${continuation.line.rawIndex}`];
 
     // Ricalcolo confidenze

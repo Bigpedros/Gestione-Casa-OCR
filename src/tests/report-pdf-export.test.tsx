@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { db } from '../database/db';
 import { ReportsPage } from '../features/reports/ReportsPage';
@@ -12,6 +12,9 @@ import * as reportPDFGenerator from '../features/reports/reportPDFGenerator';
 
 describe('COLL-03 Regression: Esportazione PDF del Report Economico', () => {
   beforeEach(async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-08-26T10:00:00.000Z'));
+
     await db.delete();
     await db.open();
     await seedInitialCategoriesAndSettings();
@@ -66,6 +69,10 @@ describe('COLL-03 Regression: Esportazione PDF del Report Economico', () => {
       frequency: 'monthly',
       priority: 'medium',
     });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it('TEST 1 – Esporta PDF non richiama window.print e invoca downloadEconomicReportPDF', async () => {

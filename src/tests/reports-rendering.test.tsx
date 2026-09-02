@@ -10,6 +10,9 @@ describe('P-31F: Verification of React Hooks order in ReportsPage', () => {
   const hookErrorMessages: string[] = [];
 
   beforeEach(async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-08-26T10:00:00.000Z'));
+
     hookErrorMessages.length = 0;
     consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation((...args) => {
       const msg = args.map((a) => (typeof a === 'string' ? a : JSON.stringify(a))).join(' ');
@@ -30,6 +33,7 @@ describe('P-31F: Verification of React Hooks order in ReportsPage', () => {
 
   afterEach(() => {
     consoleErrorSpy.mockRestore();
+    vi.useRealTimers();
   });
 
   it('mounts ReportsPage and handles data loading and month changes without React Hook order violations', async () => {

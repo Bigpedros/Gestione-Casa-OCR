@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import { db } from '../database/db';
 import { reportRepository } from '../repositories';
@@ -12,7 +12,14 @@ import { ReportsPage } from '../features/reports/ReportsPage';
 
 describe('P-33R: Servizio di chiusura automatica e ripristino del mese corrente', () => {
   beforeEach(async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-08-26T10:00:00.000Z'));
+
     await db.monthlyReports.clear();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   describe('1. Calcolo data di chiusura automatica (getAutomaticClosingDate)', () => {

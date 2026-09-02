@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { db } from '../database/db';
 import { budgetService } from '../services/budgetService';
@@ -19,6 +19,9 @@ describe('P-32 – Selettore del periodo nel Report Economico', () => {
   const currentDate = { year: 2026, month: 8 }; // Agosto 2026
 
   beforeEach(async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-08-26T10:00:00.000Z'));
+
     await db.incomeEntries.clear();
     await db.expenses.clear();
     await db.categories.clear();
@@ -51,6 +54,10 @@ describe('P-32 – Selettore del periodo nel Report Economico', () => {
       homeAddress: { address: 'Via Roma', streetNumber: '10', postalCode: '20100' },
       metadata: { createdAt: now, updatedAt: now, version: 1 },
     });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   describe('Unità: periodUtils (Calcolo intervalli e titoli)', () => {

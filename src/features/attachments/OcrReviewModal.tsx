@@ -564,7 +564,16 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
 
   const roundedSumLines = Math.round(calculatedSumLines * 100) / 100;
   const roundedDocTotal = Math.round(documentTotal * 100) / 100;
-  const hasTotalDiscrepancy = Math.abs(roundedSumLines - roundedDocTotal) > 0.01;
+
+  const documentCategory =
+    session?.detectedDocumentCategory ||
+    (ocrProcess?.metadata as Record<string, any>)?.documentCategory;
+
+  const isPaymentProof = documentCategory === 'PAYMENT_PROOF';
+
+  const rawDiscrepancy = Math.abs(roundedSumLines - roundedDocTotal);
+  const effectiveDiscrepancy = isPaymentProof ? 0 : rawDiscrepancy;
+  const hasTotalDiscrepancy = !isPaymentProof && effectiveDiscrepancy > 0.01;
 
   const linesWithError = editableLines.filter(
     (l) =>
@@ -921,15 +930,12 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
       errors.push('Totale scontrino non valido (deve essere un importo maggiore di 0 €).');
     }
 
-    const docCategory = session?.detectedDocumentCategory || (ocrProcess?.metadata as Record<string, any>)?.documentCategory;
-    const isPaymentProof = docCategory === 'PAYMENT_PROOF';
-
     if (!isPaymentProof && (!editableLines || editableLines.length === 0)) {
       errors.push('Il documento non contiene alcuna riga articolo.');
     }
 
-    // 2. Quadratura (solo se sono presenti righe o non è una ricevuta POS/PAYMENT_PROOF senza righe)
-    if (editableLines.length > 0 && hasTotalDiscrepancy && !isDiscrepancyApproved) {
+    // 2. Quadratura (solo se non è PAYMENT_PROOF ed è presente discrepanza non approvata)
+    if (!isPaymentProof && editableLines.length > 0 && hasTotalDiscrepancy && !isDiscrepancyApproved) {
       errors.push(
         `Discrepanza sul totale scontrino non approvata: somma righe (€ ${roundedSumLines.toFixed(
           2
@@ -1126,6 +1132,7 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
         ocrProcessId: ocrProcess?.id || null,
         sessionId: session?.id || null,
         documentTitle: (session?.metadata?.title as string) || null,
+        documentCategory: documentCategory || null,
         confidence: ocrProcess?.confidence || null,
         selectedVariant: metaObj.selectedVariant || null,
         variantScores: metaObj.variantScores || [],
@@ -1154,7 +1161,7 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
           actionMode: l.actionMode,
         })),
         calculatedSumLines: roundedSumLines,
-        discrepancy: Math.abs(roundedDocTotal - roundedSumLines),
+        discrepancy: effectiveDiscrepancy,
         hasDiscrepancy: hasTotalDiscrepancy,
         isDiscrepancyApproved,
         validationErrors: getFinalValidationErrors(),
@@ -1495,15 +1502,15 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
                 {/* Discrepancy Alert Box */}
                 {documentTotal > 0 &&
                   editableLines.length > 0 &&
-                  Math.abs(documentTotal - Math.round(editableLines.reduce((s, l) => s + (l.lineTotal || 0), 0) * 100) / 100) > 0.01 && (
+                  hasTotalDiscrepancy && (
                     <div className="p-3 bg-amber-50 dark:bg-amber-950/40 rounded-2xl border border-amber-200 dark:border-amber-800 text-xs text-amber-900 dark:text-amber-200 space-y-2 mt-3">
                       <div className="flex items-center gap-2 font-bold">
                         <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
                         <span>Discrepanza Rilevata negli Importi</span>
                       </div>
                       <p className="text-[11px] leading-relaxed">
-                        Il totale dello scontrino (€ {documentTotal.toFixed(2)}) differisce dalla somma delle righe (€ {(Math.round(editableLines.reduce((s, l) => s + (l.lineTotal || 0), 0) * 100) / 100).toFixed(2)}).
-                        Differenza: € {Math.abs(documentTotal - Math.round(editableLines.reduce((s, l) => s + (l.lineTotal || 0), 0) * 100) / 100).toFixed(2)}.
+                        Il totale dello scontrino (€ {documentTotal.toFixed(2)}) differisce dalla somma delle righe (€ {roundedSumLines.toFixed(2)}).
+                        Differenza: € {effectiveDiscrepancy.toFixed(2)}.
                       </p>
                       <label className="flex items-center gap-2 pt-1 font-semibold cursor-pointer text-amber-950 dark:text-amber-100">
                         <input
@@ -2077,7 +2084,7 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
                 const valErrors = getFinalValidationErrors();
                 const isConfirmBlocked =
                   isSaving ||
-                  (editableLines.length > 0 && hasTotalDiscrepancy && !isDiscrepancyApproved) ||
+                  (hasTotalDiscrepancy && !isDiscrepancyApproved) ||
                   valErrors.length > 0;
 
                 return (
@@ -2087,7 +2094,7 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
                     onClick={handleConfirmReview}
                     disabled={isConfirmBlocked}
                     title={
-                      editableLines.length > 0 && hasTotalDiscrepancy && !isDiscrepancyApproved
+                      hasTotalDiscrepancy && !isDiscrepancyApproved
                         ? 'Discrepanza non approvata: spunta la casella di conferma per abilitare il pulsante'
                         : valErrors.length > 0
                         ? `Impossibile confermare: ${valErrors[0]}`
@@ -2120,7 +2127,7 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
                   const valErrors = getFinalValidationErrors();
                   const isBlocked =
                     isSaving ||
-                    (editableLines.length > 0 && hasTotalDiscrepancy && !isDiscrepancyApproved) ||
+                    (hasTotalDiscrepancy && !isDiscrepancyApproved) ||
                     valErrors.length > 0;
 
                   return (
@@ -2130,7 +2137,7 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
                       onClick={handleCreateAccountingRegistration}
                       disabled={isBlocked}
                       title={
-                        editableLines.length > 0 && hasTotalDiscrepancy && !isDiscrepancyApproved
+                        hasTotalDiscrepancy && !isDiscrepancyApproved
                           ? 'Discrepanza non approvata: spunta la casella di conferma per abilitare la registrazione'
                           : valErrors.length > 0
                           ? `Impossibile registrare: ${valErrors[0]}`

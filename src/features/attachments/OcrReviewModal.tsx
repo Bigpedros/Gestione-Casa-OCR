@@ -113,8 +113,9 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
   const [progressText, setProgressText] = useState<string>('Caricamento e analisi dati OCR in corso...');
   const [progressPercentage, setProgressPercentage] = useState<number>(0);
 
-  // Concurrency and idempotency guard
+  // Concurrency, idempotency and lifecycle cancellation guard (Fase CI-R3)
   const processingSessionsRef = useRef<Set<string>>(new Set());
+  const loadRequestIdRef = useRef<number>(0);
 
   // Entities loaded from database
   const [session, setSession] = useState<DocumentSession | null>(null);
@@ -157,6 +158,9 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
   // Load database entities & initialize review draft
   const loadReviewData = useCallback(async () => {
     if (!isOpen) return;
+    const currentRequestId = ++loadRequestIdRef.current;
+    const isCurrent = () => loadRequestIdRef.current === currentRequestId;
+
     setIsLoading(true);
     setErrorMessage(null);
     setFeedbackMessage(null);
@@ -169,26 +173,33 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
       if (sessionId) {
         activeSession = await documentSessionRepository.getById(sessionId) || null;
       }
+      if (!isCurrent()) return;
+
       if (ocrProcessId) {
         activeOcrProcess = await ocrProcessRepository.getById(ocrProcessId) || null;
       }
+      if (!isCurrent()) return;
 
       if (!activeSession && activeOcrProcess) {
         // Find session linked to ocrProcess
         const allSessions = await documentSessionRepository.getAll();
+        if (!isCurrent()) return;
         activeSession = allSessions.find((s) => s.ocrProcessId === activeOcrProcess?.id) || null;
         if (!activeSession && activeOcrProcess.attachmentId) {
           const allSegments = await db.documentPageSegments.toArray();
+          if (!isCurrent()) return;
           const seg = allSegments.find((s: DocumentPageSegment) => s.attachmentId === activeOcrProcess?.attachmentId);
           if (seg?.sessionId) {
             activeSession = await documentSessionRepository.getById(seg.sessionId) || null;
           }
         }
       }
+      if (!isCurrent()) return;
 
       if (activeSession && !activeOcrProcess && activeSession.ocrProcessId) {
         activeOcrProcess = await ocrProcessRepository.getById(activeSession.ocrProcessId) || null;
       }
+      if (!isCurrent()) return;
 
       // 2. Determine if OCR recognition should be started
       // Conditions:
@@ -214,9 +225,12 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
 
       if (needsOcrRecognition && activeSession) {
         processingSessionsRef.current.add(activeSession.id);
-        setProgressText('Inizializzazione motore OCR e riconoscimento testo...');
+        if (isCurrent()) {
+          setProgressText('Inizializzazione motore OCR e riconoscimento testo...');
+        }
         try {
           activeOcrProcess = await ocrService.recognize(activeSession.id, (prog) => {
+            if (!isCurrent()) return;
             if (prog.statusText) setProgressText(prog.statusText);
             if (typeof prog.progressPercentage === 'number') {
               setProgressPercentage(prog.progressPercentage);
@@ -224,9 +238,11 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
           });
         } catch (ocrErr: any) {
           console.error('[OcrReviewModal] Errore recognize OCR:', ocrErr);
-          setErrorMessage(
-            `Riconoscimento OCR non riuscito: ${ocrErr?.message || 'Errore durante la scansione del testo'}. È comunque possibile inserire i dati a mano.`
-          );
+          if (isCurrent()) {
+            setErrorMessage(
+              `Riconoscimento OCR non riuscito: ${ocrErr?.message || 'Errore durante la scansione del testo'}. È comunque possibile inserire i dati a mano.`
+            );
+          }
           if (activeSession.ocrProcessId) {
             activeOcrProcess = await ocrProcessRepository.getById(activeSession.ocrProcessId) || null;
           }
@@ -235,9 +251,12 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
         }
       }
 
+      if (!isCurrent()) return;
+
       // Fallback process creation if neither existed nor recognize created one
       if (!activeOcrProcess && activeSession) {
         const segs = await documentPageSegmentRepository.getBySessionId(activeSession.id);
+        if (!isCurrent()) return;
         if (segs.length > 0) {
           activeOcrProcess = await ocrProcessRepository.create({
             attachmentId: segs[0].attachmentId,
@@ -245,9 +264,12 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
             confirmationRequired: true,
             confirmedByUser: false,
           });
+          if (!isCurrent()) return;
           await documentSessionRepository.update(activeSession.id, { ocrProcessId: activeOcrProcess.id });
         }
       }
+
+      if (!isCurrent()) return;
 
       if (!activeOcrProcess) {
         throw new Error('Impossibile caricare il processo OCR per la revisione');
@@ -256,6 +278,7 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
       // 3. Ensure rawText parsed & lines extracted
       const hasRawText = Boolean(activeOcrProcess.rawText && activeOcrProcess.rawText.trim().length > 0);
       const existingLines = await ocrReceiptLineRepository.getByOcrProcessId(activeOcrProcess.id);
+      if (!isCurrent()) return;
 
       if (
         hasRawText &&
@@ -263,18 +286,27 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
         (existingLines.length === 0 || (!activeOcrProcess.detectedSupplier && !activeOcrProcess.detectedTotal))
       ) {
         try {
-          setProgressText('Analisi strutturata dello scontrino ed estrazione righe...');
+          if (isCurrent()) {
+            setProgressText('Analisi strutturata dello scontrino ed estrazione righe...');
+          }
           await receiptParserService.parse(activeOcrProcess.id);
+          if (!isCurrent()) return;
           activeOcrProcess = (await ocrProcessRepository.getById(activeOcrProcess.id)) || activeOcrProcess;
         } catch (parseErr: any) {
           console.warn('[OcrReviewModal] Errore parsing scontrino:', parseErr);
-          setErrorMessage(
-            `Parsing scontrino parziale: ${parseErr?.message || 'Nessun dato strutturato estratto'}. Completa o modifica i campi manualmente.`
-          );
+          if (isCurrent()) {
+            setErrorMessage(
+              `Parsing scontrino parziale: ${parseErr?.message || 'Nessun dato strutturato estratto'}. Completa o modifica i campi manualmente.`
+            );
+          }
         }
       } else if (!hasRawText && activeOcrProcess.status === 'completed') {
-        setFeedbackMessage('Nessun testo rilevato nel documento. Puoi inserire i dati dello scontrino manualmente.');
+        if (isCurrent()) {
+          setFeedbackMessage('Nessun testo rilevato nel documento. Puoi inserire i dati dello scontrino manualmente.');
+        }
       }
+
+      if (!isCurrent()) return;
 
       // Run classification proposal
       let proposal: ReceiptClassificationProposal | null = null;
@@ -284,28 +316,36 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
         console.warn('[OcrReviewModal] Error during classification:', classErr);
       }
 
+      if (!isCurrent()) return;
+
       setSession(activeSession);
       setOcrProcess(activeOcrProcess);
 
       // 3. Load segments & attachments for image viewer
       if (activeSession) {
         const segs = await documentPageSegmentRepository.getBySessionId(activeSession.id);
+        if (!isCurrent()) return;
         setSegments(segs);
 
         const atts: Record<string, Attachment> = {};
         for (const seg of segs) {
           if (seg.attachmentId) {
             const att = await attachmentRepository.getById(seg.attachmentId);
+            if (!isCurrent()) return;
             if (att) atts[seg.id] = att;
           }
         }
+        if (!isCurrent()) return;
         setAttachmentsMap(atts);
       } else if (activeOcrProcess.attachmentId) {
         const att = await attachmentRepository.getById(activeOcrProcess.attachmentId);
+        if (!isCurrent()) return;
         if (att) {
           setAttachmentsMap({ default: att });
         }
       }
+
+      if (!isCurrent()) return;
 
       // 4. Load catalog options (Suppliers, Products, Categories)
       const [allSuppliers, allProducts, allCategories] = await Promise.all([
@@ -313,6 +353,8 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
         productRepository.getAll(),
         categoryRepository.getAll(),
       ]);
+
+      if (!isCurrent()) return;
 
       setSuppliers(allSuppliers);
       setProducts(allProducts);
@@ -324,11 +366,16 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
       if (activeSession?.expenseId) {
         foundExp = (await db.expenses.get(activeSession.expenseId)) || null;
       }
+      if (!isCurrent()) return;
+
       if (!foundExp && activeOcrProcess?.expenseId) {
         foundExp = (await db.expenses.get(activeOcrProcess.expenseId)) || null;
       }
+      if (!isCurrent()) return;
+
       if (!foundExp) {
         const allExp = await db.expenses.toArray();
+        if (!isCurrent()) return;
         foundExp =
           allExp.find((e) => {
             const m = e.metadata as Record<string, any> | undefined;
@@ -338,6 +385,7 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
             );
           }) || null;
       }
+      if (!isCurrent()) return;
       setExistingExpense(foundExp);
 
       // 5. Initialize Editable Form Fields
@@ -401,6 +449,8 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
 
       // 6. Load OCR receipt lines & merge with proposals
       const dbLines = await ocrReceiptLineRepository.getByOcrProcessId(activeOcrProcess.id);
+      if (!isCurrent()) return;
+
       const proposalMap = new Map<string, ClassificationMatchResult>();
       if (proposal) {
         for (const prop of proposal.lineProposals) {
@@ -478,6 +528,7 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
         };
       });
 
+      if (!isCurrent()) return;
       setEditableLines(reviewLines);
 
       // Update session status to ready_for_review
@@ -485,9 +536,13 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
         await documentSessionRepository.update(activeSession.id, { status: 'ready_for_review' });
       }
     } catch (err: any) {
-      setErrorMessage(err?.message || 'Errore durante la preparazione della schermata di revisione');
+      if (isCurrent()) {
+        setErrorMessage(err?.message || 'Errore durante la preparazione della schermata di revisione');
+      }
     } finally {
-      setIsLoading(false);
+      if (isCurrent()) {
+        setIsLoading(false);
+      }
     }
   }, [isOpen, sessionId, ocrProcessId]);
 
@@ -495,6 +550,10 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
     if (isOpen) {
       loadReviewData();
     }
+    return () => {
+      // Invalida qualsiasi caricamento asincrono pendente al cambio dipendenze o allo smontaggio
+      loadRequestIdRef.current++;
+    };
   }, [isOpen, loadReviewData]);
 
   // Calculations & Navigation Filter groups (Punto 14.5)

@@ -301,6 +301,23 @@ export class ReceiptParserService {
           ],
         };
       }
+    } else if (documentCategory === 'PAYMENT_PROOF') {
+      // Fase P4-D2-RC-01: Per PAYMENT_PROOF le righe articolo ufficiali sono sempre vuote ([])
+      // per evitare che frammenti monetari o totali POS vengano trasformati in falsi articoli.
+      officialLines = [];
+      shadowComparison = {
+        executed: false,
+        documentCategory,
+        isV2Official: false,
+        fallbackUsed: false,
+        v1Count: lines.length,
+        v2Count: 0,
+        matchedCount: 0,
+        lostInV2Count: lines.length,
+        addedInV2Count: 0,
+        v2NoiseCount: 0,
+        differences: [],
+      };
     } else {
       // Documenti non commerciali: rimangono sul parser legacy V1
       officialLines = lines;

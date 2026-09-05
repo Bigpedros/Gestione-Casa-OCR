@@ -14,6 +14,7 @@ import {
   ITEM_MAX_NOISE_RATIO,
   ITEM_MIN_LETTERS,
 } from '../constants';
+import { receiptKnowledgeBase } from '../knowledgeBase';
 
 /**
  * =========================================================================
@@ -124,7 +125,14 @@ export class LineItemParserV2 {
           lastItem.rawIndices.length === 1 &&
           lastItem.description.length >= 3;
 
-        if (lastWasIncompleteHeader && current.type === 'ARTICLE') {
+        const currentHasPositiveContinuationEvidence =
+          current.isPureContinuationOrMultiplier ||
+          current.multiplierCandidate !== null ||
+          current.vatRateCandidate !== null ||
+          current.quantityCandidate !== null ||
+          current.unitOfMeasureCandidate !== null;
+
+        if (lastWasIncompleteHeader && current.type === 'ARTICLE' && currentHasPositiveContinuationEvidence) {
           const mergedItem = this.mergeContinuationLine(lastItem, current);
           parsedItems[parsedItems.length - 1] = mergedItem;
           continue;
@@ -299,13 +307,35 @@ export class LineItemParserV2 {
     const noiseCount = (cleanDesc.match(/[~|\\{}_^<>*+=$"“'‘`()[\]@!%#?]/g) || []).length;
     const noiseRatio = cleanDesc.length > 0 ? noiseCount / cleanDesc.length : 0;
     const words = cleanDesc.split(/\s+/).filter((w) => w.replace(/[^A-Za-z\u00C0-\u017F]/g, '').length >= 2);
-    const hasValidWords =
-      words.some((w) => w.replace(/[^A-Za-z\u00C0-\u017F]/g, '').length >= 3) ||
-      (words.length >= 2 && lettersCount >= 5);
 
     const hasVat = vatRateCandidate !== null;
     const hasPrice = monetaryResult.evidence === 'CERTAIN' || monetaryResult.evidence === 'PLAUSIBLE';
     const isModifier = type !== 'ARTICLE';
+
+    // Riconoscimento multi-segnale frammenti OCR orfani:
+    // Per linee prive di qualsiasi evidenza monetaria, fiscale o di quantità:
+    // Distingue un articolo breve legittimo (es. "PANE", "LATTE", "ACQUA") da un frammento OCR di scansione (es. "ZARE  |").
+    // Non usa la sola brevità o una singola parola come discriminante, ma una combinazione di:
+    // - assenza totale di evidenze commerciali (prezzo, IVA, quantità, moltiplicatore)
+    // - presenza di caratteri anomali o delimitatori isolati (es. "|", "~", "{", "}")
+    // - contaminazione di rumore ottico o rapporto lettere/simboli insufficiente
+    const hasAnomalousDelimiters = /[|~\\_{}^<>]/i.test(normText);
+    const hasNoCommercialEvidence =
+      monetaryResult.evidence === 'MISSING' &&
+      vatRateCandidate === null &&
+      multiplierCandidate === null &&
+      quantityCandidate === null &&
+      unitOfMeasureCandidate === null;
+
+    const isFragmentaryNoiseLine =
+      hasNoCommercialEvidence &&
+      words.length <= 1 &&
+      (hasAnomalousDelimiters || noiseRatio > 0.2 || noiseCount > 0 || alphaRatio < 0.6 || lettersCount < 3);
+
+    const hasValidWords =
+      !isFragmentaryNoiseLine &&
+      (words.some((w) => w.replace(/[^A-Za-z\u00C0-\u017F]/g, '').length >= 3) ||
+        (words.length >= 2 && lettersCount >= 5));
 
     // Riconoscimento continuazioni pure:
     // a. Moltiplicatore o prezzo isolato senza descrizione testuale
@@ -319,17 +349,30 @@ export class LineItemParserV2 {
     const isPureContinuationOrMultiplier =
       !hasLetters && (multiplierCandidate !== null || hasPrice || isWeightOnly || isUnitPriceOnly || isPriceOnly);
 
+    const isCarrierHint = receiptKnowledgeBase.isCommercialCarrierHint(cleanDesc);
+
     const isStructuralTerm =
       !hasVat &&
-      /\b(?:DOCUMENTO|DOCIMENTO|COMMERCIALE|SCONTRINO|RICEVUTA|FATTURA|PRESTAZIONE|VENDITA|DI\s+VENDITA|DESCRIZIONE\s+IVA|DESTZINE|DESCRZINE|PREZZO|PRAGZOL|IMPORTO|PAGAMENTO|ELETTRONICO|CONTANTE|RESTO|TOTALE|SUBTOTALE|ARRIVEDERCI|GRAZIE|MATRICOLA|CASSIERE|OPERATORE|TERMINALE|P\.?\s*IVA|PARTITA\s*IVA|CODICE\s*FISCALE|C\.?\s*F\.?)\b/i.test(
-        cleanDesc
-      );
+      !isCarrierHint &&
+      (receiptKnowledgeBase.isCommercialDocumentHeader(cleanDesc) ||
+        receiptKnowledgeBase.hasRole(cleanDesc, 'ITEM_TABLE_HEADER') ||
+        receiptKnowledgeBase.isSubtotalMarker(cleanDesc) ||
+        receiptKnowledgeBase.isFinalTotalCandidate(cleanDesc) ||
+        receiptKnowledgeBase.isPaymentMarker(cleanDesc) ||
+        receiptKnowledgeBase.isTrailingMetadata(cleanDesc) ||
+        receiptKnowledgeBase.isMarketingOrClosing(cleanDesc) ||
+        receiptKnowledgeBase.isFiscalHealthMetadata(cleanDesc) ||
+        receiptKnowledgeBase.isDepartmentHeader(cleanDesc) ||
+        /\b(?:DOCUMENTO|DOCIMENTO|COMMERCIALE|SCONTRINO|RICEVUTA|FATTURA|PRESTAZIONE|VENDITA|DI\s+VENDITA|DESCRIZIONE\s+IVA|DESTZINE|DESCRZINE|PREZZO|PRAGZOL|IMPORTO|PAGAMENTO|ELETTRONICO|CONTANTE|RESTO|TOTALE|SUBTOTALE|ARRIVEDERCI|GRAZIE|MATRICOLA|CASSIERE|OPERATORE|TERMINALE|P\.?\s*IVA|PARTITA\s*IVA|CODICE\s*FISCALE|C\.?\s*F\.?)\b/i.test(
+          cleanDesc
+        ));
 
     const isUnpricedLegitimateProduct =
       hasLetters &&
-      alphaRatio >= ITEM_MIN_ALPHA_RATIO &&
-      noiseRatio <= ITEM_MAX_NOISE_RATIO &&
-      hasValidWords &&
+      (isCarrierHint ||
+        (alphaRatio >= ITEM_MIN_ALPHA_RATIO &&
+          noiseRatio <= ITEM_MAX_NOISE_RATIO &&
+          hasValidWords)) &&
       !isStructuralTerm;
 
     const isNoise =
@@ -501,15 +544,18 @@ export class LineItemParserV2 {
     // Rimuovi indicatori commerciali e di reparto tipici di fine riga
     desc = desc.replace(/\b(?:PRA\s*O|PRA|PA\s*A\s*i|PA|IBRIDO|PERA|BC|GLI|GL|RO|TO|UN|II\s*UN|Na)\b/gi, ' ');
 
-    // Rimuovi rumore OCR isolato a fine riga (es. "oo", "i 3", "‘e", "i", virgolette singole/apici)
+    // Rimuovi rumore OCR isolato a fine riga (es. "oo", "i 3", "‘e", "i", virgolette singole/apici, delimitatori pipe)
     desc = desc.replace(/\b(?:oo|i\s+\d+|[‘'’]e)\b/gi, ' ');
-    desc = desc.replace(/\s+[iI!òóeè‘'’°\d]\s*$/g, '');
+    desc = desc.replace(/\s+[iI!òóeè‘'’°\d|]\s*$/g, '');
     desc = desc.replace(/\s+[A-Z]\s*$/g, '');
-    desc = desc.replace(/\s+[‘'’]\s*$/g, '');
+    desc = desc.replace(/\s+[‘'’|]\s*$/g, '');
+
+    // Pulizia caratteri delimitatori e artefatti di scansione isolati
+    desc = desc.replace(/[|~\\_{}^<>]/g, ' ');
 
     // Pulizia spazi multipli e punteggiatura pendente
     desc = desc.replace(/\s+/g, ' ').trim();
-    desc = desc.replace(/^[-–—.:,‘'’]+\s*/, '').replace(/\s*[-–—.:,‘'’]+$/, '');
+    desc = desc.replace(/^[-–—.:,‘'’|~\\_{}^<>]+\s*/, '').replace(/\s*[-–—.:,‘'’|~\\_{}^<>]+$/, '');
 
     return desc;
   }

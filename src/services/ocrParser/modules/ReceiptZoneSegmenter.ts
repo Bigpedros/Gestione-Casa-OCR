@@ -1,5 +1,6 @@
 import { NormalizedOcrText, ReceiptZones, SegmentedReceiptLine, ReceiptZoneType } from '../types';
 import { TextNormalizationModule } from './TextNormalizationModule';
+import { receiptKnowledgeBase } from '../knowledgeBase';
 
 /**
  * RECEIPT ZONE SEGMENTER (Architettura Regola Ceccotti - Blocco 1)
@@ -85,11 +86,53 @@ export class ReceiptZoneSegmenter {
     }
 
     // C. Ricerca della chiusura del Body e inizio della Totals/Footer Zone (Anchor Totals Start)
-    // Cerchiamo le parole chiave di totalizzazione: SUBTOTALE, TOTALE, TOTALE COMPLESSIVO, IMPORTO PAGATO, CONTANTE, RESTO
+    // Cerchiamo le parole chiave di totalizzazione. Se un subtotale è seguito da ulteriori articoli commerciali
+    // prima di un totale finale o successivo pagamento/subtotale, è trattato come subtotale intermedio.
     let totalsStartIndex = -1;
     for (let i = Math.max(0, bodyStartIndex); i < n; i++) {
       const text = lines[i].normalizedText;
       if (this.isTotalsStartAnchor(text)) {
+        if (this.isSubtotalOnlyAnchor(text)) {
+          let hasSubsequentItems = false;
+          let nextAnchorIndex = -1;
+          let nextAnchorIsSubtotal = false;
+          for (let j = i + 1; j < n; j++) {
+            const nextText = lines[j].normalizedText;
+            if (
+              this.isTotalsStartAnchor(nextText) ||
+              this.isPaymentOrRestoAnchor(nextText) ||
+              this.isFinalTotalOrPayment(nextText)
+            ) {
+              nextAnchorIndex = j;
+              nextAnchorIsSubtotal = this.isSubtotalOnlyAnchor(nextText);
+              break;
+            }
+          }
+
+          if (nextAnchorIndex !== -1) {
+            for (let j = i + 1; j < nextAnchorIndex; j++) {
+              const candidateText = lines[j].normalizedText;
+              // Se il prossimo anchor è un secondo SUBTOTALE: basta una descrizione commerciale plausibile o prezzo
+              // Se il prossimo anchor è un TOTALE finale o pagamento: serve evidenza commerciale forte (prezzo / IVA)
+              if (nextAnchorIsSubtotal) {
+                if (this.hasCommercialItemCharacteristics(candidateText)) {
+                  hasSubsequentItems = true;
+                  break;
+                }
+              } else {
+                if (this.hasCommercialItemCharacteristics(candidateText) && this.hasStrongItemCharacteristics(candidateText)) {
+                  hasSubsequentItems = true;
+                  break;
+                }
+              }
+            }
+          }
+
+          if (hasSubsequentItems && nextAnchorIndex !== -1) {
+            continue;
+          }
+        }
+
         totalsStartIndex = i;
         break;
       }
@@ -163,8 +206,12 @@ export class ReceiptZoneSegmenter {
           confidence = 0.8;
         }
       } else if (i >= bodyStartIndex && i < totalsStartIndex) {
-        // ZONA BODY (Articoli / Modificatori)
-        if (this.hasStrongItemCharacteristics(text)) {
+        // ZONA BODY (Articoli / Modificatori / Subtotale Intermedio)
+        if (this.isTotalsStartAnchor(text)) {
+          zone = 'TOTALS_FOOTER';
+          reasons.push('intermediate_subtotal_anchor');
+          confidence = 0.98;
+        } else if (this.hasStrongItemCharacteristics(text) || this.hasCommercialItemCharacteristics(text)) {
           zone = 'BODY';
           reasons.push('strong_item_characteristics (description_and_price)');
           confidence = 0.95;
@@ -342,7 +389,10 @@ export class ReceiptZoneSegmenter {
   private static isTotalsStartAnchor(text: string): boolean {
     const u = text.toUpperCase().replace(/^[‘'"`«“\s*_\-|]+/, '').trim();
     return (
-      /\b(?:SUBTOTALE|SUB-TOTALE|SUB\s*TOTALE)\b/i.test(u) ||
+      receiptKnowledgeBase.isSubtotalMarker(u) ||
+      receiptKnowledgeBase.isFinalTotalCandidate(u) ||
+      receiptKnowledgeBase.hasRole(u, 'TRAILING_METADATA') ||
+      /\b(?:SUBTOTAL(?:E)?|SUB-TOTAL(?:E)?|SUB\s*TOTAL(?:E)?)\b/i.test(u) ||
       /\b(?:NUMERO\s+(?:DI\s+)?ARTICOLI|NUM\.?\s*ARTICOLI|N\.?\s*ARTICOLI|ARTICOLI\s+\d+|N\.?\s*PEZZI)\b/i.test(u) ||
       /\b(?:TOTALE\s+COMPLESSIVO|TOTALE\s+EURO|TOTALE\s+DOCUMENTO|TOTALE\s+DOC\.?)\b/i.test(u) ||
       /^TOTALE\b/i.test(u)
@@ -352,6 +402,8 @@ export class ReceiptZoneSegmenter {
   private static isPostSubtotalModifier(text: string): boolean {
     const u = text.toUpperCase().replace(/^[‘'"`«“\s*_\-|]+/, '').trim();
     return (
+      receiptKnowledgeBase.hasRole(u, 'ITEM_DISCOUNT') ||
+      receiptKnowledgeBase.hasRole(u, 'ROUNDING_ADJUSTMENT') ||
       /\b(?:SCONTO|BUONO|ARROTONDAMENTO|ABBUONO)\b/i.test(u)
     );
   }
@@ -359,6 +411,7 @@ export class ReceiptZoneSegmenter {
   private static isPaymentOrRestoAnchor(text: string): boolean {
     const u = text.toUpperCase().replace(/^[‘'"`«“\s*_\-|]+/, '').trim();
     return (
+      receiptKnowledgeBase.isPaymentMarker(u) ||
       /\b(?:PAGAMENTO\s+ELETTRONICO|PAG\.?\s*ELETTRONICO|PAGAMENTO|PAGATO|CONTANTE|CONTANTI|CARTA|BANCOMAT|CREDITO|RESTO|IMPORTO\s+PAGATO|IMPORTO\s+NAGATO)\b/i.test(u)
     );
   }
@@ -366,6 +419,8 @@ export class ReceiptZoneSegmenter {
   private static isFinalTotalOrPayment(text: string): boolean {
     const u = text.toUpperCase().replace(/^[‘'"`«“\s*_\-|]+/, '').trim();
     return (
+      receiptKnowledgeBase.isFinalTotalCandidate(u) ||
+      receiptKnowledgeBase.isPaymentMarker(u) ||
       /\b(?:TOTALE\s+COMPLESSIVO|TOTALE|PAGAMENTO\s+ELETTRONICO|PAG\.?\s*ELETTRONICO|PAGAMENTO|RESTO|IMPORTO\s+PAGATO|IMPORTO\s+NAGATO)\b/i.test(u)
     );
   }
@@ -373,6 +428,7 @@ export class ReceiptZoneSegmenter {
   private static isTrailingMetadataLine(text: string): boolean {
     const u = text.toUpperCase();
     return (
+      receiptKnowledgeBase.isTrailingMetadata(u) ||
       /\b(?:DOCUMENTO\s+N\.?|DOC\.?\s*N\.?|RT\b|MATRICOLA|CASSIERE|TERMINALE|TERM\.?)\b/i.test(u) ||
       /\b(?:DETTAGLIO\s+FORME|NUMERO\s+(?:DI\s+)?ARTICOLI|NUM\.?\s*ARTICOLI|ART\s*\d+)\b/i.test(u) ||
       /\b(?:ARRIVEDERCI|GRAZIE|ARRIVEDERCI\s+E\s+GRAZIE)\b/i.test(u) ||
@@ -385,5 +441,84 @@ export class ReceiptZoneSegmenter {
     const u = text.toUpperCase().trim();
     // Stringhe prive di lettere o con solo 1-2 simboli sparsi
     return u.length <= 3 || !/[A-Z0-9]/i.test(u);
+  }
+
+  private static isSubtotalOnlyAnchor(text: string): boolean {
+    const u = text.toUpperCase().replace(/^[‘'"`«“\s*_\-|]+/, '').trim();
+    return (
+      (receiptKnowledgeBase.isSubtotalMarker(u) || /\b(?:SUBTOTAL(?:E)?|SUB-TOTAL(?:E)?|SUB\s*TOTAL(?:E)?)\b/i.test(u)) &&
+      !/\bTOTALE\b/i.test(u)
+    );
+  }
+
+  private static isTaxOrVatBreakdown(text: string): boolean {
+    const u = text.toUpperCase();
+    return (
+      receiptKnowledgeBase.hasRole(u, 'VAT_TOTAL') ||
+      receiptKnowledgeBase.hasRole(u, 'VAT_METADATA') ||
+      /\b(?:DI\s+CUI\s+IVA|VENTILAZIONE\s+IVA|VENTILAZIONE|IMPONIBILE|ESENTE|IVA\s+COMPRESA)\b/i.test(u)
+    );
+  }
+
+  private static isPlausibleDescriptiveProductText(text: string): boolean {
+    const clean = text.replace(/^[‘'"`«“\s*_\-|]+/, '').replace(/[\s*_\-|]+$/, '').trim();
+    if (clean.length < 3) return false;
+
+    // Non deve contenere simboli di rumore o delimitatori non commerciali
+    if (/[~|\\{}_^<>[\]@!#?]/i.test(clean)) {
+      return false;
+    }
+
+    // Almeno 3 caratteri alfabetici
+    const letters = (clean.match(/[\p{L}]/gu) || []).length;
+    if (letters < 3) return false;
+
+    // Rapporto lettere/lunghezza elevato (testo descrittivo coerente)
+    const alphaRatio = letters / clean.length;
+    if (alphaRatio < 0.6) return false;
+
+    // Analisi parole: token alfabetici
+    const words = clean.split(/\s+/).map((w) => w.replace(/[^\p{L}]/gu, '')).filter((w) => w.length > 0);
+    if (words.length === 0) return false;
+
+    // Tutte le parole devono avere almeno 2 caratteri alfabetici (esclude frammenti orfani di 1 lettera)
+    const hasValidWords = words.every((w) => w.length >= 2);
+    if (!hasValidWords) return false;
+
+    // Almeno una parola significativa con >= 3 caratteri alfabetici
+    const hasSignificantWord = words.some((w) => w.length >= 3);
+    if (!hasSignificantWord) return false;
+
+    return true;
+  }
+
+  private static hasCommercialItemCharacteristics(text: string): boolean {
+    if (
+      this.isTotalsStartAnchor(text) ||
+      this.isPaymentOrRestoAnchor(text) ||
+      this.isTrailingMetadataLine(text) ||
+      this.isExplicitTableHeader(text) ||
+      this.hasStrongHeaderCharacteristics(text) ||
+      this.isAmbiguousNoise(text) ||
+      this.isTaxOrVatBreakdown(text) ||
+      this.isPostSubtotalModifier(text) ||
+      this.isItemDiscountLine(text)
+    ) {
+      return false;
+    }
+
+    if (this.hasStrongItemCharacteristics(text)) {
+      return true;
+    }
+
+    if (receiptKnowledgeBase.isCommercialCarrierHint(text)) {
+      return true;
+    }
+
+    if (this.isPlausibleDescriptiveProductText(text)) {
+      return true;
+    }
+
+    return false;
   }
 }

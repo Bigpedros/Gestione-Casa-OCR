@@ -7,6 +7,7 @@ import {
   SUPPLIER_MAX_NOISE_RATIO,
   SUPPLIER_MIN_LETTERS,
 } from '../constants';
+import { receiptKnowledgeBase } from '../knowledgeBase';
 
 export class SupplierParser implements ReceiptParserModule<string> {
   public name = 'SupplierParser';
@@ -142,14 +143,19 @@ export class SupplierParser implements ReceiptParserModule<string> {
       const line = lines[i];
       const upperLine = line.toUpperCase().trim();
 
-      // Controlla se è una riga da escludere
-      const isExcluded = this.genericExclusions.some((exc) => {
-        if (exc.length <= 4) {
-          const regex = new RegExp(`\\b${exc}\\b`, 'i');
-          return regex.test(upperLine);
-        }
-        return upperLine.includes(exc);
-      });
+      // Controlla se è una riga da escludere (Knowledge Base + genericExclusions)
+      const isExcluded =
+        receiptKnowledgeBase.isCommercialDocumentHeader(upperLine) ||
+        receiptKnowledgeBase.isPaymentMarker(upperLine) ||
+        receiptKnowledgeBase.isPaymentProofEvidence(upperLine) ||
+        receiptKnowledgeBase.isTrailingMetadata(upperLine) ||
+        this.genericExclusions.some((exc) => {
+          if (exc.length <= 4) {
+            const regex = new RegExp(`\\b${exc}\\b`, 'i');
+            return regex.test(upperLine);
+          }
+          return upperLine.includes(exc);
+        });
       if (isExcluded) continue;
 
       // Pulizia preliminare simboli rumorosi a inizio/fine
@@ -207,6 +213,16 @@ export class SupplierParser implements ReceiptParserModule<string> {
         score += 15;
       }
 
+      // Normalizzazione OCR lettere conservativa del parser (preserva il valore estratto)
+      const contextualName = this.normalizeOcrLetters(cleanName);
+
+      // Supporto semantico / fuzzy Merchant Directory (NON sostituisce il parser, calibra la confidenza)
+      const normalizedAliasesName = receiptKnowledgeBase.normalizeOcrAliases(cleanName);
+      const merchantMatch = receiptKnowledgeBase.lookupMerchant(normalizedAliasesName);
+      if (merchantMatch.matched && !merchantMatch.isAmbiguous && merchantMatch.similarity >= 0.85) {
+        score += merchantMatch.confidenceAdjustment;
+      }
+
       // Penalità se la qualità OCR o confidenza complessiva è degradata
       if (qualityScore < OCR_QUALITY_SCORE_MIN_RELIABLE) {
         score -= Math.min(20, Math.round((OCR_QUALITY_SCORE_MIN_RELIABLE - qualityScore) * 0.8));
@@ -218,7 +234,6 @@ export class SupplierParser implements ReceiptParserModule<string> {
         score -= 10;
       }
 
-      const contextualName = this.normalizeOcrLetters(cleanName);
       const isLowConf = (!isCorporateForm && !hasAddressOrVatNearby) || score < 45;
 
       candidates.push({

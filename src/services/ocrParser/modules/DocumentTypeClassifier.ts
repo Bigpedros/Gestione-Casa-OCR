@@ -110,7 +110,9 @@ export class DocumentTypeClassifier {
     // Se è presente "DOCUMENTO COMMERCIALE" o righe con aliquote IVA articoli (4%/10%/22%) e subtotale/totale,
     // i segnali di pagamento elettronico (es. CARTA, AUT, STAN) nel footer sono secondari e accessori.
     const hasExplicitCommercialHeader = evidences.some(
-      (e) => e.category === 'COMMERCIAL_RECEIPT' && e.signal.includes('EXPLICIT_HEADER')
+      (e) =>
+        e.category === 'COMMERCIAL_RECEIPT' &&
+        (e.signal.includes('EXPLICIT_HEADER') || e.signal.includes('CORROBORATED_DEGRADED_HEADER'))
     );
     const hasVatRateLines = evidences.some(
       (e) => e.category === 'COMMERCIAL_RECEIPT' && e.signal.includes('VAT_RATE_LINES')
@@ -314,6 +316,7 @@ export class DocumentTypeClassifier {
     // 1. Intestazione Esplicita Scontrino / Documento Commerciale
     const explicitHeaderRegex =
       /DOCUMENTO\s+COMMERCIALE|SCONTRINO\s+FISCALE|DOCUMENTO\s+DI\s+VENDITA(?:\s+O\s+PRESTAZIONE)?|RICEVUTA\s+FISCALE|VENDITA\s+AL\s+DETTAGLIO/i;
+    let hasExplicitHeader = false;
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
       if (explicitHeaderRegex.test(line.normalizedText)) {
@@ -324,13 +327,52 @@ export class DocumentTypeClassifier {
           rawSnippet: line.rawText,
           lineIndex: line.rawIndex,
         });
+        hasExplicitHeader = true;
+        break;
+      }
+    }
+
+    // 1b. Sottotitolo tipico scontrino telematico (es. "di vendita o prestazione", "di vendita © prestazione")
+    const subtitleRegex = /\b(?:DI\s+VENDITA\s*[^a-zA-Z0-9\s]?\s*PRESTAZIONE|VENDITA\s*[\w©&/.-]*\s*PRESTAZIONE)\b/i;
+    let hasCommercialSubtitle = false;
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      if (subtitleRegex.test(line.normalizedText)) {
+        evidences.push({
+          category: 'COMMERCIAL_RECEIPT',
+          signal: 'COMMERCIAL_SUBTITLE_VENDITA_PRESTAZIONE',
+          weight: 20,
+          rawSnippet: line.rawText,
+          lineIndex: line.rawIndex,
+        });
+        hasCommercialSubtitle = true;
+        break;
+      }
+    }
+
+    // 1c. Intestazione tabella articoli retail (es. "DESCRIZIONE PREZZO IVA", "DESCRIZIONE pREZZOLE) IVA")
+    const tableHeaderRegex = /\bDESCRIZIONE\b.*?(?:PREZZO|PREZZOLE\)?|IMPORTO|VALORE|EUR(?:O)?).*?\bIVA\b/i;
+    let hasTableHeader = false;
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      if (tableHeaderRegex.test(line.normalizedText)) {
+        evidences.push({
+          category: 'COMMERCIAL_RECEIPT',
+          signal: 'TABLE_HEADER_DESCRIZIONE_PREZZO_IVA',
+          weight: 20,
+          rawSnippet: line.rawText,
+          lineIndex: line.rawIndex,
+        });
+        hasTableHeader = true;
         break;
       }
     }
 
     // 2. Metadati Registratore Telematico / Misuratore Fiscale / RT
+    // Supporta anche matricole RT con spazi intermedi generati dall'OCR (es. "RT  96 1KN022623")
     const rtRegex =
-      /\b(?:REGISTRATORE\s+TELEMATICO|MISURATORE\s+FISCALE|MATRICOLA\s+FISCALE)\b|\bRT\s+[0-9A-Z]{8,}|\bDOCUMENTO\s+N\.?\s*\d+[-/]\d+/i;
+      /\b(?:REGISTRATORE\s+TELEMATICO|MISURATORE\s+FISCALE|MATRICOLA\s+FISCALE)\b|\bRT\s+[0-9A-Z]{2,}(?:\s*[0-9A-Z]{4,})+|\bDOCUMENTO\s+N\.?\s*\d+[-/]\d+/i;
+    let hasFiscalRegister = false;
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
       if (rtRegex.test(line.normalizedText)) {
@@ -341,12 +383,14 @@ export class DocumentTypeClassifier {
           rawSnippet: line.rawText,
           lineIndex: line.rawIndex,
         });
+        hasFiscalRegister = true;
         break;
       }
     }
 
-    // 3. Conteggio articoli retail (es. "NUMERO ARTICOLI : 9", "TOTALE PEZZI : 3")
-    const itemCountRegex = /\b(?:NUMERO\s+(?:DI\s+)?ARTICOLI|TOTALE\s+PEZZI|N\.\s*(?:PEZZI|ARTICOLI))\s*[:\s]+\d+/i;
+    // 3. Conteggio articoli retail (es. "NUMERO ARTICOLI : 9", "TOTALE PEZZI : 3", "N. PEZZI 11")
+    const itemCountRegex = /\b(?:NUMERO\s+(?:DI\s+)?ARTICOLI|TOTALE\s+PEZZI|N\.?\s*(?:PEZZI|ARTICOLI))\s*[:\s]+\d+/i;
+    let hasItemCount = false;
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
       if (itemCountRegex.test(line.normalizedText)) {
@@ -357,8 +401,30 @@ export class DocumentTypeClassifier {
           rawSnippet: line.rawText,
           lineIndex: line.rawIndex,
         });
+        hasItemCount = true;
         break;
       }
+    }
+
+    // 3b. Righe con prezzi retail di articoli multipli su righe distinte
+    const retailSummaryExclusionRegex =
+      /\b(?:TOTALE|IMPONIBILE|IVA|CANONE|SCADENZA|BOLLETTA|SPESE|COMMISSION|IMPORTO|PAGATO)\b/i;
+    const priceLineRegex = /\b\d+[.,]\d{2}\s*(?:€|EUR|[A-Z])?\b/;
+    let retailItemLinesCount = 0;
+    for (let i = 0; i < lines.length; i++) {
+      const lineText = lines[i].normalizedText;
+      if (priceLineRegex.test(lineText) && !retailSummaryExclusionRegex.test(lineText)) {
+        retailItemLinesCount++;
+      }
+    }
+    const hasMultiLinePrices = retailItemLinesCount >= 3;
+    if (hasMultiLinePrices) {
+      evidences.push({
+        category: 'COMMERCIAL_RECEIPT',
+        signal: 'RETAIL_MULTI_LINE_PRICES',
+        weight: 15,
+        rawSnippet: `${retailItemLinesCount} righe articoli con importi decimali`,
+      });
     }
 
     // 4. Righe con aliquote IVA tipiche al dettaglio (4,00%, 10,00%, 22,00%, 5,00%)
@@ -387,13 +453,15 @@ export class DocumentTypeClassifier {
     }
 
     // 5. Struttura Cassa / Subtotale / Resto / Forme di Pagamento Commerciali
-    if (/SUBTOTALE/i.test(upperFull)) {
+    let hasSubtotal = false;
+    if (/\bSUBTOTAL(?:E)?\b/i.test(upperFull)) {
       evidences.push({
         category: 'COMMERCIAL_RECEIPT',
         signal: 'SUBTOTAL_KEYWORD',
         weight: 15,
-        rawSnippet: 'SUBTOTALE',
+        rawSnippet: 'SUBTOTAL',
       });
+      hasSubtotal = true;
     }
 
     if (/RESTO\s*[:\s]+\d+[.,]\d{2}/i.test(upperFull)) {
@@ -405,17 +473,52 @@ export class DocumentTypeClassifier {
       });
     }
 
-    if (/DETTAGLIO\s+FORME\s+(?:DI\s+)?PAGAMENTO/i.test(upperFull)) {
+    if (/DETTAGLIO\s+(?:FORME\s+(?:DI\s+)?)?PAGAMENT[OI]/i.test(upperFull)) {
       evidences.push({
         category: 'COMMERCIAL_RECEIPT',
         signal: 'PAYMENT_FORMS_DETAIL_HEADER',
         weight: 15,
-        rawSnippet: 'DETTAGLIO FORME DI PAGAMENTO',
+        rawSnippet: 'DETTAGLIO PAGAMENTI',
       });
     }
 
+    // 1d. Intestazione commerciale degradata CORROBORATA da struttura retail
+    // Riconosce "DOCUMENTO COMMERCI..." solo se corroborata da almeno un segnale strutturale
+    // (sottotitolo vendita/prestazione, intestazione colonne, conteggio pezzi, RT o subtotale)
+    if (!hasExplicitHeader) {
+      const degradedHeaderRegex = /\bDOCUMENTO\s+COMMERCI(?:[A-Z0-9\s/._…£$*~-]{0,10})\b/i;
+      let degradedHeaderLine: { rawIndex: number; rawText: string } | null = null;
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        if (degradedHeaderRegex.test(line.normalizedText)) {
+          degradedHeaderLine = line;
+          break;
+        }
+      }
+
+      if (degradedHeaderLine) {
+        const corroborationCount =
+          (hasCommercialSubtitle ? 1 : 0) +
+          (hasTableHeader ? 1 : 0) +
+          (hasItemCount ? 1 : 0) +
+          (hasMultiLinePrices ? 1 : 0) +
+          (hasFiscalRegister ? 1 : 0) +
+          (hasSubtotal ? 1 : 0);
+
+        if (corroborationCount >= 1) {
+          evidences.push({
+            category: 'COMMERCIAL_RECEIPT',
+            signal: 'CORROBORATED_DEGRADED_HEADER_COMMERCIAL_DOCUMENT',
+            weight: 45,
+            rawSnippet: degradedHeaderLine.rawText,
+            lineIndex: degradedHeaderLine.rawIndex,
+          });
+        }
+      }
+    }
+
     // 6. Indicatori Cassiere / Cassa retail
-    if (/\b(?:CASSIERE|CASSA\s*\d+|NEG-TERM-CASSIERE)\b/i.test(upperFull)) {
+    if (/\b(?:CASSIERE|CASSA\s*(?:\d+|[:|=])|NEG-TERM-CASSIERE)\b/i.test(upperFull)) {
       evidences.push({
         category: 'COMMERCIAL_RECEIPT',
         signal: 'RETAIL_CASHIER_METADATA',

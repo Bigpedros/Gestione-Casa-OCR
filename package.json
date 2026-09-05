@@ -13,6 +13,7 @@
     "lint:fix": "eslint src --ext ts,tsx --fix",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "test:real-receipts": "vitest run src/tests/real-receipts-batch.test.ts",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "format": "prettier --write \"src/**/*.{ts,tsx,json,css}\"",

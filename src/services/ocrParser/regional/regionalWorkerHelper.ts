@@ -50,11 +50,13 @@ export const REGIONAL_TESSERACT_PARAMETERS: WorkerParameterConfig = {
 /**
  * Esegue il riconoscimento ottico su una regione rettangolare garantendo
  * il ripristino dei parametri di produzione nel blocco finally.
+ * RC-05F-R1: restoreParameters è esplicito e non vincolato a '4' hardcoded.
  */
 export async function executeRegionalCropRecognition(
   worker: Pick<Worker, 'setParameters' | 'recognize'>,
   imageSource: any,
-  cropBox: PixelCropBox
+  cropBox: PixelCropBox,
+  restoreParameters: WorkerParameterConfig = PRODUCTION_TESSERACT_PARAMETERS
 ): Promise<RegionalOcrResult> {
   // 1. Configurazione worker in modalità regionale (PSM 6, no whitelist)
   await worker.setParameters(REGIONAL_TESSERACT_PARAMETERS);
@@ -80,9 +82,9 @@ export async function executeRegionalCropRecognition(
   } catch (err) {
     recognizeError = err;
   } finally {
-    // 2. Ripristino GARANTITO dei parametri di produzione (PSM 4)
+    // 2. Ripristino esplicito dei parametri richiesti dal chiamante
     try {
-      await worker.setParameters(PRODUCTION_TESSERACT_PARAMETERS);
+      await worker.setParameters(restoreParameters);
     } catch (restoreErr) {
       restoreError = restoreErr;
     }

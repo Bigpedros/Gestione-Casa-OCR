@@ -13,6 +13,14 @@ import {
   ReceiptVariantName,
   OcrQualityEvaluation,
 } from '../utils/imagePreprocessing';
+import {
+  runRegionalSecondPassShadow,
+} from './ocrParser/regional';
+
+/**
+ * RC-05F-R1: Kill Switch immutabile e non esposto a runtime.
+ */
+const SECOND_PASS_SHADOW_ENABLED: boolean = true;
 
 interface ActiveProcessEntry {
   sessionId: string;
@@ -214,6 +222,8 @@ class OCRService {
         }
       }
 
+      let primaryImageSource: string | null = null;
+
       // 5. Riconoscimento pagina per pagina in ordine di sequenceIndex
       for (let i = 0; i < segments.length; i++) {
         const seg = segments[i];
@@ -255,6 +265,9 @@ class OCRService {
         }> = [];
 
         if (this.mockEngine) {
+          if (i === 0) {
+            primaryImageSource = attachment.storageKey;
+          }
           // Utilizza motore mock (per test di unità)
           const mockRes = await this.mockEngine(
             attachment.storageKey,
@@ -335,6 +348,9 @@ class OCRService {
             pageText = winner.text;
             pageConfidence = winner.confidence;
             pageSelectedVariant = winner.name;
+            if (i === 0) {
+              primaryImageSource = winner.dataUrl;
+            }
 
             pageVariantScores = candidates.map((c) => ({
               variant: c.name,
@@ -350,6 +366,9 @@ class OCRService {
             pageText = res.data.text || '';
             pageConfidence = Math.round(res.data.confidence || 0);
             pageSelectedVariant = 'original';
+            if (i === 0) {
+              primaryImageSource = attachment.storageKey;
+            }
           }
         } else {
           throw workerInitError || new Error('Nessun motore OCR disponibile o inizializzato per elaborare l\'immagine');
@@ -396,6 +415,27 @@ class OCRService {
 
       const primarySelectedVariant = pageResults[0]?.selectedVariant || 'original';
       const allVariantScores = pageResults.flatMap((p) => p.variantScores || []);
+
+      // 6.5. Second-Pass Regional OCR — Controlled Shadow Runtime Integration (RC-05F / RC-05F-R1)
+      try {
+        const shadowEnabled = SECOND_PASS_SHADOW_ENABLED;
+        await runRegionalSecondPassShadow({
+          worker,
+          imageSource: primaryImageSource,
+          combinedRawText,
+          overallConfidence: avgConfidence,
+          shadowEnabled,
+          variantUsed: primarySelectedVariant,
+          sourceCount: segments.length,
+          restoreParameters: {
+            preserve_interword_spaces: '1',
+            user_defined_dpi: '300',
+            tessedit_pageseg_mode: '4',
+          },
+        });
+      } catch (shadowErr) {
+        console.warn('[OCRService:SecondPass] Errore non gestito nello shadow runner:', shadowErr);
+      }
 
       // 7. Aggiorna OCRProcess e DocumentSession (Nessuna interpretazione / Nessun Expense creato)
       const now = new Date().toISOString();

@@ -8,3 +8,4 @@ export * from './monetaryTokenParser';
 export * from './shadowAlignment';
 export * from './triggerPolicy';
 export * from './regionalWorkerHelper';
+export * from './shadowOrchestrator';

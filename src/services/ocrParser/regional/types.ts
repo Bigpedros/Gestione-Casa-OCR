@@ -70,9 +70,11 @@ export interface RegionalAlignmentProposal {
   readonly reason: string;
 }
 
+export type RegionalTriggerReason = 'missing_total' | 'low_price_density' | 'math_discrepancy' | null;
+
 export interface RegionalOcrEvidence {
   readonly executed: boolean;
-  readonly triggerReason: 'missing_total' | 'low_price_density' | 'math_discrepancy' | null;
+  readonly triggerReason: RegionalTriggerReason;
   readonly bodyEvidence?: RegionalBodyEvidence;
   readonly footerEvidence?: RegionalFooterEvidence;
   readonly proposals?: readonly RegionalAlignmentProposal[];

@@ -81,6 +81,13 @@ export const EUROSPIN_FIXTURE: RealReceiptFixture = {
       { descriptionContains: 'SHOPPER BIO', price: 0.10 },
     ],
     notes: 'Scontrino reale Eurospin con 11 articoli, subtotale intermedio, iva ventilazione e pagamento POS.',
+
+    // RC-05G Shadow Replay Expectations
+    // Totale ambiguo (14.46 vs 14.48) -> confidenza totale < 50 -> trigger policy pura attiva footer (missing_total)
+    expectedTriggerReason: 'missing_total',
+    expectedRegionalTotal: null,
+    expectedAlignmentOutcome: 'NOT_MEASURABLE',
+    validationLevel: 'L1_REAL_RAWTEXT',
   },
   layoutNotes: 'Intestazione con ragione sociale Gruppo Caucci SRL e URL www.eurospin.it, subtotale a metà articoli, pagamento POS.',
   metadata: {

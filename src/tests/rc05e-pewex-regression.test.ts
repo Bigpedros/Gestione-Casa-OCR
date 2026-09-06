@@ -2,40 +2,10 @@ import { describe, it, expect } from 'vitest';
 import { extractRegionalMonetaryTokens } from '../services/ocrParser/regional/monetaryTokenParser';
 import { generateShadowAlignmentProposals } from '../services/ocrParser/regional/shadowAlignment';
 import { ParsedLineItemV2 } from '../services/ocrParser/types';
-
-/**
- * RAW REGIONALI REALI CERTIFICATI IN RC-05C-R2 (Evidenza empirica congelata)
- */
-const PEWEX_BODY_RAW_REAL = `
-VA     Prezzo(€)             GE
-00%          12,44 PRI
-GG
-00%    12,20 Pa
-o n            PARIS
-LUIGI Aa
-00%                     0,10 VG
-00%       0,69 RIA
-00%                   0,69 SG
-RA
-SU
-00%           2599    e  MN
-Li             MS
-00%           2489 O
-00%           2,99 ANS
-34,53 NSA
-i       SEEN
-I RS
-34,53 e
-
-53
-`;
-
-const PEWEX_FOOTER_RAW_REAL = `
-lettronico              34,53
-31-07-7076 12:10
-DOCUMENTO N. 0972-0042
-7 99ÎEB065409
-`;
+import {
+  PEWEX_BODY_RAW_REAL,
+  PEWEX_FOOTER_RAW_REAL,
+} from './fixtures/real-receipts/pewex.fixture';
 
 function createMockPewexItem(idx: number, desc: string): ParsedLineItemV2 {
   return {

@@ -13,6 +13,13 @@ export const TODIS_FIXTURE: RealReceiptFixture = {
     expectedTotal: 21.90,
     expectedPaymentMethod: 'Contanti',
     notes: 'Scontrino reale Todis con 9 articoli, sconto arrotondamento, OCR noise e contanti.',
+
+    // RC-05G Shadow Replay Expectations
+    // 4 righe su 10 (40%) senza prezzo rilevato nel rawText full-page -> trigger policy pura attiva low_price_density
+    expectedTriggerReason: 'low_price_density',
+    expectedRegionalTotal: null,
+    expectedAlignmentOutcome: 'NOT_MEASURABLE',
+    validationLevel: 'L1_REAL_RAWTEXT',
   },
   layoutNotes: 'Intestazione T00IS (alias OCR), corpo articoli con sconto arrotondamento, totale 21,90 con contanti 25,00 e resto 3,10.',
   metadata: {

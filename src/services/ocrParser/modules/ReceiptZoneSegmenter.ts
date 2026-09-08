@@ -387,20 +387,21 @@ export class ReceiptZoneSegmenter {
   }
 
   private static isTotalsStartAnchor(text: string): boolean {
-    const u = text.toUpperCase().replace(/^[‘'"`«“\s*_\-|]+/, '').trim();
+    const u = text.toUpperCase().replace(/^['"`«“\s*_|\-[\](){}]+/, '').trim();
     return (
       receiptKnowledgeBase.isSubtotalMarker(u) ||
       receiptKnowledgeBase.isFinalTotalCandidate(u) ||
       receiptKnowledgeBase.hasRole(u, 'TRAILING_METADATA') ||
       /\b(?:SUBTOTAL(?:E)?|SUB-TOTAL(?:E)?|SUB\s*TOTAL(?:E)?)\b/i.test(u) ||
       /\b(?:NUMERO\s+(?:DI\s+)?ARTICOLI|NUM\.?\s*ARTICOLI|N\.?\s*ARTICOLI|ARTICOLI\s+\d+|N\.?\s*PEZZI)\b/i.test(u) ||
-      /\b(?:TOTALE\s+COMPLESSIVO|TOTALE\s+EURO|TOTALE\s+DOCUMENTO|TOTALE\s+DOC\.?)\b/i.test(u) ||
+      /\b(?:TOTALE|TOT\b|[T1I!OULE4A0[\]]{3,7}\s+COMPLESSIVO|TOTALE\s+COMPLESSIVO|TOTALE\s+EURO|TOTALE\s+DOCUMENTO|TOTALE\s+DOC\.?)\b/i.test(u) ||
+      /\b(?:DI\s+CUI\s+IVA|IVA\s+COMPRESA|DI\s+CUI\s+IMPOSTA)\b/i.test(u) ||
       /^TOTALE\b/i.test(u)
     );
   }
 
   private static isPostSubtotalModifier(text: string): boolean {
-    const u = text.toUpperCase().replace(/^[‘'"`«“\s*_\-|]+/, '').trim();
+    const u = text.toUpperCase().replace(/^['"`«“\s*_|\-[\](){}]+/, '').trim();
     return (
       receiptKnowledgeBase.hasRole(u, 'ITEM_DISCOUNT') ||
       receiptKnowledgeBase.hasRole(u, 'ROUNDING_ADJUSTMENT') ||
@@ -409,7 +410,7 @@ export class ReceiptZoneSegmenter {
   }
 
   private static isPaymentOrRestoAnchor(text: string): boolean {
-    const u = text.toUpperCase().replace(/^[‘'"`«“\s*_\-|]+/, '').trim();
+    const u = text.toUpperCase().replace(/^['"`«“\s*_|\-[\](){}]+/, '').trim();
     return (
       receiptKnowledgeBase.isPaymentMarker(u) ||
       /\b(?:PAGAMENTO\s+ELETTRONICO|PAG\.?\s*ELETTRONICO|PAGAMENTO|PAGATO|CONTANTE|CONTANTI|CARTA|BANCOMAT|CREDITO|RESTO|IMPORTO\s+PAGATO|IMPORTO\s+NAGATO)\b/i.test(u)
@@ -417,11 +418,11 @@ export class ReceiptZoneSegmenter {
   }
 
   private static isFinalTotalOrPayment(text: string): boolean {
-    const u = text.toUpperCase().replace(/^[‘'"`«“\s*_\-|]+/, '').trim();
+    const u = text.toUpperCase().replace(/^['"`«“\s*_|\-[\](){}]+/, '').trim();
     return (
       receiptKnowledgeBase.isFinalTotalCandidate(u) ||
       receiptKnowledgeBase.isPaymentMarker(u) ||
-      /\b(?:TOTALE\s+COMPLESSIVO|TOTALE|PAGAMENTO\s+ELETTRONICO|PAG\.?\s*ELETTRONICO|PAGAMENTO|RESTO|IMPORTO\s+PAGATO|IMPORTO\s+NAGATO)\b/i.test(u)
+      /\b(?:TOTALE\s+COMPLESSIVO|[T1I!OULE4A0[\]]{3,7}\s+COMPLESSIVO|TOTALE|PAGAMENTO\s+ELETTRONICO|PAG\.?\s*ELETTRONICO|PAGAMENTO|RESTO|IMPORTO\s+PAGATO|IMPORTO\s+NAGATO)\b/i.test(u)
     );
   }
 

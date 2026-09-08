@@ -12,6 +12,12 @@ import { R_STORE_FIXTURE } from './r-store.fixture';
 import { PANIFICIO_PANZIERI_FIXTURE } from './panificio-panzieri.fixture';
 import { EURORISPARMIO_CASA_FIXTURE } from './eurorisparmio-casa.fixture';
 import { I_QUADRI_FIXTURE } from './i-quadri.fixture';
+import {
+  RC05H_PHYSICAL_DOCUMENTS_GROUND_TRUTH,
+  PhysicalDocumentGroundTruth,
+  GroundTruthFieldStatus,
+  GroundTruthItem,
+} from './rc05h-corpus-ground-truth';
 
 export {
   EUROSPIN_FIXTURE,
@@ -27,6 +33,13 @@ export {
   PANIFICIO_PANZIERI_FIXTURE,
   EURORISPARMIO_CASA_FIXTURE,
   I_QUADRI_FIXTURE,
+  RC05H_PHYSICAL_DOCUMENTS_GROUND_TRUTH,
+};
+
+export type {
+  PhysicalDocumentGroundTruth,
+  GroundTruthFieldStatus,
+  GroundTruthItem,
 };
 
 /**

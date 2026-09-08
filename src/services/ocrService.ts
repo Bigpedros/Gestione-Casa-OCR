@@ -31,6 +31,15 @@ interface ActiveProcessEntry {
   onProgress?: (progress: OCRProgress) => void;
 }
 
+export interface TopologicalOverlapMatch {
+  overlapInNextCount: number;
+  headOffset: number;
+  matchedLinesCount: number;
+  score: number;
+  avgSim: number;
+  matchedStartInPrev: number;
+}
+
 export type OCRRecognitionFunction = (
   imageSource: string | Blob | File,
   pageIndex: number,
@@ -403,10 +412,7 @@ class OCRService {
       );
 
       pageResults.sort((a, b) => a.sequenceIndex - b.sequenceIndex);
-      const combinedRawText = pageResults
-        .map((p) => p.text.trim())
-        .filter(Boolean)
-        .join('\n\n');
+      const combinedRawText = this.stitchSegmentTexts(pageResults.map((p) => p.text));
 
       const avgConfidence =
         pageResults.length > 0
@@ -589,6 +595,308 @@ class OCRService {
   private cleanup(sessionId: string, ocrProcessId: string) {
     this.activeProcesses.delete(sessionId);
     this.activeProcesses.delete(ocrProcessId);
+  }
+
+  /**
+   * Pulisce una riga per la comparazione di deduplicazione topologica
+   */
+  private cleanLineForStitchCompare(line: string): string {
+    return line.toUpperCase().replace(/[^A-Z0-9]/g, '');
+  }
+
+  /**
+   * Calcola la similarità OCR-tollerante tra due righe (Jaccard su bigrammi e prefisso comune)
+   */
+  private computeStitchLineSimilarity(l1: string, l2: string): number {
+    const c1 = this.cleanLineForStitchCompare(l1);
+    const c2 = this.cleanLineForStitchCompare(l2);
+    if (!c1 && !c2) return 1;
+    if (!c1 || !c2) return 0;
+    if (c1 === c2) return 1;
+
+    let commonPrefix = 0;
+    while (commonPrefix < c1.length && commonPrefix < c2.length && c1[commonPrefix] === c2[commonPrefix]) {
+      commonPrefix++;
+    }
+    if (commonPrefix >= 8 && commonPrefix / Math.min(c1.length, c2.length) >= 0.70) {
+      return 0.85;
+    }
+
+    const bigrams = (s: string) => {
+      const bg = new Map<string, number>();
+      for (let i = 0; i < s.length - 1; i++) {
+        const b = s.slice(i, i + 2);
+        bg.set(b, (bg.get(b) || 0) + 1);
+      }
+      return bg;
+    };
+    const bg1 = bigrams(c1);
+    const bg2 = bigrams(c2);
+    let intersection = 0;
+    let total1 = 0;
+    let total2 = 0;
+    for (const count of bg1.values()) total1 += count;
+    for (const count of bg2.values()) total2 += count;
+    for (const [b, count1] of bg1.entries()) {
+      const count2 = bg2.get(b) || 0;
+      intersection += Math.min(count1, count2);
+    }
+    const total = total1 + total2;
+    return total === 0 ? 0 : (2 * intersection) / total;
+  }
+
+  /**
+   * Determina se una riga ha contenuto informativo sufficiente per corroborare un overlap
+   * (evita falsi positivi su brevi parole generiche o frammenti isolati).
+   */
+  private isInformativeStitchLine(line: string): boolean {
+    const cleaned = this.cleanLineForStitchCompare(line);
+    if (cleaned.length < 6) return false;
+
+    // Token fiscali/generici isolati che non bastano da soli a garantire unicità di giunzione
+    const genericTokens = new Set([
+      'GRAZIE',
+      'ARRIVEDERCI',
+      'SCONTRINO',
+      'SCONTRINOFISCALE',
+      'DOCUMENTOCOMMERCIALE',
+      'PAGAMENTO',
+      'CONTANTI',
+      'BANCOMAT',
+      'SUBTOTALE',
+      'TOTALE',
+      'ARRIVEDERCIERIGRAZIE',
+      'BENVENUTI',
+      'CLIENTE',
+    ]);
+    if (genericTokens.has(cleaned)) return false;
+
+    // Se contiene sia lettere che numeri ed è lunga almeno 6 caratteri (es. codice, prezzo o quantità)
+    const hasLetters = /[A-Z]/.test(cleaned);
+    const hasDigits = /[0-9]/.test(cleaned);
+    if (hasLetters && hasDigits && cleaned.length >= 6) return true;
+
+    // Oppure testo descrittivo sufficientemente lungo (>= 10 caratteri)
+    return cleaned.length >= 10;
+  }
+
+  /**
+   * Ricerca l'overlap topologico di giunzione tra due segmenti consecutivi.
+   * Utilizza:
+   * 1. Finestra di ricerca sulla coda di prevLines (fino a 30 righe);
+   * 2. Offset iniziale headOffset (0..3) in nextLines per tollerare artefatti/frammenti di taglio iniziali;
+   * 3. Tolleranza limitata al wrap (1 riga prev <-> 2 righe next, 2 righe prev <-> 1 riga next);
+   * 4. Corroborazione flessibile: almeno 2 righe informative, avgSim >= 0.75, sequenzialità preservata,
+   *    con tolleranza controllata a un singolo mismatch isolato.
+   */
+  public findTopologicalOverlap(
+    prevLines: string[],
+    nextLines: string[]
+  ): TopologicalOverlapMatch | null {
+    if (prevLines.length === 0 || nextLines.length === 0) return null;
+
+    const windowSize = Math.min(prevLines.length, 30);
+    const searchWindow = prevLines.slice(prevLines.length - windowSize);
+    const maxHeadOffset = Math.min(3, Math.max(0, nextLines.length - 2));
+
+    let bestMatch: TopologicalOverlapMatch | null = null;
+
+    for (let headOffset = 0; headOffset <= maxHeadOffset; headOffset++) {
+      const candidateLines = nextLines.slice(headOffset);
+      if (candidateLines.length < 2) continue;
+
+      for (let startInWindow = 0; startInWindow < searchWindow.length; startInWindow++) {
+        let p = startInWindow;
+        let n = 0;
+        let matchedItems = 0;
+        let informativeMatches = 0;
+        let totalMatchedChars = 0;
+        let totalSim = 0;
+        let mismatches = 0;
+
+        while (p < searchWindow.length && n < candidateLines.length) {
+          const pLine = searchWindow[p];
+          const nLine = candidateLines[n];
+
+          const cleanP0 = this.cleanLineForStitchCompare(pLine);
+          const cleanN0 = this.cleanLineForStitchCompare(nLine);
+
+          // Salta linee puramente grafiche/rumore senza caratteri alfanumerici
+          if (cleanP0.length < 2 && p + 1 < searchWindow.length) {
+            p++;
+            continue;
+          }
+          if (cleanN0.length < 2 && n + 1 < candidateLines.length) {
+            n++;
+            continue;
+          }
+
+          // 1. Confronto standard 1-to-1
+          const sim11 = this.computeStitchLineSimilarity(pLine, nLine);
+
+          // 2. Tolleranza wrap 1 riga p01 <-> 2 righe p02
+          // Il wrap è valido solo se la seconda riga da sola non costituisce già un match quasi perfetto (evita di inglobare righe spurie antecedenti)
+          const simN1Alone = (n + 1 < candidateLines.length)
+            ? this.computeStitchLineSimilarity(pLine, candidateLines[n + 1])
+            : 0;
+          const sim12 = (n + 1 < candidateLines.length && simN1Alone < 0.85)
+            ? this.computeStitchLineSimilarity(pLine, `${nLine} ${candidateLines[n + 1]}`)
+            : 0;
+
+          // 3. Tolleranza wrap 2 righe p01 <-> 1 riga p02
+          const simP1Alone = (p + 1 < searchWindow.length)
+            ? this.computeStitchLineSimilarity(searchWindow[p + 1], nLine)
+            : 0;
+          const sim21 = (p + 1 < searchWindow.length && simP1Alone < 0.85)
+            ? this.computeStitchLineSimilarity(`${pLine} ${searchWindow[p + 1]}`, nLine)
+            : 0;
+
+          let chosenSim = 0;
+          let stepP = 0;
+          let stepN = 0;
+
+          if (sim11 >= 0.70) {
+            if (sim12 > sim11 + 0.15 && sim11 < 0.80) {
+              chosenSim = sim12;
+              stepP = 1;
+              stepN = 2;
+            } else if (sim21 > sim11 + 0.15 && sim11 < 0.80) {
+              chosenSim = sim21;
+              stepP = 2;
+              stepN = 1;
+            } else {
+              chosenSim = sim11;
+              stepP = 1;
+              stepN = 1;
+            }
+          } else if (sim12 >= 0.70 && sim12 >= sim21) {
+            chosenSim = sim12;
+            stepP = 1;
+            stepN = 2;
+          } else if (sim21 >= 0.70) {
+            chosenSim = sim21;
+            stepP = 2;
+            stepN = 1;
+          }
+
+          if (chosenSim >= 0.70) {
+            matchedItems++;
+            totalSim += chosenSim;
+
+            const matchedTextP = stepP === 2 ? `${pLine} ${searchWindow[p + 1]}` : pLine;
+            const matchedTextN = stepN === 2 ? `${nLine} ${candidateLines[n + 1]}` : nLine;
+
+            p += stepP;
+            n += stepN;
+
+            const cleanP = this.cleanLineForStitchCompare(matchedTextP);
+            const cleanN = this.cleanLineForStitchCompare(matchedTextN);
+            totalMatchedChars += Math.max(cleanP.length, cleanN.length);
+
+            if (this.isInformativeStitchLine(matchedTextP) || this.isInformativeStitchLine(matchedTextN)) {
+              informativeMatches++;
+            }
+          } else {
+            // Mismatch: tolleriamo al massimo 1 piccolo mismatch isolato se abbiamo già almeno 1 match
+            if (mismatches === 0 && matchedItems >= 1) {
+              let lookaheadSuccess = false;
+
+              // Prova a saltare 1 riga in p (se p01 ha una riga anomala)
+              if (p + 1 < searchWindow.length) {
+                const simNextP = this.computeStitchLineSimilarity(searchWindow[p + 1], nLine);
+                if (simNextP >= 0.75) {
+                  p += 1;
+                  mismatches++;
+                  lookaheadSuccess = true;
+                }
+              }
+
+              // Se non ha funzionato, prova a saltare 1 riga in n (se p02 ha una riga anomala)
+              if (!lookaheadSuccess && n + 1 < candidateLines.length) {
+                const simNextN = this.computeStitchLineSimilarity(pLine, candidateLines[n + 1]);
+                if (simNextN >= 0.75) {
+                  n += 1;
+                  mismatches++;
+                  lookaheadSuccess = true;
+                }
+              }
+
+              if (!lookaheadSuccess) {
+                break;
+              }
+            } else {
+              break;
+            }
+          }
+        }
+
+        // Criteri di accettazione corroborati e conservativi
+        if (
+          matchedItems >= 2 &&
+          informativeMatches >= 2 &&
+          totalMatchedChars >= 18 &&
+          n >= 2
+        ) {
+          const avgSim = totalSim / matchedItems;
+          const matchRatio = matchedItems / (matchedItems + mismatches);
+
+          if (avgSim >= 0.75 && matchRatio >= 0.66) {
+            const score =
+              matchedItems * 15 +
+              totalMatchedChars * 0.5 +
+              avgSim * 10 -
+              mismatches * 5 -
+              headOffset * 2;
+
+            if (!bestMatch || score > bestMatch.score) {
+              bestMatch = {
+                overlapInNextCount: headOffset + n,
+                headOffset,
+                matchedLinesCount: matchedItems,
+                score,
+                avgSim,
+                matchedStartInPrev: prevLines.length - windowSize + startInWindow,
+              };
+            }
+          }
+        }
+      }
+    }
+
+    return bestMatch;
+  }
+
+  /**
+   * Concatena i testi di più segmenti/foto di uno scontrino lungo o multipagina,
+   * eseguendo una dedup topologica di giunzione della sovrapposizione tra segmenti consecutivi.
+   */
+  public stitchSegmentTexts(segmentTexts: string[]): string {
+    const validSegments = segmentTexts.map((s) => s.trim()).filter(Boolean);
+    if (validSegments.length === 0) return '';
+    if (validSegments.length === 1) return validSegments[0];
+
+    let combined = validSegments[0];
+
+    for (let sIdx = 1; sIdx < validSegments.length; sIdx++) {
+      const nextSegment = validSegments[sIdx];
+      const prevLines = combined.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+      const nextLines = nextSegment.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+
+      // Cerca prima overlap topologico di giunzione con tolleranza OCR e sliding window
+      const topoMatch = this.findTopologicalOverlap(prevLines, nextLines);
+
+      if (topoMatch && topoMatch.overlapInNextCount > 0) {
+        const nonOverlappingNextLines = nextLines.slice(topoMatch.overlapInNextCount);
+        if (nonOverlappingNextLines.length > 0) {
+          combined = `${combined}\n${nonOverlappingNextLines.join('\n')}`;
+        }
+      } else {
+        // Nessuna sovrapposizione rilevata: concatenazione standard
+        combined = `${combined}\n\n${nextSegment}`;
+      }
+    }
+
+    return combined;
   }
 }
 

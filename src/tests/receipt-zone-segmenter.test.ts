@@ -353,4 +353,106 @@ TOTALE 3,80`;
       expect(zones.ambiguous[0].text).toBe('$$$');
     });
   });
+
+  // =========================================================================
+  // TEST H: Footer con Refusi OCR ([OLE COMPLESSIVO, Pagamento contante, Importo pagato)
+  // =========================================================================
+  describe('H. Degraded Totals Anchor & Payment Footer Isolation (Panificio Panzieri case)', () => {
+    it('correctly segments single commercial line and excludes degraded totals/payment from BODY', () => {
+      const rawPanzieri = `PANIFICIO PANZIERI
+DA.MA. SRL
+VIA FRANCESCO DONATI, 39A
+00126 DRAGONA ROMA
+PARTITA IVA 02543600593
+TEL 067/5215342
+DOCUMENTO COMMERCIALE
+di vendita 0 prestazione
+DESCRIZIONE IVA Prezzole)
+REPARTO 47%        da        2,00
+[OLE COMPLESSIVO        2,00
+di cui IVA            Ù,08
+Pagamento contante          2,00
+Importo pagato              2,00
+03-08-2026 12:06`;
+
+      const norm = TextNormalizationModule.normalizeToStructuredOcrText(rawPanzieri);
+      const zones = ReceiptZoneSegmenter.segment(norm);
+
+      // Solo la vera riga commerciale "REPARTO 47% da 2,00" deve finire nel BODY
+      expect(zones.body.length).toBe(1);
+      expect(zones.body[0].text).toContain('REPARTO 47%');
+
+      // Le righe [OLE COMPLESSIVO, di cui IVA, Pagamento contante, Importo pagato devono finire in TOTALS_FOOTER o TRAILING
+      const bodyTexts = zones.body.map(l => l.text);
+      expect(bodyTexts.some(t => t.includes('[OLE COMPLESSIVO'))).toBe(false);
+      expect(bodyTexts.some(t => t.includes('Pagamento contante'))).toBe(false);
+      expect(bodyTexts.some(t => t.includes('Importo pagato'))).toBe(false);
+
+      expect(zones.totalsFooter.length).toBeGreaterThanOrEqual(1);
+    });
+
+    it('correctly isolates (UTALE COMPLESSIVO Li and payment lines into TOTALS_FOOTER while preserving unpriced article line in BODY', () => {
+      const rawPanzieriOcrExact = `PANTFICIO PANZIERI
+DA.MA. SRL
+VIA FRANCESCO DONATI, 39A
+00126 DRAGONA ROMA
+PARTITA IVA 02543600593
+TEL 067/5215342
+
+DOCUMENTO COMMERCIALE
+di vendita 0 prestazione
+
+DESCRIZIONE IVA Prezzole)
+
+REPARTO 44
+(UTALE COMPLESSIVO Li
+di cui IVA 0,08
+Pagamento contante 2,00
+Importo pagato 2,00
+03-08-2026 12:06`;
+
+      const norm = TextNormalizationModule.normalizeToStructuredOcrText(rawPanzieriOcrExact);
+      const zones = ReceiptZoneSegmenter.segment(norm);
+
+      // Solo la riga articolo REPARTO 44 resta in BODY
+      expect(zones.body.length).toBe(1);
+      expect(zones.body[0].text).toContain('REPARTO 44');
+
+      // (UTALE COMPLESSIVO Li, di cui IVA, Pagamento contante, Importo pagato sono in TOTALS_FOOTER
+      const bodyTexts = zones.body.map(l => l.text);
+      expect(bodyTexts.some(t => t.includes('UTALE COMPLESSIVO'))).toBe(false);
+      expect(bodyTexts.some(t => t.includes('Pagamento contante'))).toBe(false);
+      expect(bodyTexts.some(t => t.includes('Importo pagato'))).toBe(false);
+
+      const totalsTexts = zones.totalsFooter.map(l => l.text);
+      expect(totalsTexts.some(t => t.includes('UTALE COMPLESSIVO'))).toBe(true);
+      expect(totalsTexts.some(t => t.includes('Pagamento contante'))).toBe(true);
+      expect(totalsTexts.some(t => t.includes('Importo pagato'))).toBe(true);
+    });
+
+    it('negative control: does NOT classify normal products containing partial letters as totals footer', () => {
+      const normalProductReceipt = `SUPERMERCATO TEST
+VIA ROMA 10
+DOCUMENTO COMMERCIALE
+DESCRIZIONE IVA PREZZO
+STRUDEL DI MELE COMPLESSE 22% 3,50
+PRODOTTO COMPLESSO SPECIALE 22% 4,20
+TOTALE 7,70
+PAGAMENTO CONTANTI 10,00
+RESTO 2,30`;
+
+      const norm = TextNormalizationModule.normalizeToStructuredOcrText(normalProductReceipt);
+      const zones = ReceiptZoneSegmenter.segment(norm);
+
+      // Entrambi i prodotti devono rimanere nel BODY
+      expect(zones.body.length).toBe(2);
+      expect(zones.body[0].text).toContain('STRUDEL DI MELE');
+      expect(zones.body[1].text).toContain('PRODOTTO COMPLESSO');
+
+      // Solo TOTALE, PAGAMENTO e RESTO vanno nel footer
+      const totalsTexts = zones.totalsFooter.map(l => l.text);
+      expect(totalsTexts.some(t => t.includes('TOTALE 7,70'))).toBe(true);
+      expect(totalsTexts.some(t => t.includes('STRUDEL'))).toBe(false);
+    });
+  });
 });

@@ -106,9 +106,10 @@ export class DocumentTypeClassifier {
 
     // 3. REGOLE DI ARBITRAGGIO GLOBALE E RISOLUZIONE AMBIGUITÀ
 
-    // Regola A: Scontrino commerciale con pagamento POS/Carta nel footer
+    // Regola A: Scontrino commerciale con pagamento POS/Carta nel footer o coda multi-segmento
     // Se è presente "DOCUMENTO COMMERCIALE" o righe con aliquote IVA articoli (4%/10%/22%) e subtotale/totale,
-    // i segnali di pagamento elettronico (es. CARTA, AUT, STAN) nel footer sono secondari e accessori.
+    // o se sono presenti molteplici articoli retail / subtotale / testata commerciale,
+    // i segnali di pagamento elettronico (es. CARTA, AUT, STAN, MEMORIA CLIENTE) nel footer sono secondari e accessori.
     const hasExplicitCommercialHeader = evidences.some(
       (e) =>
         e.category === 'COMMERCIAL_RECEIPT' &&
@@ -120,10 +121,36 @@ export class DocumentTypeClassifier {
     const hasItemCountSignal = evidences.some(
       (e) => e.category === 'COMMERCIAL_RECEIPT' && e.signal.includes('ITEM_COUNT')
     );
+    const hasRetailMultiLinePrices = evidences.some(
+      (e) => e.category === 'COMMERCIAL_RECEIPT' && e.signal.includes('RETAIL_MULTI_LINE_PRICES')
+    );
+    const hasSubtotalSignal = evidences.some(
+      (e) => e.category === 'COMMERCIAL_RECEIPT' && e.signal.includes('SUBTOTAL')
+    );
 
-    if (commercialScore >= 40 && (hasExplicitCommercialHeader || hasVatRateLines || hasItemCountSignal)) {
+    const hasStrongCommercialStructure =
+      hasExplicitCommercialHeader ||
+      hasVatRateLines ||
+      hasItemCountSignal ||
+      (hasRetailMultiLinePrices && hasSubtotalSignal);
+
+    if (commercialScore >= 40 && hasStrongCommercialStructure) {
       // Bonus contestuale per scontrino commerciale strutturato
-      commercialScore += 25;
+      commercialScore += 35;
+    }
+
+    // Regola A2: Prevalenza Commerciale su appendice POS accessoria
+    // In presenza di un documento commerciale inequivocabile con articoli/totali/IVA,
+    // i segnali POS (che spesso arrivano da scontrini lunghi o pagamenti contactless allegati)
+    // non devono provocare il declassamento a UNKNOWN o PAYMENT_PROOF.
+    const isCommercialWithPosTail =
+      commercialScore >= 60 &&
+      hasStrongCommercialStructure &&
+      paymentProofScore > 0;
+
+    if (isCommercialWithPosTail && paymentProofScore <= commercialScore * 1.5) {
+      // Riduciamo il peso relativo del POS poiché è palesemente la modalità di quietanza di uno scontrino retail
+      paymentProofScore = Math.min(paymentProofScore, Math.round(commercialScore * 0.4));
     }
 
     // Regola B: Documento con pochissimo testo (es. solo Data + Importo)

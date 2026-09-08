@@ -355,4 +355,53 @@ Esito: Transazione eseguita con successo`;
       expect(signalNames).toContain('PAYMENT_TRANSACTION_OUTCOME_OK');
     });
   });
+
+  describe('Scenario K: Scontrino Commerciale Reale con Appendice/Coda POS (Leroy Merlin / Retail Multi-Segmento)', () => {
+    it('classifica come COMMERCIAL_RECEIPT uno scontrino con corpo commerciale strutturato e coda POS allegata', () => {
+      const commercialWithPosTailText = `LEROY MERLIN ITALIA S.R.L.
+STRADA STATALE 148 PONTINA
+00128 ROMA RM
+P.IVA 05602710963
+DOCUMENTO COMMERCIALE
+di vendita o prestazione
+DESCRIZIONE                    PREZZO(€)
+TASSELLO NYLON 6X30 100PZ          4,90 22%
+VITI TRUCIOLARE 4X40 200PZ         6,50 22%
+SMALTO BRILLANTE BIANCO 750ML     14,90 22%
+PENNELLO RADIATORE 50MM            3,20 22%
+SUBTOTALE                         29,50
+TOTALE COMPLESSIVO                29,50
+DI CUI IVA 22,00%                  5,32
+PAGAMENTO ELETTRONICO             29,50
+14/08/2026 11:42 DOC. 0412-0089 RT 99M1029384
+
+RICEVUTA POS - MEMORIA CLIENTE
+TID: 88192039  STAN: 004912
+AUT. CODE: 091823
+CARTA: MASTERCARD  PAN: ************4912
+IMPORTO: EUR 29,50
+TRANSAZIONE ESEGUITA - APPROVED
+ARRIVEDERCI E GRAZIE`;
+
+      const result = DocumentTypeClassifier.classify(commercialWithPosTailText);
+
+      expect(result.category).toBe('COMMERCIAL_RECEIPT');
+      expect(result.confidence).toBeGreaterThanOrEqual(0.70);
+      expect(result.categoryScores.commercialReceipt).toBeGreaterThan(0);
+    });
+
+    it('mantiene la classificazione PAYMENT_PROOF per una ricevuta POS pura senza corpo commerciale', () => {
+      const purePosText = `RICEVUTA POS - MEMORIA CLIENTE
+TID: 88192039  STAN: 004912
+AUT. CODE: 091823
+CARTA: MASTERCARD  PAN: ************4912
+IMPORTO: EUR 29,50
+TRANSAZIONE ESEGUITA - APPROVED`;
+
+      const result = DocumentTypeClassifier.classify(purePosText);
+
+      expect(result.category).toBe('PAYMENT_PROOF');
+      expect(result.confidence).toBeGreaterThanOrEqual(0.70);
+    });
+  });
 });

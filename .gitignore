@@ -7,3 +7,7 @@ coverage/
 .env*
 !.env.example
 vendor/*.tgz
+local-test-assets/
+*.traineddata
+rc05h-real-benchmark-results.json
+bun.lock

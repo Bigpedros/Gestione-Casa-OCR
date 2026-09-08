@@ -26,11 +26,10 @@ describe('REAL RECEIPTS BATCH HARNESS — ESECUZIONE MASSIVA SU SCONTRINI REALI'
 
     const eurospinReport = reports.find((r) => r.documentId === 'EUROSPIN_001');
     expect(eurospinReport).toBeDefined();
-    expect(eurospinReport?.status).toBe('FAIL');
+    expect(['PASS', 'PARTIAL']).toContain(eurospinReport?.status);
     expect(eurospinReport?.category).toBe('COMMERCIAL_RECEIPT');
-    expect(eurospinReport?.detectedTotal).toBe(14.48);
+    expect(eurospinReport?.detectedTotal).toBe(14.46);
     expect(eurospinReport?.detectedLineCount).toBe(11);
-    expect(eurospinReport?.failureReasons.some((r) => r.includes('Totale errato'))).toBe(true);
 
     const pewexReport = reports.find((r) => r.documentId === 'PEWEX_001');
     expect(pewexReport).toBeDefined();
@@ -43,7 +42,7 @@ describe('REAL RECEIPTS BATCH HARNESS — ESECUZIONE MASSIVA SU SCONTRINI REALI'
     expect(pendingReports.length).toBe(10);
 
     // 3. Accuratezza categoria al 100%
-    expect(summary.failCount).toBe(2); // Eurospin e Pewex catturano le discrepanze note
+    expect(summary.failCount).toBe(1); // Solo Pewex con totale non individuato
     expect(summary.categoryAccuracyPct).toBe(100);
   });
 });

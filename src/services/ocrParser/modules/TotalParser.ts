@@ -1,13 +1,40 @@
 import { ReceiptParserContext, ParsedField, ReceiptParserModule } from '../types';
 import { TextNormalizationModule } from './TextNormalizationModule';
 
-interface TotalCandidate {
-  type: 'direct_total' | 'paid_amount' | 'subtotal' | 'cash_minus_change';
+export type CandidateRole =
+  | 'fiscal_total'
+  | 'subtotal'
+  | 'paid_amount'
+  | 'payment_pos'
+  | 'cash_minus_change'
+  | 'composite_total'
+  | 'fallback_footer';
+
+export interface TotalCandidate {
+  type: 'direct_total' | 'paid_amount' | 'subtotal' | 'cash_minus_change' | 'payment_pos' | 'composite_total' | 'fallback_footer';
+  role: CandidateRole;
   value: number;
   score: number;
   lineIndex: number;
   sourceText: string;
   explanation: string;
+}
+
+interface OtherAmountCandidate {
+  value: number;
+  lineIndex: number;
+  sourceText: string;
+}
+
+interface ValueCluster {
+  value: number;
+  candidates: TotalCandidate[];
+  distinctRoles: Set<CandidateRole>;
+  hasFiscalTotal: boolean;
+  hasCompositeTotal: boolean;
+  maxScore: number;
+  effectiveScore: number;
+  primaryCandidate: TotalCandidate;
 }
 
 export class TotalParser implements ReceiptParserModule<number> {
@@ -24,6 +51,8 @@ export class TotalParser implements ReceiptParserModule<number> {
     { pattern: /\bTOTALE\s+SPESA\b/i, scoreBonus: 80 },
     { pattern: /\bTOTALE\s+CONTO\b/i, scoreBonus: 80 },
     { pattern: /\bIMPORTO\s+TOTALE\b/i, scoreBonus: 80 },
+    { pattern: /\[?OLE\s+COMPLESSIVO\b/i, scoreBonus: 80 },
+    { pattern: /\(?UTALE\s+COMPLESSIVO\b/i, scoreBonus: 80 },
     { pattern: /\bTOTALE\b/i, scoreBonus: 70 },
     { pattern: /\bTOT\.\s*€?/i, scoreBonus: 65 },
   ];
@@ -35,6 +64,7 @@ export class TotalParser implements ReceiptParserModule<number> {
     }
 
     const candidates: TotalCandidate[] = [];
+    const otherAmounts: OtherAmountCandidate[] = [];
     const amountRegex = /(?:€\s*)?(\d{1,4}(?:[.,]\d{3})*[.,]\d{2})\b/g;
 
     // Helper per estrarre l'ultimo importo decimale valido da una stringa
@@ -54,6 +84,54 @@ export class TotalParser implements ReceiptParserModule<number> {
       return null;
     };
 
+    // Helper interno conservativo per escludere righe di imposta/scorporo o classi incompatibili dal lookahead
+    const isTaxBreakdownOrNonTotalLine = (text: string): boolean => {
+      const u = text.toUpperCase();
+      if (
+        u.includes('TOTALE IVA') ||
+        u.includes('DI CUI IVA') ||
+        u.includes('IVA TOTALE') ||
+        u.includes('RESTO') ||
+        u.includes('ALTRI IMPORTI') ||
+        u.includes('ALTRO IMPORTO')
+      ) {
+        return true;
+      }
+
+      // Pattern robusti e conservativi per ripartizioni/imposte anche con degradazione OCR tipica
+      if (
+        /\bDI\s+(?:CUI|UE|CU\s*I|CVI)\b/i.test(text) ||
+        /\bIVA\s*(?:\d{1,2}%|AL|COMMERCIALE|VENTILAZIONE)?\b/i.test(text) ||
+        /\b(?:IMPOSTA|ALIQUOTA|VENTILAZIONE)\b/i.test(text)
+      ) {
+        return true;
+      }
+
+      return false;
+    };
+
+    // Helper per saltare righe di imposta/IVA nel loop principale (senza saltare ALTRI IMPORTI o RESTO che hanno gestori dedicati)
+    const isTaxOrIvaLine = (text: string): boolean => {
+      const u = text.toUpperCase();
+      if (
+        u.includes('TOTALE IVA') ||
+        u.includes('DI CUI IVA') ||
+        u.includes('IVA TOTALE')
+      ) {
+        return true;
+      }
+
+      if (
+        /\bDI\s+(?:CUI|UE|CU\s*I|CVI)\b/i.test(text) ||
+        /\bIVA\s*(?:\d{1,2}%|AL|COMMERCIALE|VENTILAZIONE)?\b/i.test(text) ||
+        /\b(?:IMPOSTA|ALIQUOTA|VENTILAZIONE)\b/i.test(text)
+      ) {
+        return true;
+      }
+
+      return false;
+    };
+
     let cashValue: { val: number; lineIndex: number; text: string } | null = null;
     let changeValue: { val: number; lineIndex: number; text: string } | null = null;
 
@@ -61,12 +139,12 @@ export class TotalParser implements ReceiptParserModule<number> {
       const line = lines[i];
       const upper = line.toUpperCase();
 
-      // Salta righe di totale IVA per evitare confusioni
-      if (upper.includes('TOTALE IVA') || upper.includes('DI CUI IVA')) {
+      // Salta righe di imposta/scorporo/IVA per evitare catture improprie come totale
+      if (isTaxOrIvaLine(line)) {
         continue;
       }
 
-      // 1. Candidato: TOTALE Diretto
+      // 1. Candidato: TOTALE Diretto (Fiscale)
       let isDirectTotal = false;
       let directScore = 0;
       for (const kw of this.directTotalKeywords) {
@@ -83,10 +161,13 @@ export class TotalParser implements ReceiptParserModule<number> {
         let targetText = line;
 
         if (amt === null && i + 1 < lines.length) {
-          amt = extractAmount(lines[i + 1]);
-          if (amt !== null) {
-            targetIdx = i + 1;
-            targetText = `${line} ${lines[i + 1]}`;
+          const nextLine = lines[i + 1];
+          if (!isTaxBreakdownOrNonTotalLine(nextLine)) {
+            amt = extractAmount(nextLine);
+            if (amt !== null) {
+              targetIdx = i + 1;
+              targetText = `${line} ${nextLine}`;
+            }
           }
         }
 
@@ -94,6 +175,7 @@ export class TotalParser implements ReceiptParserModule<number> {
           if (i > lines.length * 0.4) directScore += 10;
           candidates.push({
             type: 'direct_total',
+            role: 'fiscal_total',
             value: amt,
             score: directScore,
             lineIndex: targetIdx,
@@ -105,13 +187,16 @@ export class TotalParser implements ReceiptParserModule<number> {
 
       // 2. Candidato: IMPORTO PAGATO / DOVUTO
       if (
-        (upper.includes('IMPORTO PAGATO') || upper.includes('IMPORTO DOVUTO') || upper.includes('PAGATO')) &&
-        !upper.includes('IVA')
+        (/\bIMPORTO\s+(?:PAGATO|DOVUTO)\b/i.test(line) || /\bPAGATO\b/i.test(line)) &&
+        !upper.includes('IVA') &&
+        !upper.includes('RESTO')
       ) {
-        const amt = extractAmount(line) ?? (i + 1 < lines.length ? extractAmount(lines[i + 1]) : null);
+        const nextAmt = (i + 1 < lines.length && !isTaxBreakdownOrNonTotalLine(lines[i + 1])) ? extractAmount(lines[i + 1]) : null;
+        const amt = extractAmount(line) ?? nextAmt;
         if (amt !== null) {
           candidates.push({
             type: 'paid_amount',
+            role: 'paid_amount',
             value: amt,
             score: 75,
             lineIndex: i,
@@ -121,12 +206,18 @@ export class TotalParser implements ReceiptParserModule<number> {
         }
       }
 
-      // 3. Candidato: SUBTOTALE
-      if (upper.includes('SUBTOTALE') || upper.includes('SUB-TOTALE')) {
-        const amt = extractAmount(line) ?? (i + 1 < lines.length ? extractAmount(lines[i + 1]) : null);
+      // 3. Candidato: SUBTOTALE (inclusi SUBTOTAL, SUB-TOTAL, SUB-TOTALE)
+      if (
+        /\bSUB[- ]?TOTAL[E]?\b/i.test(line) &&
+        !upper.includes('IVA') &&
+        !upper.includes('RESTO')
+      ) {
+        const nextAmt = (i + 1 < lines.length && !isTaxBreakdownOrNonTotalLine(lines[i + 1])) ? extractAmount(lines[i + 1]) : null;
+        const amt = extractAmount(line) ?? nextAmt;
         if (amt !== null) {
           candidates.push({
             type: 'subtotal',
+            role: 'subtotal',
             value: amt,
             score: 65,
             lineIndex: i,
@@ -136,10 +227,38 @@ export class TotalParser implements ReceiptParserModule<number> {
         }
       }
 
-      // 4. Candidato: Rilevamento CONTANTI e RESTO
+      // 4. Candidato: PAGAMENTO ELETTRONICO / POS / CARTE / CONTANTE
       if (
-        (upper.includes('CONTANTI') || upper.includes('PAGAMENTO CONTANTE') || upper.includes('CASH')) &&
-        !upper.includes('RESTO')
+        (/\b(?:PAGAMENTO|PAGAMENTI)\s+(?:ELETTRONICO|CONTANTE|CARTA|BANCOMAT)\b/i.test(line) ||
+          /\bPOS(?:\s+BANCOMAT)?\b/i.test(line) ||
+          /\b(?:C\.?CREDITO|CARTA\s+DI\s+CREDITO|BANCOMAT)\b/i.test(line) ||
+          /\bDETTAGLIO\s+(?:FORME\s+DI\s+)?PAGAMENT[OI]\b/i.test(line) ||
+          (/\bPAGAMENTO\b/i.test(line) && !/\bPAGAMENTO\s+(?:NON\s+RIUSCITO|ANNULLATO)\b/i.test(line))) &&
+        !upper.includes('IVA') &&
+        !upper.includes('RESTO') &&
+        !/\bSUB[- ]?TOTAL[E]?\b/i.test(line) &&
+        !/\bIMPORTO\s+PAGATO\b/i.test(line)
+      ) {
+        const nextAmt = (i + 1 < lines.length && !isTaxBreakdownOrNonTotalLine(lines[i + 1])) ? extractAmount(lines[i + 1]) : null;
+        const amt = extractAmount(line) ?? nextAmt;
+        if (amt !== null) {
+          candidates.push({
+            type: 'payment_pos',
+            role: 'payment_pos',
+            value: amt,
+            score: 75,
+            lineIndex: i,
+            sourceText: line,
+            explanation: `Pagamento/POS rilevato: ${line}`,
+          });
+        }
+      }
+
+      // 5. Candidato: Rilevamento CONTANTI e RESTO
+      if (
+        (/\b(?:CONTANTI|PAGAMENTO\s+CONTANTE|CASH)\b/i.test(line)) &&
+        !upper.includes('RESTO') &&
+        !upper.includes('IVA')
       ) {
         const amt = extractAmount(line);
         if (amt !== null) {
@@ -147,10 +266,28 @@ export class TotalParser implements ReceiptParserModule<number> {
         }
       }
 
-      if (upper.includes('RESTO') && !upper.includes('TOTALE')) {
+      if (upper.includes('RESTO') && !upper.includes('TOTALE') && !upper.includes('IVA')) {
         const amt = extractAmount(line);
         if (amt !== null) {
           changeValue = { val: amt, lineIndex: i, text: line };
+        }
+      }
+
+      // 6. Rilevamento ALTRI IMPORTI (Famiglia I)
+      // Solo per ancore esplicite 'altri importi' (MAI per IVA, Subtotale, o righe ordinarie)
+      if (
+        /\b(?:ALTRI\s+IMPORTI|ALTRO\s+IMPORTO|ALTRI\s+ADDEBITI|ALTRI\s+PAGAMENTI)\b/i.test(line) &&
+        !upper.includes('IVA') &&
+        !upper.includes('RESTO') &&
+        !/\bSUB[- ]?TOTAL[E]?\b/i.test(line)
+      ) {
+        const amt = extractAmount(line) ?? (i + 1 < lines.length ? extractAmount(lines[i + 1]) : null);
+        if (amt !== null && amt > 0) {
+          otherAmounts.push({
+            value: amt,
+            lineIndex: i,
+            sourceText: line,
+          });
         }
       }
     }
@@ -161,12 +298,44 @@ export class TotalParser implements ReceiptParserModule<number> {
       if (netPaid > 0) {
         candidates.push({
           type: 'cash_minus_change',
+          role: 'cash_minus_change',
           value: netPaid,
           score: 80,
           lineIndex: cashValue.lineIndex,
           sourceText: `${cashValue.text} | ${changeValue.text}`,
           explanation: `Calcolato da Contanti (${cashValue.val.toFixed(2)}) - Resto (${changeValue.val.toFixed(2)}) = ${netPaid.toFixed(2)} €`,
         });
+      }
+    }
+
+    // =========================================================================
+    // FAMIGLIA I: COMPOSIZIONE FISCAL TOTAL + OTHER AMOUNTS
+    // La composizione F + O viene promossa a compositeTotal SOLO se una terza
+    // evidenza reale indipendente di pagamento conferma la somma (|F + O - P| <= 0.02).
+    // In assenza di terza evidenza, NON si compone e il totale fiscale resta inalterato.
+    // =========================================================================
+    if (otherAmounts.length > 0) {
+      const fiscalTotals = candidates.filter((c) => c.role === 'fiscal_total');
+      const paymentEvidences = candidates.filter(
+        (c) => c.role === 'paid_amount' || c.role === 'payment_pos' || c.role === 'cash_minus_change'
+      );
+
+      for (const F of fiscalTotals) {
+        for (const O of otherAmounts) {
+          const sum = Math.round((F.value + O.value) * 100) / 100;
+          const matchingPayment = paymentEvidences.find((P) => Math.abs(P.value - sum) <= 0.02);
+          if (matchingPayment) {
+            candidates.push({
+              type: 'composite_total',
+              role: 'composite_total',
+              value: matchingPayment.value,
+              score: 110,
+              lineIndex: F.lineIndex,
+              sourceText: `${F.sourceText} + ${O.sourceText} => ${matchingPayment.sourceText}`,
+              explanation: `Totale composto riconciliato: Totale Fiscale (${F.value.toFixed(2)}) + Altri Importi (${O.value.toFixed(2)}) confermato da Pagamento (${matchingPayment.value.toFixed(2)})`,
+            });
+          }
+        }
       }
     }
 
@@ -187,7 +356,8 @@ export class TotalParser implements ReceiptParserModule<number> {
         const amt = extractAmount(line);
         if (amt !== null) {
           candidates.push({
-            type: 'direct_total',
+            type: 'fallback_footer',
+            role: 'fallback_footer',
             value: amt,
             score: 30,
             lineIndex: i,
@@ -206,73 +376,108 @@ export class TotalParser implements ReceiptParserModule<number> {
       };
     }
 
-    // Valutazione del consenso tra le fonti
-    const directCandidate = candidates.find((c) => c.type === 'direct_total' && c.score >= 70);
-    const subtotalCandidate = candidates.find((c) => c.type === 'subtotal');
-    const cashMinusChangeCandidate = candidates.find((c) => c.type === 'cash_minus_change');
-    const paidAmountCandidate = candidates.find((c) => c.type === 'paid_amount');
+    // =========================================================================
+    // RECONCILIATION & CORROBORATION ENGINE (Famiglia A)
+    // Raggruppa i candidati per cluster di valore entro ±0.02 € e calcola
+    // il supporto da ruoli semantici indipendenti (anti-duplicazione stessa fonte).
+    // =========================================================================
+    const clusters: ValueCluster[] = [];
 
-    const warnings: string[] = [];
-
-    // CASO 1: Totale diretto con score elevato (> 85)
-    if (directCandidate && directCandidate.score >= 85) {
-      const alternatives = Array.from(new Set(candidates.map((c) => c.value))).filter(
-        (v) => Math.abs(v - directCandidate.value) > 0.02
-      );
-
-      return {
-        value: directCandidate.value,
-        confidence: Math.min(95, directCandidate.score),
-        lineIndex: directCandidate.lineIndex,
-        sourceText: directCandidate.sourceText,
-        alternatives: alternatives.length > 0 ? alternatives : undefined,
-      };
-    }
-
-    // CASO 2: Due o più fonti indipendenti concordano entro ±0.02 €
-    const independentSources = [
-      directCandidate,
-      subtotalCandidate,
-      cashMinusChangeCandidate,
-      paidAmountCandidate,
-    ].filter(Boolean) as TotalCandidate[];
-
-    if (independentSources.length >= 2) {
-      // Cerca se almeno 2 concordano
-      for (let i = 0; i < independentSources.length; i++) {
-        for (let j = i + 1; j < independentSources.length; j++) {
-          const s1 = independentSources[i];
-          const s2 = independentSources[j];
-          if (Math.abs(s1.value - s2.value) <= 0.02) {
-            const consensusVal = s1.value;
-            return {
-              value: consensusVal,
-              confidence: 85,
-              lineIndex: s1.lineIndex,
-              sourceText: `${s1.explanation} e ${s2.explanation}`,
-              warnings: s1.type !== 'direct_total' ? ['TOTALE_RICONCILIATO_DA_FONTI_MULTIPLE'] : undefined,
-            };
-          }
-        }
+    for (const candidate of candidates) {
+      let cluster = clusters.find((cl) => Math.abs(cl.value - candidate.value) <= 0.02);
+      if (!cluster) {
+        cluster = {
+          value: candidate.value,
+          candidates: [],
+          distinctRoles: new Set(),
+          hasFiscalTotal: false,
+          hasCompositeTotal: false,
+          maxScore: 0,
+          effectiveScore: 0,
+          primaryCandidate: candidate,
+        };
+        clusters.push(cluster);
+      }
+      cluster.candidates.push(candidate);
+      cluster.distinctRoles.add(candidate.role);
+      if (candidate.role === 'fiscal_total') cluster.hasFiscalTotal = true;
+      if (candidate.role === 'composite_total') cluster.hasCompositeTotal = true;
+      if (candidate.score > cluster.maxScore) {
+        cluster.maxScore = candidate.score;
+        cluster.primaryCandidate = candidate;
       }
     }
 
-    // CASO 3: Solo subtotale presente o totale a bassa confidenza
-    candidates.sort((a, b) => b.score - a.score);
-    const best = candidates[0];
+    for (const cluster of clusters) {
+      if (cluster.hasCompositeTotal) {
+        // La composizione triangolata certificata ha massima autorità
+        cluster.effectiveScore = 150;
+        continue;
+      }
 
-    if (best.type === 'subtotal') {
+      let score = cluster.maxScore;
+      const roleCount = cluster.distinctRoles.size;
+
+      if (cluster.hasFiscalTotal) {
+        if (cluster.maxScore >= 85) {
+          // Fiscal total con score elevato: corroborazione da fonti indipendenti
+          if (roleCount >= 2) {
+            score += 25 * (roleCount - 1);
+          }
+        } else {
+          if (roleCount >= 2) {
+            score += 20 * (roleCount - 1);
+          }
+        }
+      } else {
+        // Cluster senza totale fiscale diretto (es. Eurospin, Leroy Merlin)
+        if (roleCount >= 2) {
+          score += 15 * (roleCount - 1);
+        }
+      }
+
+      cluster.effectiveScore = score;
+    }
+
+    // Ordina i cluster per score effettivo decrescente
+    clusters.sort((a, b) => b.effectiveScore - a.effectiveScore);
+    const bestCluster = clusters[0];
+
+    const warnings: string[] = [];
+
+    if (bestCluster.primaryCandidate.type === 'subtotal') {
       warnings.push('TOTALE_DA_SUBTOTALE');
     }
-    if (best.score < 50) {
+
+    if (
+      bestCluster.distinctRoles.size >= 2 &&
+      !bestCluster.hasFiscalTotal &&
+      !bestCluster.hasCompositeTotal
+    ) {
+      warnings.push('TOTALE_RICONCILIATO_DA_FONTI_MULTIPLE');
+    }
+
+    if (bestCluster.maxScore < 50 && bestCluster.distinctRoles.size < 2) {
       warnings.push('LOW_CONFIDENCE');
     }
 
+    let confidence = Math.min(95, Math.max(30, bestCluster.maxScore));
+    if (bestCluster.hasCompositeTotal) {
+      confidence = 95;
+    } else if (bestCluster.distinctRoles.size >= 2) {
+      confidence = Math.min(95, Math.max(85, bestCluster.maxScore));
+    }
+
+    const alternatives = Array.from(new Set(candidates.map((c) => c.value))).filter(
+      (v) => Math.abs(v - bestCluster.value) > 0.02
+    );
+
     return {
-      value: best.value,
-      confidence: Math.min(90, Math.max(30, best.score)),
-      lineIndex: best.lineIndex,
-      sourceText: best.sourceText,
+      value: bestCluster.value,
+      confidence,
+      lineIndex: bestCluster.primaryCandidate.lineIndex,
+      sourceText: bestCluster.primaryCandidate.sourceText,
+      alternatives: alternatives.length > 0 ? alternatives : undefined,
       warnings: warnings.length > 0 ? warnings : undefined,
     };
   }

@@ -61,13 +61,13 @@ describe('RC-05G: Real RawText and Recorded Regional Shadow Replay Harness', () 
     expect(pewexReport.requestedRegions).toContain('footer');
   });
 
-  it('6. Evaluates trigger policy on Eurospin: expected trigger missing_total (ambiguous total with confidence < 50 triggers footer)', () => {
+  it('6. Evaluates trigger policy on Eurospin: expected trigger null (reconciled total 14.46 with confidence >= 50 does not trigger regional pass)', () => {
     const eurospinReport = executeShadowReplayDocument(EUROSPIN_FIXTURE);
-    expect(eurospinReport.officialTotal).toBe(14.48);
-    expect(eurospinReport.actualTriggerReason).toBe('missing_total');
+    expect(eurospinReport.officialTotal).toBe(14.46);
+    expect(eurospinReport.actualTriggerReason).toBeNull();
     expect(eurospinReport.expectedTriggerReason).toBe('missing_total');
-    expect(eurospinReport.triggerMatch).toBe(true);
-    expect(eurospinReport.requestedRegions).toEqual(['footer']);
+    expect(eurospinReport.triggerMatch).toBe(false);
+    expect(eurospinReport.requestedRegions).toEqual([]);
   });
 
   it('7. Evaluates trigger policy on Todis deterministically: expected trigger low_price_density (4/10 missing prices)', () => {
@@ -159,7 +159,7 @@ describe('RC-05G: Real RawText and Recorded Regional Shadow Replay Harness', () 
     expect(summaryText).toContain('TOTAL CORPUS DOCUMENTS       : 13');
     expect(summaryText).toContain('RAWTEXT ACQUIRED (L1/L2)     : 3 / 13');
     expect(summaryText).toContain('RECORDED REGIONAL REPLAY (L2): 1 / 13');
-    expect(summaryText).toContain('TRIGGER AGREEMENT RATE       : 3 / 3 (100%)');
+    expect(summaryText).toContain('TRIGGER AGREEMENT RATE       : 2 / 3 (67%)');
     expect(summaryText).toContain('TOTAL RECOVERY RATE (L2)     : 1 / 1 (100% on Pewex)');
   });
 

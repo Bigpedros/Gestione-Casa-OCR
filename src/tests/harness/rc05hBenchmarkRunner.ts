@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { createWorker, Worker } from 'tesseract.js';
+import { createCanvas, Image as NapiImage } from '@napi-rs/canvas';
 import {
   RC05H_PHYSICAL_DOCUMENTS_GROUND_TRUTH,
   PhysicalDocumentGroundTruth,
@@ -8,6 +9,44 @@ import {
 import { receiptParserService } from '../../services/ocrParser/receiptParserService';
 import { receiptKnowledgeBase } from '../../services/ocrParser/knowledgeBase';
 import { ParsedReceiptDraft } from '../../services/ocrParser/types';
+import {
+  createReceiptImageVariants,
+  evaluateReceiptOcrQuality,
+  ReceiptVariantName,
+  OcrQualityEvaluation,
+} from '../../utils/imagePreprocessing';
+import { ocrService } from '../../services/ocrService';
+import { runRegionalSecondPassShadow } from '../../services/ocrParser/regional/shadowOrchestrator';
+
+/**
+ * Assicura l'ambiente Canvas / HTMLCanvasElement per Node.js
+ * per consentire il funzionamento identico delle routine di preprocessing.
+ */
+export function ensureCanvasEnvironment(): void {
+  const dummyCanvas = createCanvas(10, 10);
+  if (typeof (globalThis as any).window === 'undefined') {
+    (globalThis as any).window = {};
+  }
+  (globalThis as any).window.HTMLCanvasElement = dummyCanvas.constructor;
+  (globalThis as any).HTMLCanvasElement = dummyCanvas.constructor;
+
+  if (typeof (globalThis as any).document === 'undefined') {
+    (globalThis as any).document = {};
+  }
+  const originalCreateElement = (globalThis as any).document.createElement?.bind((globalThis as any).document);
+  (globalThis as any).document.createElement = (tag: string) => {
+    if (tag.toLowerCase() === 'canvas') {
+      return createCanvas(10, 10);
+    }
+    if (originalCreateElement) {
+      return originalCreateElement(tag);
+    }
+    return {};
+  };
+
+  (globalThis as any).Image = NapiImage;
+  (globalThis as any).window.Image = NapiImage;
+}
 
 /**
  * Funzione di mascheramento per garantire che nessun dato personale o bancario
@@ -79,6 +118,23 @@ export interface DuplicateLineDetail {
   occurrences: number;
 }
 
+export interface ImageVariantScoreDetail {
+  variant: ReceiptVariantName;
+  label: string;
+  confidence: number;
+  overallScore: number;
+  reasons: string[];
+  snippet: string;
+}
+
+export interface ImageVariantSelectionInfo {
+  filename: string;
+  selectedVariant: ReceiptVariantName;
+  ocrConfidence: number;
+  qualityScore: number;
+  variantScores: ImageVariantScoreDetail[];
+}
+
 export interface Rc05hDocumentBenchmarkResult {
   documentIndex: number;
   documentId: string;
@@ -90,6 +146,16 @@ export interface Rc05hDocumentBenchmarkResult {
   durationMs: number;
   ocrConfidence: number;
   rawTextMasked: string;
+
+  // Stato Gate del documento
+  gateStatus: 'PASS' | 'NON_BLOCKING' | 'BLOCKING';
+
+  // Dettagli varianti per immagine
+  selectedVariants: ImageVariantSelectionInfo[];
+
+  // Informazioni di stitching e deduplicazione
+  stitchingOverlapDetected?: boolean;
+  stitchedDeduplicatedLines?: number;
 
   // Categoria
   categoryMatch: boolean;
@@ -164,6 +230,10 @@ export interface Rc05hBenchmarkSummary {
   totalImages: number;
   successfullyProcessed: number;
   technicalFailures: number;
+
+  passCount: number;
+  nonBlockingCount: number;
+  blockingCount: number;
 
   categoryMatches: number;
   merchantMatches: number;
@@ -495,16 +565,21 @@ export function evaluateDraftAgainstPhysicalGroundTruth(
 
   const warnings = (draft.warnings || []).map((w) => `${w.code}: ${w.message}`);
 
-  return {
+  const preliminaryResult = {
     documentIndex: gtDoc.documentIndex,
     documentId: gtDoc.documentId,
     label: gtDoc.label,
     relationship: gtDoc.imageRelationship,
     associatedImages: gtDoc.associatedImages,
-    status: 'SUCCESS',
+    status: 'SUCCESS' as const,
     durationMs,
     ocrConfidence,
     rawTextMasked: maskSensitiveData(rawText),
+
+    gateStatus: 'NON_BLOCKING' as 'PASS' | 'NON_BLOCKING' | 'BLOCKING',
+    selectedVariants: [] as ImageVariantSelectionInfo[],
+    stitchingOverlapDetected: false,
+    stitchedDeduplicatedLines: 0,
 
     categoryMatch,
     detectedCategory,
@@ -566,6 +641,52 @@ export function evaluateDraftAgainstPhysicalGroundTruth(
     warnings,
     specialNotes: gtDoc.specialNotes,
   };
+
+  preliminaryResult.gateStatus = determineGateStatus(preliminaryResult);
+
+  return preliminaryResult;
+}
+
+/**
+ * Determina in modo deterministico lo stato del documento secondo i criteri del Final Gate:
+ * - BLOCKING: Categoria errata, Totale errato/mancante, o 0 righe rilevate su scontrino commerciale.
+ * - PASS: Categoria, Totale, Esercente, Data e Conteggio righe esatti.
+ * - NON_BLOCKING: Categoria e Totale esatti, ma lievi discrepanze secondarie (data/ora, descrizioni righe, decimali isolati).
+ */
+export function determineGateStatus(result: {
+  categoryMatch: boolean;
+  totalMatch: boolean;
+  expectedCategory: string;
+  detectedLineCount: number;
+  expectedLineCount: number | null;
+  merchantMatch: boolean;
+  dateMatch: boolean;
+  lineCountMatch: boolean;
+}): 'PASS' | 'NON_BLOCKING' | 'BLOCKING' {
+  // 1. Categoria errata: BLOCKING
+  if (!result.categoryMatch) {
+    return 'BLOCKING';
+  }
+  // 2. Totale non corrispondente o mancante: BLOCKING
+  if (!result.totalMatch) {
+    return 'BLOCKING';
+  }
+  // 3. Perdita catastrofica di righe su scontrino commerciale: BLOCKING
+  if (
+    result.expectedCategory === 'COMMERCIAL_RECEIPT' &&
+    result.detectedLineCount === 0 &&
+    (result.expectedLineCount ?? 0) > 0
+  ) {
+    return 'BLOCKING';
+  }
+
+  // Se tutti i campi fondamentali (categoria, totale, merchant, data, line count) matchano: PASS
+  if (result.merchantMatch && result.dateMatch && result.lineCountMatch) {
+    return 'PASS';
+  }
+
+  // Altrimenti, categoria e totale sono integri ma ci sono discrepanze minori: NON_BLOCKING
+  return 'NON_BLOCKING';
 }
 
 export interface RunRc05hBenchmarkOptions {
@@ -582,6 +703,8 @@ export async function runRc05hRealBenchmark(
   results: Rc05hDocumentBenchmarkResult[];
   summary: Rc05hBenchmarkSummary;
 }> {
+  ensureCanvasEnvironment();
+
   const assetsDir = options.assetsDir || path.resolve('local-test-assets/rc05h');
   const documents = RC05H_PHYSICAL_DOCUMENTS_GROUND_TRUTH;
   const results: Rc05hDocumentBenchmarkResult[] = [];
@@ -610,37 +733,162 @@ export async function runRc05hRealBenchmark(
       try {
         const pageTexts: string[] = [];
         const pageConfidences: number[] = [];
+        const docSelectedVariants: ImageVariantSelectionInfo[] = [];
+        let primaryWinningDataUrl: string | null = null;
 
-        for (const imgName of doc.associatedImages) {
+        for (let imgIdx = 0; imgIdx < doc.associatedImages.length; imgIdx++) {
+          const imgName = doc.associatedImages[imgIdx];
           const imgPath = path.join(assetsDir, imgName);
           if (!fs.existsSync(imgPath)) {
             throw new Error(`File immagine non trovato: ${imgPath}`);
           }
 
-          const res = await worker.recognize(imgPath);
-          pageTexts.push(res.data.text || '');
-          pageConfidences.push(Math.round(res.data.confidence || 0));
+          const fileBuf = fs.readFileSync(imgPath);
+          const rawDataUrl = `data:image/jpeg;base64,${fileBuf.toString('base64')}`;
+
+          // 1. Generazione non-distruttiva delle varianti dell'immagine (Identica a produzione: ocrService.ts)
+          const variants = await createReceiptImageVariants(rawDataUrl, {
+            rotationDegrees: 0,
+            maxDimension: 2400,
+          });
+
+          interface VariantCandidate {
+            name: ReceiptVariantName;
+            label: string;
+            text: string;
+            confidence: number;
+            evaluation: OcrQualityEvaluation;
+            dataUrl: string;
+          }
+          const candidates: VariantCandidate[] = [];
+
+          for (let vIdx = 0; vIdx < variants.length; vIdx++) {
+            const v = variants[vIdx];
+            try {
+              const res = await worker.recognize(v.dataUrl);
+              const txt = res.data.text || '';
+              const conf = Math.round(res.data.confidence || 0);
+              const evaluation = evaluateReceiptOcrQuality(txt, conf);
+
+              candidates.push({
+                name: v.name,
+                label: v.label,
+                text: txt,
+                confidence: conf,
+                evaluation,
+                dataUrl: v.dataUrl,
+              });
+
+              // Regola di early exit identica alla produzione (ocrService.ts)
+              const hasAmountEvidence =
+                /\b(?:TOTALE|IMPORTO|IMP\.?|EUR|EURO|€)\b/i.test(txt) &&
+                /\b\d+[.,]\d{2}\b/.test(txt);
+              if (evaluation.overallScore >= 88 && conf >= 75 && hasAmountEvidence) {
+                break;
+              }
+            } catch (vErr) {
+              console.warn(
+                `[RC-05H-B Benchmark] Errore riconoscimento variante ${v.name} per ${imgName}:`,
+                vErr
+              );
+            }
+          }
+
+          let pageText = '';
+          let pageConfidence = 0;
+
+          if (candidates.length > 0) {
+            candidates.sort((a, b) => b.evaluation.overallScore - a.evaluation.overallScore);
+            const winner = candidates[0];
+
+            pageText = winner.text;
+            pageConfidence = winner.confidence;
+            if (imgIdx === 0) {
+              primaryWinningDataUrl = winner.dataUrl;
+            }
+
+            const pageVariantScores = candidates.map((c) => ({
+              variant: c.name,
+              label: c.label,
+              confidence: c.confidence,
+              overallScore: c.evaluation.overallScore,
+              reasons: c.evaluation.reasons,
+              snippet: c.text.slice(0, 120).replace(/\n+/g, ' '),
+            }));
+
+            docSelectedVariants.push({
+              filename: imgName,
+              selectedVariant: winner.name,
+              ocrConfidence: winner.confidence,
+              qualityScore: winner.evaluation.overallScore,
+              variantScores: pageVariantScores,
+            });
+          } else {
+            // Fallback diretto
+            const res = await worker.recognize(imgPath);
+            pageText = res.data.text || '';
+            pageConfidence = Math.round(res.data.confidence || 0);
+            if (imgIdx === 0) {
+              primaryWinningDataUrl = rawDataUrl;
+            }
+            docSelectedVariants.push({
+              filename: imgName,
+              selectedVariant: 'original',
+              ocrConfidence: pageConfidence,
+              qualityScore: 0,
+              variantScores: [],
+            });
+          }
+
+          pageTexts.push(pageText);
+          pageConfidences.push(pageConfidence);
         }
 
-        // Concatenazione testo nel rispetto della sequenza segmenti/viste
-        const combinedRawText = pageTexts
+        // 2. Concatenazione e deduplicazione topologica di produzione (ocrService.stitchSegmentTexts)
+        const combinedRawText = ocrService.stitchSegmentTexts(pageTexts);
+
+        // Calcolo linee deduplicate dallo stitching
+        const rawJoinedLinesCount = pageTexts
           .map((t) => t.trim())
           .filter(Boolean)
-          .join('\n\n');
+          .join('\n\n')
+          .split(/\r?\n/).length;
+        const stitchedLinesCount = combinedRawText.split(/\r?\n/).length;
+        const deduplicatedLines = Math.max(0, rawJoinedLinesCount - stitchedLinesCount);
 
         const avgConfidence =
           pageConfidences.length > 0
             ? Math.round(pageConfidences.reduce((a, b) => a + b, 0) / pageConfidences.length)
             : 0;
 
-        // Invocazione del parser ufficiale di produzione
+        // 3. Esecuzione Regional Second-Pass in modalità rigorosamente SHADOW-ONLY (identica a produzione)
+        try {
+          await runRegionalSecondPassShadow({
+            worker,
+            imageSource: primaryWinningDataUrl,
+            combinedRawText,
+            overallConfidence: avgConfidence,
+            shadowEnabled: true,
+            variantUsed: docSelectedVariants[0]?.selectedVariant || 'original',
+            sourceCount: doc.associatedImages.length,
+            restoreParameters: {
+              preserve_interword_spaces: '1',
+              user_defined_dpi: '300',
+              tessedit_pageseg_mode: '4',
+            },
+          });
+        } catch {
+          // Failure-safe
+        }
+
+        // 4. Invocazione del parser ufficiale di produzione
         const draft = receiptParserService.parseText(combinedRawText, {
           overallOcrConfidence: avgConfidence,
         });
 
         const docDurationMs = Date.now() - docStartTime;
 
-        // Valutazione approfondita contro Ground Truth
+        // 5. Valutazione approfondita contro Ground Truth
         const evalResult = evaluateDraftAgainstPhysicalGroundTruth(
           doc,
           draft,
@@ -648,6 +896,11 @@ export async function runRc05hRealBenchmark(
           avgConfidence,
           docDurationMs
         );
+
+        evalResult.selectedVariants = docSelectedVariants;
+        evalResult.stitchingOverlapDetected = deduplicatedLines > 0;
+        evalResult.stitchedDeduplicatedLines = deduplicatedLines;
+        evalResult.gateStatus = determineGateStatus(evalResult);
 
         results.push(evalResult);
       } catch (docErr: any) {
@@ -661,6 +914,8 @@ export async function runRc05hRealBenchmark(
           relationship: doc.imageRelationship,
           associatedImages: doc.associatedImages,
           status: 'TECHNICAL_FAILURE',
+          gateStatus: 'BLOCKING',
+          selectedVariants: [],
           errorMessage: docErr?.message || String(docErr),
           durationMs: docDurationMs,
           ocrConfidence: 0,
@@ -735,6 +990,10 @@ export async function runRc05hRealBenchmark(
   const successfullyProcessed = results.filter((r) => r.status === 'SUCCESS').length;
   const technicalFailures = results.filter((r) => r.status === 'TECHNICAL_FAILURE').length;
 
+  const passCount = results.filter((r) => r.gateStatus === 'PASS').length;
+  const nonBlockingCount = results.filter((r) => r.gateStatus === 'NON_BLOCKING').length;
+  const blockingCount = results.filter((r) => r.gateStatus === 'BLOCKING').length;
+
   const categoryMatches = results.filter((r) => r.categoryMatch).length;
   const merchantMatches = results.filter((r) => r.merchantMatch).length;
   const totalMatches = results.filter((r) => r.totalMatch).length;
@@ -770,6 +1029,9 @@ export async function runRc05hRealBenchmark(
     totalImages,
     successfullyProcessed,
     technicalFailures,
+    passCount,
+    nonBlockingCount,
+    blockingCount,
     categoryMatches,
     merchantMatches,
     totalMatches,

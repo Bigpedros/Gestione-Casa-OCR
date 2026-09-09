@@ -35,25 +35,25 @@ async function main() {
   console.log(`\nRisultati dettagliati salvati in: ${outputPath}\n`);
 
   console.log('================================================================================');
-  console.log('TABELLA RISULTATI SINTETICA PER DOCUMENTO');
+  console.log('TABELLA RISULTATI SINTETICA PER DOCUMENTO (PRODUCTION-EQUIVALENT GATE)');
   console.log('================================================================================');
   console.log(
-    'ID DOC               | STATO   | CAT | MER | DATA | TOT | RIGHE (D/E) | DUP | TEMPO '
+    'ID DOC               | GATE STATUS  | CAT | MER | DATA | TOT | RIGHE (D/E) | VARIANTE (P1)     | TEMPO '
   );
   console.log('--------------------------------------------------------------------------------');
 
   for (const r of results) {
     const docId = r.documentId.padEnd(20).slice(0, 20);
-    const st = r.status.padEnd(7);
+    const gateSt = (r.gateStatus || 'UNKNOWN').padEnd(12);
     const cat = (r.categoryMatch ? '✓' : '✗').padEnd(3);
     const mer = (r.merchantMatch ? '✓' : '✗').padEnd(3);
     const dat = (r.dateMatch ? '✓' : '✗').padEnd(4);
     const tot = (r.totalMatch ? '✓' : '✗').padEnd(3);
     const lines = `${r.detectedLineCount}/${r.expectedLineCount ?? '?'}`.padEnd(11);
-    const dup = String(r.duplicateLinesCount).padEnd(3);
+    const vName = (r.selectedVariants?.[0]?.selectedVariant || 'original').padEnd(17).slice(0, 17);
     const time = `${(r.durationMs / 1000).toFixed(1)}s`.padStart(6);
 
-    console.log(`${docId} | ${st} | ${cat} | ${mer} | ${dat} | ${tot} | ${lines} | ${dup} | ${time}`);
+    console.log(`${docId} | ${gateSt} | ${cat} | ${mer} | ${dat} | ${tot} | ${lines} | ${vName} | ${time}`);
   }
 
   console.log('================================================================================\n');
@@ -64,6 +64,11 @@ async function main() {
   console.log(`Immagini Totali                : ${summary.totalImages}`);
   console.log(`Elaborati con Successo         : ${summary.successfullyProcessed} / ${summary.totalDocuments} (${formatPercent(summary.successfullyProcessed, summary.totalDocuments)})`);
   console.log(`Falliti Tecnicamente           : ${summary.technicalFailures} / ${summary.totalDocuments}`);
+  console.log('--------------------------------------------------------------------------------');
+  console.log(`PASS                           : ${summary.passCount ?? 0} / ${summary.totalDocuments}`);
+  console.log(`NON_BLOCKING                   : ${summary.nonBlockingCount ?? 0} / ${summary.totalDocuments}`);
+  console.log(`BLOCKING                       : ${summary.blockingCount ?? 0} / ${summary.totalDocuments}`);
+  console.log('--------------------------------------------------------------------------------');
   console.log('--------------------------------------------------------------------------------');
   console.log(`Classificazioni Categoria OK   : ${summary.categoryMatches} / ${summary.totalDocuments} (${formatPercent(summary.categoryMatches, summary.totalDocuments)})`);
   console.log(`Esercenti Riconosciuti OK      : ${summary.merchantMatches} / ${summary.totalDocuments} (${formatPercent(summary.merchantMatches, summary.totalDocuments)})`);
@@ -91,6 +96,23 @@ async function main() {
   console.log('--------------------------------------------------------------------------------');
   console.log(`Tempo Totale di Esecuzione     : ${(summary.totalDurationMs / 1000).toFixed(2)} s`);
   console.log(`Tempo Medio per Documento      : ${(summary.averageDurationPerDocMs / 1000).toFixed(2)} s`);
+  console.log('================================================================================\n');
+
+  console.log('================================================================================');
+  console.log('TABELLA SELEZIONE VARIANTI PER IMMAGINE (19/19 IMMAGINI)');
+  console.log('================================================================================');
+  console.log('DOC ID               | FILE IMMAGINE                    | VARIANTE SELEZIONATA | SCORE | CONF ');
+  console.log('--------------------------------------------------------------------------------');
+  for (const r of results) {
+    for (const v of r.selectedVariants || []) {
+      const docId = r.documentId.padEnd(20).slice(0, 20);
+      const fName = v.filename.padEnd(32).slice(0, 32);
+      const vName = v.selectedVariant.padEnd(20);
+      const score = String(v.qualityScore).padStart(5);
+      const conf = `${v.ocrConfidence}%`.padStart(5);
+      console.log(`${docId} | ${fName} | ${vName} | ${score} | ${conf}`);
+    }
+  }
   console.log('================================================================================\n');
 
   console.log('================================================================================');

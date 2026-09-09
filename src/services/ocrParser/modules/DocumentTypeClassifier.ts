@@ -127,11 +127,26 @@ export class DocumentTypeClassifier {
     const hasSubtotalSignal = evidences.some(
       (e) => e.category === 'COMMERCIAL_RECEIPT' && e.signal.includes('SUBTOTAL')
     );
+    const hasBarcodeSignals = evidences.some(
+      (e) => e.category === 'COMMERCIAL_RECEIPT' && e.signal.includes('BARCODE_EAN')
+    );
+    const hasCommercialTotalSignal = evidences.some(
+      (e) => e.category === 'COMMERCIAL_RECEIPT' && e.signal.includes('COMMERCIAL_TOTAL')
+    );
+    const hasVatBreakdownSignal = evidences.some(
+      (e) => e.category === 'COMMERCIAL_RECEIPT' && e.signal.includes('FISCAL_VAT_BREAKDOWN')
+    );
+    const hasFiscalRegisterSignal = evidences.some(
+      (e) => e.category === 'COMMERCIAL_RECEIPT' && e.signal.includes('FISCAL_REGISTER')
+    );
 
     const hasStrongCommercialStructure =
       hasExplicitCommercialHeader ||
       hasVatRateLines ||
       hasItemCountSignal ||
+      hasFiscalRegisterSignal ||
+      hasBarcodeSignals ||
+      (hasCommercialTotalSignal && (hasVatBreakdownSignal || hasSubtotalSignal || hasRetailMultiLinePrices)) ||
       (hasRetailMultiLinePrices && hasSubtotalSignal);
 
     if (commercialScore >= 40 && hasStrongCommercialStructure) {
@@ -140,17 +155,17 @@ export class DocumentTypeClassifier {
     }
 
     // Regola A2: Prevalenza Commerciale su appendice POS accessoria
-    // In presenza di un documento commerciale inequivocabile con articoli/totali/IVA,
-    // i segnali POS (che spesso arrivano da scontrini lunghi o pagamenti contactless allegati)
+    // In presenza di un documento commerciale con articoli/totali/IVA/barcodes,
+    // i segnali POS (provenienti da scontrini lunghi o transazioni elettroniche allegate in coda)
     // non devono provocare il declassamento a UNKNOWN o PAYMENT_PROOF.
     const isCommercialWithPosTail =
-      commercialScore >= 60 &&
+      commercialScore >= 50 &&
       hasStrongCommercialStructure &&
       paymentProofScore > 0;
 
-    if (isCommercialWithPosTail && paymentProofScore <= commercialScore * 1.5) {
-      // Riduciamo il peso relativo del POS poiché è palesemente la modalità di quietanza di uno scontrino retail
-      paymentProofScore = Math.min(paymentProofScore, Math.round(commercialScore * 0.4));
+    if (isCommercialWithPosTail && paymentProofScore <= commercialScore * 1.8) {
+      // Riduciamo il peso relativo del POS poiché è la modalità di quietanza di uno scontrino retail
+      paymentProofScore = Math.min(paymentProofScore, Math.round(commercialScore * 0.35));
     }
 
     // Regola B: Documento con pochissimo testo (es. solo Data + Importo)
@@ -377,8 +392,8 @@ export class DocumentTypeClassifier {
       }
     }
 
-    // 1c. Intestazione tabella articoli retail (es. "DESCRIZIONE PREZZO IVA", "DESCRIZIONE pREZZOLE) IVA")
-    const tableHeaderRegex = /\bDESCRIZIONE\b.*?(?:PREZZO|PREZZOLE\)?|IMPORTO|VALORE|EUR(?:O)?).*?\bIVA\b/i;
+    // 1c. Intestazione tabella articoli retail (es. "DESCRIZIONE PREZZO IVA", "DESCRIZIONE pREZZOLE) IVA", "DESCRIZIONE")
+    const tableHeaderRegex = /\bDES(?:C)?RIZI?ONE\b(?:\s+.*?\bIVA\b|\s+.*?(?:PREZZO|IMPORTO|VALORE|EUR)|$)/i;
     let hasTableHeader = false;
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
@@ -396,9 +411,9 @@ export class DocumentTypeClassifier {
     }
 
     // 2. Metadati Registratore Telematico / Misuratore Fiscale / RT
-    // Supporta anche matricole RT con spazi intermedi generati dall'OCR (es. "RT  96 1KN022623")
+    // Supporta anche matricole RT con spazi intermedi generati dall'OCR (es. "RT  96 1KN022623", "SERVER RT : \"88S25//12806", "DOC .N 0010-0100", "Firma Elettronica")
     const rtRegex =
-      /\b(?:REGISTRATORE\s+TELEMATICO|MISURATORE\s+FISCALE|MATRICOLA\s+FISCALE)\b|\bRT\s+[0-9A-Z]{2,}(?:\s*[0-9A-Z]{4,})+|\bDOCUMENTO\s+N\.?\s*\d+[-/]\d+/i;
+      /\b(?:REGISTRATORE\s+TELEMATICO|MISURATORE\s+FISCALE|MATRICOLA\s+FISCALE)\b|\bRT\s*[:\s"'-]*\s*[0-9A-Z]{2,}(?:\s*[0-9A-Z]{2,})+|\bDOC(?:UMENTO)?\s*\.?\s*N\.?\s*\d+[-/]\d+|\bFIRMA\s+(?:ELETTRONICA|DIGITALE|ELE\b)|\bECR\s*:/i;
     let hasFiscalRegister = false;
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
@@ -411,6 +426,25 @@ export class DocumentTypeClassifier {
           lineIndex: line.rawIndex,
         });
         hasFiscalRegister = true;
+        break;
+      }
+    }
+
+    // 2b. Totale commerciale esplicito (es. "TOTALE COMPLESSIVO", "TOTALE EURO", "TOTALE (EUR)", "IMPORTO TOTALE", "TOTALE DOVUTO")
+    const commercialTotalRegex =
+      /\b(?:TOTALE\s+(?:COMPLESSIVO|EURO|EUR|\(EUR\)|DOVUTO|SPESA|DOC(?:UMENTO)?)|IMPORTO\s+TOTALE)\b/i;
+    let hasCommercialTotal = false;
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      if (commercialTotalRegex.test(line.normalizedText)) {
+        evidences.push({
+          category: 'COMMERCIAL_RECEIPT',
+          signal: 'COMMERCIAL_TOTAL_KEYWORD',
+          weight: 25,
+          rawSnippet: line.rawText,
+          lineIndex: line.rawIndex,
+        });
+        hasCommercialTotal = true;
         break;
       }
     }
@@ -454,6 +488,25 @@ export class DocumentTypeClassifier {
       });
     }
 
+    // 3c. Righe con codici a barre / EAN / codici articolo retail (8-14 cifre consecutive)
+    const eanLineRegex = /(?:^|\s)(?:\d{8}|\d{12,14})(?:\s|$)/;
+    let barcodeLinesCount = 0;
+    for (let i = 0; i < lines.length; i++) {
+      const lineText = lines[i].normalizedText;
+      if (eanLineRegex.test(lineText) && !/\d{2}[/-]\d{2}[/-]\d{4}/.test(lineText) && !/\*{4}/.test(lineText)) {
+        barcodeLinesCount++;
+      }
+    }
+    const hasBarcodeSignals = barcodeLinesCount >= 2;
+    if (hasBarcodeSignals) {
+      evidences.push({
+        category: 'COMMERCIAL_RECEIPT',
+        signal: 'RETAIL_BARCODE_EAN_SIGNALS',
+        weight: 20,
+        rawSnippet: `${barcodeLinesCount} righe con codici a barre / EAN`,
+      });
+    }
+
     // 4. Righe con aliquote IVA tipiche al dettaglio (4,00%, 10,00%, 22,00%, 5,00%)
     const vatRateLineRegex = /(?:4|5|10|22)(?:[.,]00)?\s*%/;
     let vatLinesCount = 0;
@@ -477,6 +530,24 @@ export class DocumentTypeClassifier {
         weight: 15,
         rawSnippet: '1 riga con aliquota IVA',
       });
+    }
+
+    // 4b. Ripartizione IVA fiscale / Arrotondamento legale (es. "DI CUI IVA", "IVA COMPRESA", "ARR: DL N50-17")
+    const vatBreakdownRegex = /\b(?:DI\s+CUI\s+IVA|IVA\s+COMPRESA|ALIQUOTA\s+IVA|ESENTE\s+IVA|ARR:\s*DL)\b/i;
+    let hasVatBreakdown = false;
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      if (vatBreakdownRegex.test(line.normalizedText)) {
+        evidences.push({
+          category: 'COMMERCIAL_RECEIPT',
+          signal: 'FISCAL_VAT_BREAKDOWN_KEYWORD',
+          weight: 20,
+          rawSnippet: line.rawText,
+          lineIndex: line.rawIndex,
+        });
+        hasVatBreakdown = true;
+        break;
+      }
     }
 
     // 5. Struttura Cassa / Subtotale / Resto / Forme di Pagamento Commerciali
@@ -510,16 +581,26 @@ export class DocumentTypeClassifier {
     }
 
     // 1d. Intestazione commerciale degradata CORROBORATA da struttura retail
-    // Riconosce "DOCUMENTO COMMERCI..." solo se corroborata da almeno un segnale strutturale
-    // (sottotitolo vendita/prestazione, intestazione colonne, conteggio pezzi, RT o subtotale)
+    // Riconosce "DOCUMENTO COMMERCI..." o frammenti di intestazione solo se corroborata da segnali retail
     if (!hasExplicitHeader) {
-      const degradedHeaderRegex = /\bDOCUMENTO\s+COMMERCI(?:[A-Z0-9\s/._…£$*~-]{0,10})\b/i;
       let degradedHeaderLine: { rawIndex: number; rawText: string } | null = null;
+      const degradedHeaderRegex =
+        /\bDOCUMENTO\s+(?:COMMERC|COMMEE|COMMERI|COMM\b|DI\s+VENDI)|\bDOCUMENT\b/i;
       for (let i = 0; i < lines.length; i++) {
         const line = lines[i];
         if (degradedHeaderRegex.test(line.normalizedText)) {
-          degradedHeaderLine = line;
-          break;
+          if (/^\s*DOCUMENT\s*$/i.test(line.normalizedText)) {
+            const hasNearbyVendita = lines
+              .slice(i, i + 3)
+              .some((l) => /\b(?:VENDI|PRESTAZIONE|COMMERC|COMM)\b/i.test(l.normalizedText));
+            if (hasNearbyVendita) {
+              degradedHeaderLine = line;
+              break;
+            }
+          } else {
+            degradedHeaderLine = line;
+            break;
+          }
         }
       }
 
@@ -530,7 +611,10 @@ export class DocumentTypeClassifier {
           (hasItemCount ? 1 : 0) +
           (hasMultiLinePrices ? 1 : 0) +
           (hasFiscalRegister ? 1 : 0) +
-          (hasSubtotal ? 1 : 0);
+          (hasSubtotal ? 1 : 0) +
+          (hasCommercialTotal ? 1 : 0) +
+          (hasVatBreakdown ? 1 : 0) +
+          (hasBarcodeSignals ? 1 : 0);
 
         if (corroborationCount >= 1) {
           evidences.push({

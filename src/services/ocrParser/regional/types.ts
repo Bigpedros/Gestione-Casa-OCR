@@ -78,5 +78,6 @@ export interface RegionalOcrEvidence {
   readonly bodyEvidence?: RegionalBodyEvidence;
   readonly footerEvidence?: RegionalFooterEvidence;
   readonly proposals?: readonly RegionalAlignmentProposal[];
+  readonly totalRecovered?: number | null;
   readonly durationMs?: number;
 }

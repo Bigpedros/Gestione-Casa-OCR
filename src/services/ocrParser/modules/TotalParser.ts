@@ -45,6 +45,7 @@ export class TotalParser implements ReceiptParserModule<number> {
     { pattern: /\bTOTALE\s+EURO\b/i, scoreBonus: 95 },
     { pattern: /\bTOTALE\s*€/i, scoreBonus: 90 },
     { pattern: /\bTOTALE\s+EUR\b/i, scoreBonus: 90 },
+    { pattern: /\bTOTALE\s*(?:\(EUR\)|\[EUR\])\b/i, scoreBonus: 90 },
     { pattern: /\bTOTALE\s+DOVUTO\b/i, scoreBonus: 85 },
     { pattern: /\bTOTALE\s+DOC(?:UMENTO)?\b/i, scoreBonus: 80 },
     { pattern: /\bDA\s+PAGARE\b/i, scoreBonus: 80 },
@@ -93,7 +94,8 @@ export class TotalParser implements ReceiptParserModule<number> {
         u.includes('IVA TOTALE') ||
         u.includes('RESTO') ||
         u.includes('ALTRI IMPORTI') ||
-        u.includes('ALTRO IMPORTO')
+        u.includes('ALTRO IMPORTO') ||
+        /\bALTRI?\s+(?:IMPO[A-Z]*T[IO]|ADDEBITI|PAGAMENTI)\b/i.test(text)
       ) {
         return true;
       }
@@ -134,6 +136,7 @@ export class TotalParser implements ReceiptParserModule<number> {
 
     let cashValue: { val: number; lineIndex: number; text: string } | null = null;
     let changeValue: { val: number; lineIndex: number; text: string } | null = null;
+    let hasDegradedInlineTotalAmount = false;
 
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
@@ -182,6 +185,9 @@ export class TotalParser implements ReceiptParserModule<number> {
             sourceText: targetText,
             explanation: `Letto da ${targetText}`,
           });
+        } else if (/[a-zA-Z0-9]*[,.][a-zA-Z0-9)]+/i.test(line)) {
+          // La riga del totale conteneva un valore monetario esplicito ma degradato/illeggibile (es. 'd,9)')
+          hasDegradedInlineTotalAmount = true;
         }
       }
 
@@ -206,9 +212,9 @@ export class TotalParser implements ReceiptParserModule<number> {
         }
       }
 
-      // 3. Candidato: SUBTOTALE (inclusi SUBTOTAL, SUB-TOTAL, SUB-TOTALE)
+      // 3. Candidato: SUBTOTALE (inclusi SUBTOTAL, SUB-TOTAL, SUB-TOTALE, IRTUTALE)
       if (
-        /\bSUB[- ]?TOTAL[E]?\b/i.test(line) &&
+        /\b(?:SUB[- ]?TOTAL[E]?|S[- ]?TOTALE|SUBTOT|[I1]RTUTAL[E]?)\b/i.test(line) &&
         !upper.includes('IVA') &&
         !upper.includes('RESTO')
       ) {
@@ -227,12 +233,15 @@ export class TotalParser implements ReceiptParserModule<number> {
         }
       }
 
-      // 4. Candidato: PAGAMENTO ELETTRONICO / POS / CARTE / CONTANTE
+      // 4. Candidato: PAGAMENTO ELETTRONICO / POS / CARTE / CONTANTE / TRANSAZIONE POS
       if (
         (/\b(?:PAGAMENTO|PAGAMENTI)\s+(?:ELETTRONICO|CONTANTE|CARTA|BANCOMAT)\b/i.test(line) ||
           /\bPOS(?:\s+BANCOMAT)?\b/i.test(line) ||
           /\b(?:C\.?CREDITO|CARTA\s+DI\s+CREDITO|BANCOMAT)\b/i.test(line) ||
           /\bDETTAGLIO\s+(?:FORME\s+DI\s+)?PAGAMENT[OI]\b/i.test(line) ||
+          /\bTRANSAZIONE\s+(?:ESEGUITA|OK|APPROVATA)\b/i.test(line) ||
+          /(?:EURO|EUR|€)\s*[A-Z0-9]?\s*(?:EURO|EUR|€)/i.test(line) ||
+          (i + 1 < lines.length && /\bTRANSAZIONE\s+(?:ESEGUITA|OK|APPROVATA)\b/i.test(lines[i + 1])) ||
           (/\bPAGAMENTO\b/i.test(line) && !/\bPAGAMENTO\s+(?:NON\s+RIUSCITO|ANNULLATO)\b/i.test(line))) &&
         !upper.includes('IVA') &&
         !upper.includes('RESTO') &&
@@ -276,7 +285,7 @@ export class TotalParser implements ReceiptParserModule<number> {
       // 6. Rilevamento ALTRI IMPORTI (Famiglia I)
       // Solo per ancore esplicite 'altri importi' (MAI per IVA, Subtotale, o righe ordinarie)
       if (
-        /\b(?:ALTRI\s+IMPORTI|ALTRO\s+IMPORTO|ALTRI\s+ADDEBITI|ALTRI\s+PAGAMENTI)\b/i.test(line) &&
+        /\b(?:ALTRI?\s+IMPO[A-Z]*T[IO]|ALTRO\s+IMPORTO|ALTRI\s+ADDEBITI|ALTRI\s+PAGAMENTI)\b/i.test(line) &&
         !upper.includes('IVA') &&
         !upper.includes('RESTO') &&
         !/\bSUB[- ]?TOTAL[E]?\b/i.test(line)
@@ -430,9 +439,31 @@ export class TotalParser implements ReceiptParserModule<number> {
           }
         }
       } else {
-        // Cluster senza totale fiscale diretto (es. Eurospin, Leroy Merlin)
-        if (roleCount >= 2) {
+        // Cluster senza totale fiscale diretto (es. Eurospin, Leroy Merlin, Orizzonte)
+        // Guardrail: distinguiamo tra vera corroborazione multi-dominio (es. Subtotale carrello + Pagamento)
+        // e ripetizione della stessa transazione nella sezione pagamento (es. Pagamento elettronico + Importo pagato su righe adiacenti).
+        const hasSubtotal = cluster.distinctRoles.has('subtotal');
+        const hasTender =
+          cluster.distinctRoles.has('paid_amount') ||
+          cluster.distinctRoles.has('payment_pos') ||
+          cluster.distinctRoles.has('cash_minus_change');
+
+        // Due o più evidenze di pagamento sono considerate corroborate solo se provengono da sezioni distinte
+        // del documento (es. corpo scontrino e talloncino POS distanziati >= 15 righe).
+        const isSpacedPaymentCorroboration =
+          cluster.candidates.length >= 2 &&
+          Math.abs(cluster.candidates[0].lineIndex - cluster.candidates[cluster.candidates.length - 1].lineIndex) >= 15;
+
+        const isCrossDomainCorroborated = (hasSubtotal && hasTender) || isSpacedPaymentCorroboration;
+
+        if (isCrossDomainCorroborated) {
           score += 15 * (roleCount - 1);
+        } else if (hasDegradedInlineTotalAmount) {
+          // Se la riga del totale fiscale conteneva un importo esplicito ma degradato dall'OCR,
+          // e questo cluster proviene unicamente dalla sezione pagamento senza corroborazione esterna
+          // (nessun subtotale, nessun POS esterno distante), applichiamo un guardrail di sicurezza:
+          // non promuovere un importo pagamento incerto a totale fiscale.
+          score = Math.min(score, 40);
         }
       }
 
@@ -442,6 +473,22 @@ export class TotalParser implements ReceiptParserModule<number> {
     // Ordina i cluster per score effettivo decrescente
     clusters.sort((a, b) => b.effectiveScore - a.effectiveScore);
     const bestCluster = clusters[0];
+
+    // Safety Gate: Se la riga del totale fiscale conteneva un importo esplicito ma degradato dall'OCR,
+    // e il miglior cluster proviene unicamente dalla sezione pagamento senza corroborazione esterna sufficiente,
+    // preferiamo restituire null + manualReview piuttosto che un totale errato.
+    if (
+      !bestCluster.hasFiscalTotal &&
+      !bestCluster.hasCompositeTotal &&
+      hasDegradedInlineTotalAmount &&
+      bestCluster.effectiveScore <= 40
+    ) {
+      return {
+        value: null,
+        confidence: 0,
+        warnings: ['totale_non_identificato', 'TOTALE_PRESENTE_MA_ILLEGGIBILE'],
+      };
+    }
 
     const warnings: string[] = [];
 

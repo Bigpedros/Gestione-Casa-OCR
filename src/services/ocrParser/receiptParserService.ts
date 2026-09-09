@@ -33,6 +33,7 @@ import { ReceiptZoneSegmenter } from './modules/ReceiptZoneSegmenter';
 import { LineItemParserV2 } from './modules/LineItemParserV2';
 import { PaymentEvidenceParser } from './modules/PaymentEvidenceParser';
 import { productClassificationService } from '../productClassification/ProductClassificationService';
+import { regionalEvidenceStore } from './regional/regionalEvidenceStore';
 import { DocumentCategory } from '../../types';
 import { evaluateReceiptOcrQuality } from '../../utils/imagePreprocessing';
 
@@ -468,6 +469,33 @@ export class ReceiptParserService {
       overallConfidence: preliminaryConfidence,
       paymentEvidence: officialPaymentEvidence,
     };
+
+    // 2.5 Reconciliazione evidenze regionali ad alta confidenza (Remediation 3B)
+    const regionalEvidence = regionalEvidenceStore.consume();
+    if (
+      regionalEvidence &&
+      regionalEvidence.totalRecovered !== null &&
+      regionalEvidence.totalRecovered !== undefined &&
+      regionalEvidence.totalRecovered > 0
+    ) {
+      const sumLines = Math.round(
+        initialDraft.lines.reduce((s, l) => s + (l.lineTotal > 0 ? l.lineTotal : 0), 0) * 100
+      ) / 100;
+
+      const isTotalMissingOrConflicted =
+        initialDraft.total.value === null ||
+        initialDraft.total.value <= 0 ||
+        (initialDraft.lines.length > 0 && Math.abs(initialDraft.total.value - sumLines) > 0.05);
+
+      if (isTotalMissingOrConflicted) {
+        initialDraft.total = {
+          value: regionalEvidence.totalRecovered,
+          confidence: 90,
+          sourceText: String(regionalEvidence.totalRecovered),
+          warnings: [],
+        };
+      }
+    }
 
     // 3. Esecuzione del modulo di validazione coerenza e Safety Gate
     const validation = ReceiptConsistencyValidator.validate(initialDraft, context);

@@ -11,3 +11,4 @@ local-test-assets/
 *.traineddata
 rc05h-real-benchmark-results.json
 bun.lock
+RC-05H_REAL_OCR_FINAL_GATE_ASSETS.zip

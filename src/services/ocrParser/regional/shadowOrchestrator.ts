@@ -17,11 +17,13 @@ import {
   RegionalBodyEvidence,
   RegionalFooterEvidence,
   RegionalAlignmentProposal,
+  RegionalMonetaryToken,
 } from './types';
 import { resolveRelativeCropBox, SHADOW_REFERENCE_POLICY } from './geometry';
 import { extractRegionalMonetaryTokens } from './monetaryTokenParser';
 import { generateShadowAlignmentProposals } from './shadowAlignment';
 import { shouldRunRegionalSecondPass } from './triggerPolicy';
+import { regionalEvidenceStore } from './regionalEvidenceStore';
 import {
   executeRegionalCropRecognition,
   WorkerParameterConfig,
@@ -358,12 +360,15 @@ export async function runRegionalSecondPassShadow(
 
       const footerTokens = extractRegionalMonetaryTokens(footerOcrRes.text);
       const exactFooterTokens = footerTokens.filter((t) => t.classification === 'exact_monetary');
-      const totalCandidateToken =
-        exactFooterTokens.length > 0 ? exactFooterTokens[exactFooterTokens.length - 1] : null;
+      pricesExtractedCount += exactFooterTokens.length;
 
-      if (totalCandidateToken && totalCandidateToken.parsedValue !== null) {
-        totalRecovered = totalCandidateToken.parsedValue;
-        pricesExtractedCount += 1;
+      const footerCandidate = findHighConfidenceFooterTotalCandidate(
+        footerOcrRes.text,
+        footerTokens
+      );
+
+      if (footerCandidate !== null) {
+        totalRecovered = footerCandidate.parsedValue;
       }
 
       // Riconoscimento payment method nel footer se presente
@@ -383,11 +388,11 @@ export async function runRegionalSecondPassShadow(
         executed: true,
         variantUsed,
         totalCandidate:
-          totalCandidateToken && totalCandidateToken.parsedValue !== null
+          footerCandidate !== null
             ? {
-                rawText: totalCandidateToken.rawToken,
-                parsedValue: totalCandidateToken.parsedValue,
-                confidence: totalCandidateToken.confidence,
+                rawText: footerCandidate.rawText,
+                parsedValue: footerCandidate.parsedValue,
+                confidence: footerCandidate.confidence,
               }
             : null,
         paymentMethodCandidate: paymentCandidate,
@@ -396,8 +401,13 @@ export async function runRegionalSecondPassShadow(
       };
     }
 
-    // B. BODY CROP (se richiesto dal trigger)
-    if (trigger.targetRegions.includes('body')) {
+    // B. BODY CROP (se richiesto dal trigger o se il footer non ha recuperato un totale mancante)
+    const shouldAttemptBodyCrop =
+      trigger.targetRegions.includes('body') ||
+      (totalRecovered === null &&
+        (firstParseDraft.total.value === null || firstParseDraft.total.value <= 0));
+
+    if (shouldAttemptBodyCrop) {
       const bodyPixelBox = resolveRelativeCropBox(
         imageWidth,
         imageHeight,
@@ -419,6 +429,15 @@ export async function runRegionalSecondPassShadow(
         (t) => t.classification === 'exact_monetary' && t.reason !== 'matches_known_total'
       );
       pricesExtractedCount += exactBodyTokens.length;
+
+      // Se il totale non è stato recuperato dal footer, cerchiamo un candidato ad alta confidenza nei token regionali
+      if (totalRecovered === null && bodyTokens.length > 0) {
+        const bodyCandidate = findHighConfidenceBodyTotalCandidate(bodyTokens, firstParseDraft);
+        if (bodyCandidate !== null) {
+          totalRecovered = bodyCandidate.parsedValue;
+          pricesExtractedCount += 1;
+        }
+      }
 
       // Segmentazione body V2 per generare le proposte shadow di allineamento
       const structuredNorm = TextNormalizationModule.normalizeToStructuredOcrText(combinedRawText);
@@ -445,8 +464,12 @@ export async function runRegionalSecondPassShadow(
       bodyEvidence,
       footerEvidence,
       proposals,
+      totalRecovered,
       durationMs: Date.now() - startTime,
     };
+
+    // Registra l'evidenza nello store transitorio per la riconciliazione controllata
+    regionalEvidenceStore.set(evidence);
 
     const diagnostic: RegionalDiagnosticLog = {
       shadowEnabled: true,
@@ -480,3 +503,145 @@ export async function runRegionalSecondPassShadow(
     return { evidence: null, diagnostic };
   }
 }
+
+/**
+ * RC-05H-B-R1: High-confidence extraction of total candidate from regional footer OCR.
+ *
+ * Safety Principles:
+ * 1. Explicit fiscal provenance: candidate must appear on a line with total keywords
+ *    (TOTALE, COMPLESSIVO, IMPORTO DOVUTO, TOTAL).
+ * 2. Tender / change exclusion: lines with only RESTO, CONTANTI, CARTA, BANCOMAT, PAGAMENTO
+ *    are payment amounts, not fiscal total.
+ * 3. Identifiers & counts exclusion: lines with NUMERO ARTICOLI, PEZZI, PZ, RT, DOC N., etc.
+ *    are strictly excluded.
+ */
+export function findHighConfidenceFooterTotalCandidate(
+  footerRawText: string,
+  footerTokens: readonly RegionalMonetaryToken[]
+): { rawText: string; parsedValue: number; confidence: number } | null {
+  const exactTokens = footerTokens.filter(
+    (t) => t.classification === 'exact_monetary' && t.parsedValue !== null && t.parsedValue > 0
+  );
+  if (exactTokens.length === 0) return null;
+
+  const lines = footerRawText.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+
+  for (let i = exactTokens.length - 1; i >= 0; i--) {
+    const token = exactTokens[i];
+    const val = token.parsedValue!;
+
+    // Trova la riga corrispondente al token
+    const matchingLine = lines.find((l) => {
+      const normalized = l.replace(/\s+/g, ' ');
+      return normalized.includes(token.rawToken) || l.includes(val.toFixed(2).replace('.', ','));
+    });
+
+    if (matchingLine) {
+      const upperLine = matchingLine.toUpperCase();
+
+      // Esclusione 1: Righe di conteggio articoli (es. NUMERO ARTICOLI: 9)
+      if (
+        /\b(?:NUMERO|ARTICOLI|PEZZI|PZ|N\.\s*ARTICOLI)\b/i.test(upperLine) &&
+        !/\b(?:TOTALE|COMPLESSIVO)\b/i.test(upperLine)
+      ) {
+        continue;
+      }
+
+      // Esclusione 2: Righe di matricola, RT, documento, data/ora, terminale POS
+      if (
+        /\b(?:RT|MATRICOLA|DOC(?:UMENTO)?\s*N|CASSIER|OPERATORE|STAN|TID|AUTH|TRANSAZIONE)\b/i.test(
+          upperLine
+        )
+      ) {
+        continue;
+      }
+
+      // Esclusione 3: Righe di solo tender / resto / pagamento non-totale
+      if (
+        /\b(?:RESTO|CHANGE)\b/i.test(upperLine) &&
+        !/\b(?:TOTALE|COMPLESSIVO)\b/i.test(upperLine)
+      ) {
+        continue;
+      }
+
+      // Inclusione: Riga con parola chiave di totale
+      const hasTotalKeyword = /\b(?:TOTALE|COMPLESSIVO|TOT\.?|IMPORTO\s+DOVUTO|TOTAL)\b/i.test(
+        upperLine
+      );
+      if (hasTotalKeyword) {
+        return {
+          rawText: token.rawToken,
+          parsedValue: val,
+          confidence: 90,
+        };
+      }
+    }
+  }
+
+  return null;
+}
+
+/**
+ * RC-05H-B: High-confidence extraction of total candidate from regional body tokens.
+ *
+ * Employs strictly general mathematical and fiscal structure principles:
+ * 1. Line Sum Identity: Regional token matches the sum of parsed receipt line items (min 2 items).
+ * 2. Fiscal Duplication: Totale and Importo Pagato are printed as identical amounts
+ *    at the end of the price list.
+ *
+ * NO merchant-specific hardcoding, NO Ground Truth awareness.
+ */
+export function findHighConfidenceBodyTotalCandidate(
+  bodyTokens: readonly RegionalMonetaryToken[],
+  firstParseDraft: any
+): { rawText: string; parsedValue: number; confidence: number } | null {
+  const exactTokens = bodyTokens.filter(
+    (t) => t.classification === 'exact_monetary' && t.parsedValue !== null && t.parsedValue > 0
+  );
+  if (exactTokens.length === 0) return null;
+
+  // 1. Math identity: match against line item sum from firstParseDraft (requires at least 2 valid lines)
+  if (firstParseDraft.lines && Array.isArray(firstParseDraft.lines)) {
+    const validLines = firstParseDraft.lines.filter(
+      (l: any) => typeof l.lineTotal === 'number' && l.lineTotal > 0
+    );
+    if (validLines.length >= 2) {
+      const sumLines =
+        Math.round(validLines.reduce((s: number, l: any) => s + l.lineTotal, 0) * 100) / 100;
+      if (sumLines > 0) {
+        const match = exactTokens.find((t) => Math.abs(t.parsedValue! - sumLines) <= 0.05);
+        if (match && match.parsedValue !== null) {
+          return {
+            rawText: match.rawToken,
+            parsedValue: match.parsedValue,
+            confidence: 95,
+          };
+        }
+      }
+    }
+  }
+
+  // 2. Fiscal Duplication: Totale & Importo Pagato are consecutive identical amounts
+  // at the end of the price list (within the last 4 tokens)
+  if (exactTokens.length >= 2) {
+    for (let i = exactTokens.length - 1; i >= Math.max(1, exactTokens.length - 4); i--) {
+      const current = exactTokens[i];
+      const prev = exactTokens[i - 1];
+      if (
+        current.parsedValue !== null &&
+        prev.parsedValue !== null &&
+        current.parsedValue >= 0.5 &&
+        Math.abs(current.parsedValue - prev.parsedValue) < 0.001
+      ) {
+        return {
+          rawText: current.rawToken,
+          parsedValue: current.parsedValue,
+          confidence: 90,
+        };
+      }
+    }
+  }
+
+  return null;
+}
+

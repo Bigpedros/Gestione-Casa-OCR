@@ -1,0 +1,323 @@
+[
+  {
+    "documentId": "TODIS_001",
+    "expectedTotal": 21.9,
+    "expectedLines": 9,
+    "images": [
+      {
+        "imageName": "RR-002_TODIS_p01.jpeg",
+        "winner": "original",
+        "original": {
+          "conf": 74,
+          "score": 55,
+          "hasTotal": false,
+          "snippet": "jzzati 279, 00125 Roma | 15210505 | DOCUMENTO COMMERCIALE | di vendita 0 prestazioni: | ZIONE                            IVA          prezzo(€) | SHOPPERS BIO .MM320+ | PATATINE KETTLE | PANE TRAMEZZINI | ARROTO",
+          "fullText": "jzzati 279, 00125 Roma\n\n15210505\n\nDOCUMENTO COMMERCIALE\ndi vendita 0 prestazioni:\n\nZIONE                            IVA          prezzo(€)\n\nSHOPPERS BIO .MM320+\nPATATINE KETTLE\nPANE TRAMEZZINI\n\nARROTONDAMENTO 22, 1004\nGRANDE IMPERO 1000\n\nNUTELLA 950G\n\nOLIVE VERDI C/A\n\nPOM.OBLUNGO PICCAD\n\nBOCCONCINI PUGI\n\nSUBTOTALE\n\nTOTALE COMP! ESSIVO\ndi cui IVA\n\nPagamento c\nResto\nImporto paoat\n\n0-08-2026\nIUCUMENTO N\n\nAT 99MEY032908\n\nDI FIAGLIO FORME di PAGAMENTO\nContanti\n\nNUMERO DI AKTICOLI :9\n\nNeg-lera Cassiera -Hum\n27004-003-6000131-6077\n\n"
+        },
+        "gentle": {
+          "conf": 73,
+          "score": 46,
+          "hasTotal": false,
+          "snippet": "zzati 279, 00125 Roma | 31004 | 05 | DOCUMENTO COMMERCIALE | di vendita 0 prestazioni: | ESCRIZIONE | BOCCONCINI PUG | SUBTOTALE | TOTALE | di cui IA | Importo paoat | 3-2026 1 | JCUMENTO N. | 9MEYO32908 | DI LIAGLIO FOR",
+          "fullText": "zzati 279, 00125 Roma\n31004\n05\n\nDOCUMENTO COMMERCIALE\ndi vendita 0 prestazioni:\n\nESCRIZIONE\n\nBOCCONCINI PUG\nSUBTOTALE\n\nTOTALE\ndi cui IA\n\nImporto paoat\n\n3-2026 1\nJCUMENTO N.\n\n9MEYO32908\n\nDI LIAGLIO FORME di PAGAMENTO\nContanti                            25,00\n\nI AK\n\nNeg-lera Ce\n27004-003-0000\n\n"
+        },
+        "sharpened": {
+          "conf": 81,
+          "score": 32,
+          "hasTotal": false,
+          "snippet": "zati 279, 00125 Roma | 31004 | MENTO COMMERCIALE | di vendità 0 prestazioni: | IVA          prezzolE) | SHOPPERS BIQ.MM | PATATINE KETTLE | NUTELLA 950G | OLIVE VERDI C/A | POM, OBLUNGO P | BOCCONCINI | SUBTOTALE | DI F",
+          "fullText": "zati 279, 00125 Roma\n31004\n\nMENTO COMMERCIALE\ndi vendità 0 prestazioni:\n\nIVA          prezzolE)\n\nSHOPPERS BIQ.MM\nPATATINE KETTLE\n\nNUTELLA 950G\nOLIVE VERDI C/A\nPOM, OBLUNGO P\nBOCCONCINI\nSUBTOTALE\n\nDI FIAGLIO FORME di PAGAMENTO\nContanti                                                 25,00\n\n"
+        },
+        "regionalFooter": {
+          "hasTotal": false,
+          "snippet": "App ip | ",
+          "fullText": "App ip\n"
+        },
+        "regionalBody": {
+          "snippet": ";      0,13  Gp i | %             2,497; | 4,00%               1,91 | 22,005         i PERO | ENTO 22,004         OO | 4,00%             sli SERRARA | 10,00%        6,99 ERA | 10,00%        1,89) ES ZZ | 4,00%       ",
+          "fullText": ";      0,13  Gp i\n%             2,497;\n4,00%               1,91\n22,005         i PERO\nENTO 22,004         OO\n4,00%             sli SERRARA\n10,00%        6,99 ERA\n10,00%        1,89) ES ZZ\n4,00%       1,99 RAS\n4,00%                    2,99 NRE\n490\n1,12         :\n25,00\n3.10\n21,90\n2026 12:35\nN. 2692\nIMEYO32908\nME di PAGAMENTO\n25,00\n"
+        }
+      }
+    ]
+  },
+  {
+    "documentId": "PEWEX_001",
+    "expectedTotal": 34.53,
+    "expectedLines": 8,
+    "images": [
+      {
+        "imageName": "RR-003_PEWEX_p01.jpeg",
+        "winner": "original",
+        "original": {
+          "conf": 76,
+          "score": 66,
+          "hasTotal": false,
+          "snippet": "PEWEX SUPERMERCATI | MGDR S.R.L. | P.le Sandro Pertini - C.C | 00040 - Marino (RM) | Tel.0620192151 | P.IVA 13024251004 | DOCUMENTO COMMERCIAL | di vendita o prestazione | DESCRIZIONE                              ",
+          "fullText": "PEWEX SUPERMERCATI\nMGDR S.R.L.\n\nP.le Sandro Pertini - C.C\n00040 - Marino (RM)\nTel.0620192151\nP.IVA 13024251004\n\nDOCUMENTO COMMERCIAL\ndi vendita o prestazione\n\nDESCRIZIONE                                    Prezzo(€)\n\nPANE - 12,44\nR FRITTURA PESCE          10,00%\n\nPANE = 12,201\nR FRITTURA PESCE          10,00%\n\nPEWEX SHOP BIOCOMP 30     22,00%\nR SAN BENED-GINGER ZERO 22\nR SAN BENED-LIMONE ZERO\n\nPANE 3 2093\nR LINGUE +        SA FR 10,00%\n\nRIDOLCE E SALATO CROCC    10,00%\nR_CLROMA PANNA FRESCA     10,00%\nTOTALE\n\nTTilE (OALESSI O\n\"ll\n\nettro\n.0\n\n31-07-2026 12:10\nDOCUMENTO N. 0972-0042\n\n(   FEQNA   rate)\n3IEr165409\n\n"
+        },
+        "gentle": {
+          "conf": 72,
+          "score": 65,
+          "hasTotal": false,
+          "snippet": "tn | PEWEX SUPERMERCATI | MGDR S.R.L. | P.le Sandro Pertini - C.C | 00040 - Marino (RM) | Te].0620192151 | P.IVA 13024251004 | DOCUMENTO COMMERCIALE | di vendita o prestazione | DESCRIZIONE                         ",
+          "fullText": "tn\n\nPEWEX SUPERMERCATI\nMGDR S.R.L.\n\nP.le Sandro Pertini - C.C\n00040 - Marino (RM)\nTe].0620192151\nP.IVA 13024251004\n\nDOCUMENTO COMMERCIALE\ndi vendita o prestazione\n\nDESCRIZIONE                          Prezzo(€)\n\n:    PANE - 12,44 -\nR FRITTURA PESCE\n\nPANE = 12,201\n\n|        22,00%\nR SAN BENED-GINGER ZERO 22,00%\n\nR/DOLCE E SALATO CROCC    10,00%\nR CLROMA PANNA FRESCA     10,00%\nTOTALE\n\n\"AE PLESSO\ni\n\nAttro\n.0\n\n31-07-2026 12:10\nDOCUMENTO N. 0972-0042\n\n953IEP065409\n\n"
+        },
+        "sharpened": {
+          "conf": 73,
+          "score": 50,
+          "hasTotal": false,
+          "snippet": "bm | PEWEX SUPERMERCATI | MGDR S.R.L. | P.le Sandro Pertini - C.C | 00040 - Marino (RM) | Tel.0620192151 | P.IVA 13024251004 | DOCUMENTO COMMERCIALE | di vendita o prestazione | ESCRIZIONE                          ",
+          "fullText": "bm\n\nPEWEX SUPERMERCATI\nMGDR S.R.L.\n\nP.le Sandro Pertini - C.C\n00040 - Marino (RM)\nTel.0620192151\nP.IVA 13024251004\n\nDOCUMENTO COMMERCIALE\ndi vendita o prestazione\n\nESCRIZIONE                          Prezzo(€)\n\nPANE - 12,44 -\nR PAU PESCE\n\nPANE = 12, 20 - I\n® FRITTURA PESCE\n\nPEWEX SHOP BIOCOMP 30     22,00%\nR SAN BENED-GINGER ZERO 22,00%\nR SAN BENED-LIMONE ZERO 22,00%\n\nPANE 3 2093 E\nR LINGUE +!//4A\n\nRIDOECE E SALATO CROCC\nR CLROMA PANNA FRESCA\nTOTALE\n\nTOTALE CONPLESGIO\n\"VÀ\n\nlettronico\n.0\n\n“310772026 12:10\nDOCUMENTO N. 0972-0042\n\n991E5965409\n\n"
+        },
+        "regionalFooter": {
+          "hasTotal": false,
+          "snippet": "A                    DELI | lettronico             SUSE | to pagato                   03 | 31-07-2026 12:10 | DOCUMENTO N. 0972-0042 | 7 99ÎEB065409 | ",
+          "fullText": "A                    DELI\nlettronico             SUSE\nto pagato                   03\n31-07-2026 12:10\nDOCUMENTO N. 0972-0042\n7 99ÎEB065409\n"
+        },
+        "regionalBody": {
+          "snippet": ") prestazione | IVA           Prezzo(€) | 10,00%            12,44 | 10,00%            12,20 FA | 22,00%               0,10 E | 22,00%       0,69 pH | 22,00%       0,69 | 10,00%               2,93      i | 10,00%    ",
+          "fullText": ") prestazione\nIVA           Prezzo(€)\n10,00%            12,44\n\n10,00%            12,20 FA\n22,00%               0,10 E\n22,00%       0,69 pH\n22,00%       0,69\n10,00%               2,93      i\n10,00%                2,49\n10,00%      2,595\n34,53\n4 È\nWie\n\n34,53\n\n53\n"
+        }
+      }
+    ]
+  },
+  {
+    "documentId": "CARREFOUR_CONTACT_001",
+    "expectedTotal": 7.17,
+    "expectedLines": 3,
+    "images": [
+      {
+        "imageName": "RR-004_CARREFOUR_CONTACT_p01.jpeg",
+        "winner": "original",
+        "original": {
+          "conf": 64,
+          "score": 52,
+          "hasTotal": false,
+          "snippet": "CONI | PA | Via Criminal! | CARINE F OUR | DOCUMENT | li vendi t | DESCRIZIONE | DEMI B | RUCOLA <     RF | PANNA FRESC   500 ML | TOTALE COMPLESSIVO | DI CUI IVA | ARR: DL N50-17.D | CONTANTI | Resto | 06/08/2026 12:47». D",
+          "fullText": "CONI\nPA\n\nVia Criminal!\n\nCARINE F OUR\n\nDOCUMENT\nli vendi t\n\nDESCRIZIONE\n\nDEMI B\nRUCOLA <     RF\nPANNA FRESC   500 ML\n\nTOTALE COMPLESSIVO\nDI CUI IVA\nARR: DL N50-17.D\nCONTANTI\nResto\n\n06/08/2026 12:47». DOC .N 0010-0100\nERVER RT : \"88S25//12806\nECR:\nÀ         Firma Ele\ngbud1X1UhG3 UBpmSTf5ig\n\nUjz6G9PAVL+A=\n\nNumero ar nto] i\nCon la carta PAYBI * oggi\n\navresti guadagnato:\n2 Mure\n\nIN MAN\n\nGE     7600256410608202612470001000100\n66 70] 7600258410bU620261247009010664100\nC 1002    #5641 500176 R002\n\nGRAZIE PER AVERCI SCELTO\nARRIVEDERC\n\n"
+        },
+        "gentle": {
+          "conf": 60,
+          "score": 35,
+          "hasTotal": false,
+          "snippet": "CONTA | CARREFOUR | PA | GS SÌ | Via criminali | Roma  0ò | > IVA 0292 3495! | | i  06 9210166 | DOCUMENTO COMMERCIALE | di vendita o pres See | i SCRIZIONE E          PREZZO | X    0 59         Leo | “DEMI BAGUETTE       ",
+          "fullText": "CONTA\n\nCARREFOUR\nPA\n\nGS SÌ\nVia criminali\nRoma  0ò\n> IVA 0292 3495!\n| i  06 9210166\nDOCUMENTO COMMERCIALE\ndi vendita o pres See\ni SCRIZIONE E          PREZZO\nX    0 59         Leo\n“DEMI BAGUETTE            118\nRUCOLA GR125 CRF            {00  0q:00\nPANNA FRESCA 500 ML            4/99 10,\n\nglva\n04, 90\n\n| TOTALE COMPLESSIVO             1,1]\nDI CUI IVA                  pE\nARR. DL N50-17.D            A\nCONTANTI                                  20,00\n12 89\n\n12:47». DOC .N 0010-0100\nVER RT: \"88S25//12806\nEGR:\n\nFirma Ele        i    pi\ngbudiX1uhG3U BpmST 16 ig        pUjZ6GIPAVL+4= i\n\nAuger Oa PTC] i\n\nGi je carta PAVBA. k oggi\navresti guadagnato:\n2 Punti\n\nIl I Îl il |\n\n667017600256410608202612470001000100\n66 70] 76U0256410bU62026124700901066100\nC1002  #5641 S00176 RO02\nGRAZIE PER AVERCI SCELTO\nARRIVEDERCI\n\n"
+        },
+        "sharpened": {
+          "conf": 57,
+          "score": 48,
+          "hasTotal": false,
+          "snippet": "GARMBEFOUR CONTAG ! | (et) | via criminali | Roma | P_IVA  0292495063 | tel. 06  S210126 | DOCUMENTO C OMMET   O di | di vendita o pre   tazio       A | SLF                 2EZZOÒ    [va | A TON    ia           PREZZ ",
+          "fullText": "GARMBEFOUR CONTAG !\n\n(et)\nvia criminali\nRoma\nP_IVA  0292495063\ntel. 06  S210126\nDOCUMENTO C OMMET   O di\ndi vendita o pre   tazio       A\nSLF                 2EZZOÒ    [va\nA TON    ia           PREZZ      Ai\n\n“DEMI BAGUETTE                 1,18\nRUCOLA GR125 CRF               f.00 04,00\nPANNA FRESCA 500 ML           4/99\n\n10,00\n\nTOTALE COMPLESSIVO             //MI     I\n\nDI CUI IVA                   0,53     hi)\nARR. DL N50-17.D            0,02\nCONTANTI                   20,00\nResto                           il 2 je\n\n06/08/2026 12:47 DOC.N 0010-0100\nSERVER RT: \"88S25/ 1806\nECR:\nspp SS ina ER          Sp   -A=\ngb NONE E  BPNSIfOO      E”    PA\n\nN ERO articoli\n\nCai 1 BE PAVBL. o oggi\net guadagnato:\n2 Punti\n\nINI! NN\n\n667017   6800256410608202612470001000100\n66 70] 76002564106U62026124700901066100\nC 1002    #5641 500176 R002\nGRAZIE PER AVERCI SCELTON\nARRIVEDERCI\n\n"
+        },
+        "regionalFooter": {
+          "hasTotal": false,
+          "snippet": "Li | ",
+          "fullText": "Li\n"
+        },
+        "regionalBody": {
+          "snippet": "LO GUERRA ‘5 ‘n | ta o prestazione          ? | PREZZO     lv | 9                04, 00 | ò                 1;18 | i            {00  04,00 | ) ML      4/99 10,00 | )            Po | :            0,53      | | Î_D      ",
+          "fullText": "LO GUERRA ‘5 ‘n\nta o prestazione          ?\nPREZZO     lv\n9                04, 00\nò                 1;18\ni            {00  04,00\n) ML      4/99 10,00\n)            Po\n:            0,53      |\nÎ_D         0,02\n20,00\n12 8\nDOC .N 0010-0100\n; \"883S25/IAR06\nE\n} El          EC\n‘Gg                PP UJZGSPAVL TA\nÌ\nE a                   } i        |\nuk oggi             /\n"
+        }
+      }
+    ]
+  },
+  {
+    "documentId": "DE_CAFFE_DOC_A_001",
+    "expectedTotal": 48.4,
+    "expectedLines": 8,
+    "images": [
+      {
+        "imageName": "RR-009_DE_CAFFE_docA_48-40_view01.jpeg",
+        "winner": "gentle_contrast",
+        "original": {
+          "conf": 78,
+          "score": 58,
+          "hasTotal": false,
+          "snippet": "DE, CAFFE $.r., | Via Ardeatina, 127 | 00134 Roma | P._IVA: 16512681004 | Tel. 06 87660206 | DOCUMENTO    COMMERCIALE | prestaz ione | di vendita 0 | prezzo(€) | O | pDESCRIZ | PRIMO     10NE                           ",
+          "fullText": "DE, CAFFE $.r.,\n\nVia Ardeatina, 127\n00134 Roma\nP._IVA: 16512681004\n\nTel. 06 87660206\nDOCUMENTO    COMMERCIALE\nprestaz ione\n\ndi vendita 0\nprezzo(€)\nO\n\npDESCRIZ\nPRIMO     10NE                                   SA\n‘7,00\n\nFATTI\nTOTALE CONPLESSIVO\ndi cui NA\nPagamento elettronico\n\nImporto pagato\n07-08-2026 13:34\nDOCUMENTO N. 1835-0234\nAR 991EB031114\nDETTAGLIO FORME di PAGAMENTO\npag. Carta di Credito\n\nNUMERO CASSA\n\n"
+        },
+        "gentle": {
+          "conf": 78,
+          "score": 60,
+          "hasTotal": false,
+          "snippet": "D. E, CAFFE  Ml | Via Ardeatina, 1273 | 0134 Roma | 1VA: 16512681004 | ’rel. 06 87660206 | DOCUMENTO  COMMERCIALE | di vendita 0 prestaz ione | pESCRIZIO | RIMO    NE | È CONTORNO | O | TOTALE COMPLESSIVO | di cui IVA | ",
+          "fullText": "D. E, CAFFE  Ml\n\nVia Ardeatina, 1273\n0134 Roma\n1VA: 16512681004\n\n’rel. 06 87660206\n\nDOCUMENTO  COMMERCIALE\ndi vendita 0 prestaz ione\n\npESCRIZIO\nRIMO    NE\n\nÈ CONTORNO\nO\nTOTALE COMPLESSIVO\n\ndi cui IVA\n\nPagamento elettronico\nImporto pagato\n\n07-08-2026 1935\nDOCUMENTO N. 1835-0234\nRT 991EB031114\n\nDETTAGLIO FORME di PAGAMENTO\n\npag. Carta di Credito\n\nALTRI IMPOATI = 11,00\n\nNUMERO CASSA\n\n"
+        },
+        "sharpened": {
+          "conf": 75,
+          "score": 57,
+          "hasTotal": false,
+          "snippet": "i | DE LCA AE Sar | Via Ardeatina; 1273 | 00134 Roma | IVA: 16512681004 | Pinel. 06 66020 | DOCUMENTO  COMMERCIALE | di vendita 0 prestaz ione | prezzo(€) | 10 | DESCRIZ | RIM    IONE                      IVA I | ;      ",
+          "fullText": "i\nDE LCA AE Sar\nVia Ardeatina; 1273\n00134 Roma\nIVA: 16512681004\n\nPinel. 06 66020\n\nDOCUMENTO  COMMERCIALE\n\ndi vendita 0 prestaz ione\nprezzo(€)\n10\n\nDESCRIZ\nRIM    IONE                      IVA I\n;                7 00\n\nETNA\nTOTALE COMPLESSIVO\ndî cui IVA\n\nPagamento elettronico\nImporto pagato\n07-08-2026 13:34\nDOCUMENTO N: 1835-0234\nRT 991EB031114\nDETTAGLIO FORME di PAGAMENTO\npag. Carta di Credito\n\nNUMERO CASSA\n\n"
+        },
+        "regionalFooter": {
+          "hasTotal": false,
+          "snippet": "nia | MERO CASSA            1                                            | | ",
+          "fullText": "nia\nMERO CASSA            1                                            |\n"
+        },
+        "regionalBody": {
+          "snippet": "LO (UV | 660206 | ‘OMMERCIALE | prestaz 1one | IVA     prezzo(€) | 10,00%        O | 10,00%        7,00 | 10,00%        1,20 | 100%        10,00 | 10, Lu%        8,00     : | 10,00%        1,20 | 10,004        1,00    si | 1",
+          "fullText": "LO (UV\n660206\n‘OMMERCIALE\nprestaz 1one\nIVA     prezzo(€)\n10,00%        O\n10,00%        7,00\n10,00%        1,20\n100%        10,00\n10, Lu%        8,00     :\n10,00%        1,20\n10,004        1,00    si\n10,00%         2,00    a\nTA E\n30 E\n7,40\n31,40\n026 13:34              |\nN. 1835-0234          ’\ng91EBO31114\nRME di PAGAMENTO\n)                  37,40\nCri = N00       ì\nPOE Pps        L\nGENERALE = 48, MO         i\n"
+        }
+      },
+      {
+        "imageName": "RR-009_DE_CAFFE_docA_48-40_view02.jpeg",
+        "winner": "original",
+        "original": {
+          "conf": 70,
+          "score": 56,
+          "hasTotal": false,
+          "snippet": "DE DALE REST | Via Acdeatipaa  1273 | PIVA:  16512681004 | Tel. 06 8766020 | COCUMENTO COMMERCIALE | i vendita o prestazione | PROCRIZIONE                  IVA      Prezzo Na | SECONDO i ONTORNO | SECONDO E CONT",
+          "fullText": "DE DALE REST\n\nVia Acdeatipaa  1273\nPIVA:  16512681004\n\nTel. 06 8766020\n\nCOCUMENTO COMMERCIALE\ni vendita o prestazione\n\nPROCRIZIONE                  IVA      Prezzo Na\n\nSECONDO i ONTORNO\nSECONDO E CONTORNO\nCAF da\n\nACQUA\nBIBITE LATEINA\n\nTOTALE COMPLESSIVO\n\ndi cuì IVA\nPagamento elettronico\nImporto pagato\n\n07-08-2026 13:34\nDOCUMENTO N/ 1835-0234\n\nAT 991EB031114\n\nDETTAGLIO FORME di PAGAMENTO\nPag. Carta di Credito\n\nNUMERO CASSA\n\n"
+        },
+        "gentle": {
+          "conf": 72,
+          "score": 56,
+          "hasTotal": false,
+          "snippet": "DE CAFFE Gar]. | Via Arca  1273 | PIVA;  16512681004 | Tel 06 87660206 | COCUMENTO COMMERCIALE | i vendita o prestazione | DESCRIZIONE                         PLEZZOO) | IMO                        ),00%         ",
+          "fullText": "DE CAFFE Gar].\n\nVia Arca  1273\nPIVA;  16512681004\nTel 06 87660206\n\nCOCUMENTO COMMERCIALE\ni vendita o prestazione\n\nDESCRIZIONE                         PLEZZOO)\nIMO                        ),00%           7,0\nRADO\n\nSidia   <ONTORNO\npECN À CONTORNO\n\nSSA            10:04\nTOTALE COMPLESSIVO\ndi cui IVA\n\nPagamento elettronico\nImporto pagato\n\n07-08-2026 13:34\nDOCUMENTO N: 1835-0234\n\nAT 99ÎEB031114\n\nDETTAGLIO FORME di PAGAMENTO\nPag. Carta di Credito\n\nNUMERO CASSA\n\n"
+        },
+        "sharpened": {
+          "conf": 73,
+          "score": 56,
+          "hasTotal": false,
+          "snippet": "DE CANE REG | Via Ardeatina,  O | 00134 Rom | PAS IVAI  16512881004 | Tel 06 87660206 | COCUMENTO COMMERCIALE | i vendita o prestazione | DESCRIZIONE                  A             € | PRO                       ",
+          "fullText": "DE CANE REG\n\nVia Ardeatina,  O\n00134 Rom\n\nPAS IVAI  16512881004\n\nTel 06 87660206\n\nCOCUMENTO COMMERCIALE\ni vendita o prestazione\n\nDESCRIZIONE                  A             €\nPRO                       IV       OLO\n\nSECONDO L CONTORNO\nSO E CONTORNO.\n\nSI\nTOTALE COMPLESSIVO\ndi cui IVA\n\nPagamento elettronico\nImporto pagato\n\n07-08-2026 13:34\nDOCUMENTO N7 1835-0234\n\nAT 991EB031114\n\nDETTAGLIO FORME di PAGAMENTO\nPag. Carta di Credito\n\nNUMERO CASSA\n\n"
+        },
+        "regionalFooter": {
+          "hasTotal": false,
+          "snippet": "",
+          "fullText": ""
+        },
+        "regionalBody": {
+          "snippet": "ld 0 prestazione | IVA      PLEZZONO) | 10,00%          7,0 | 10,00%          7,00 | 10,00%           1,20     A} | 10.704     10,00. | 10,00%         8007 1x2 | 10,00%          200 Ea | 10,00%          1,00 Eu | 10,00",
+          "fullText": "ld 0 prestazione\nIVA      PLEZZONO)\n10,00%          7,0\n10,00%          7,00\n10,00%           1,20     A}\n10.704     10,00.\n10,00%         8007 1x2\n10,00%          200 Ea\n10,00%          1,00 Eu\n10,00%       12500   A\nI\n3,4)  |\n0                    37,40\n37,40\n-2026 13:34\n0 N/ 1835-0234\n991EBO31114\nORME di PAGAMENTO\nD                   37,40\nI IMPUTI = 11,00\nGENERALE = 88,40\n*\n"
+        }
+      }
+    ]
+  },
+  {
+    "documentId": "DE_CAFFE_DOC_B_001",
+    "expectedTotal": 3.9,
+    "expectedLines": 3,
+    "images": [
+      {
+        "imageName": "RR-009_DE_CAFFE_docB_3-90_view01.jpeg",
+        "winner": "sharpened_light",
+        "original": {
+          "conf": 71,
+          "score": 56,
+          "hasTotal": false,
+          "snippet": "DES CA RA S.r.l. | Viù AgEal Raga | P._ IVA:  16512681004 | Tel. 06 81600200 | DOCUMENTO  COMMERCIALE | di vendita o prestazione | PSI | IF} | CAPPUCCINO i | TOTALE COMPLESSIVO | di cui IVA | Pagamento elettronico | Imp",
+          "fullText": "DES CA RA S.r.l.\n\nViù AgEal Raga\nP._ IVA:  16512681004\nTel. 06 81600200\n\nDOCUMENTO  COMMERCIALE\ndi vendita o prestazione\n\nPSI\nIF}\nCAPPUCCINO i\n\nTOTALE COMPLESSIVO\ndi cui IVA\n\nPagamento elettronico\nImporto pagato\n03-09-2026 09:40\nDOCUMENTO N. 1865-0127\n\nRT 991EB031114\n\nDETTAGLIO FORME di PAGAMENTO\nPag. Carta di Credito\n\nNUMERO CASSA       1\n\n"
+        },
+        "gentle": {
+          "conf": 81,
+          "score": 50,
+          "hasTotal": false,
+          "snippet": "DECCA RA S.r.l. | Via Ardeatina, 127 | 134_R9881004 | 7660206 | DOCUMENTO  COMMERCIALE | di vendita o prestazione | DESCRIZIONE | MARITOZZO P | CAPPUCCINO N | TOTALE COMPLESSIVO | di cui IVA | Pagamento elettronico | ",
+          "fullText": "DECCA RA S.r.l.\n\nVia Ardeatina, 127\n134_R9881004\n7660206\n\nDOCUMENTO  COMMERCIALE\ndi vendita o prestazione\n\nDESCRIZIONE\n\nMARITOZZO P\nCAPPUCCINO N\n\nTOTALE COMPLESSIVO\ndi cui IVA\n\nPagamento elettronico\n\nImporto pagato\n03-09-2026 09:40\nDOCUMENTO N. 1865-0127\n\nRT 991EB031114\n\nDETTAGLIO FORME di PAGAMENTO\nPag. Carta di Credito\n\nNUMERO CASSA      1\n\n"
+        },
+        "sharpened": {
+          "conf": 78,
+          "score": 60,
+          "hasTotal": false,
+          "snippet": "DECCA RAE Sl | Via Ardeatina, 1273 | 00134 Roma | p. IVA: 16512681004 | Tel. 06 81660206 | DOCUMENTO  COMMERCIALE | di vendita o prestazione | DiagRazio         IM | PA             ; | CAPPUCCINO  NNA           10,0",
+          "fullText": "DECCA RAE Sl\nVia Ardeatina, 1273\n\n00134 Roma\np. IVA: 16512681004\n\nTel. 06 81660206\n\nDOCUMENTO  COMMERCIALE\ndi vendita o prestazione\nDiagRazio         IM\nPA             ;\nCAPPUCCINO  NNA           10,00%\n\nTOTALE COMPLESSIVO\ndi cui IVA\n\nPagamento elettronico\nImporto pagato\n03-09-2026 09:40\nDOCUMENTO N. 1865-0127\n\nRT 991EB031114\n\nDETTAGLIO FORME di PAGAMENTO\nPag. Carta di Credito\n\nNUMERO CASSA      1\n\n"
+        },
+        "regionalFooter": {
+          "hasTotal": false,
+          "snippet": "Carta di Credito   È            N | RO CASSA     1              j SÉ | ",
+          "fullText": "Carta di Credito   È            N\nRO CASSA     1              j SÉ\n"
+        },
+        "regionalBody": {
+          "snippet": "LN | anI2II | oma | 2681004              È | GEO             i | ‘OMMERCIALE          i | prestazione                         i | IVA    prezzo(€)  @ | 2,50 | 19-00              1240 | 1 E | Un A | }    Di | 3,90 E | 3,90  | | )26",
+          "fullText": "LN\nanI2II\noma\n2681004              È\nGEO             i\n‘OMMERCIALE          i\nprestazione                         i\nIVA    prezzo(€)  @\n2,50\n19-00              1240\n1 E\nUn A\n}    Di\n3,90 E\n3,90  |\n)26 09:40                 î\nN. 1865-0127           |\nIEBO31114\nME di PAGAMENTO        DA\n3. i\n"
+        }
+      }
+    ]
+  },
+  {
+    "documentId": "R_STORE_001",
+    "expectedTotal": 19,
+    "expectedLines": 1,
+    "images": [
+      {
+        "imageName": "RR-010_R_STORE_p01.jpeg",
+        "winner": "sharpened_light",
+        "original": {
+          "conf": 71,
+          "score": 40,
+          "hasTotal": false,
+          "snippet": "@ R-Store | A-TORE pd, | socio u | Via Laurentina = Haxino \"Bho ping Center | co o 05984211218 | roma. Pat OSTATO LOI | DOCUMENTO COMME | vendità 0 pres | DESCRIZIONE | QUICKSERVICE S | TOTALE COMPLESSIVO | di cui IVA",
+          "fullText": "@ R-Store\n\nA-TORE pd,\n\nsocio u\nVia Laurentina = Haxino \"Bho ping Center\n\nco o 05984211218\nroma. Pat OSTATO LOI\nDOCUMENTO COMME\n\nvendità 0 pres\nDESCRIZIONE\nQUICKSERVICE S\n\nTOTALE COMPLESSIVO\ndi cui IVA\n\nPagamento contante\nesto\nImporto pagato  f            Pa\nDOcHENTO N  602 -0001\n7 99TEC000641\n\nE fino FORME. di. PAGAMENTO\nCONTANTE EURO\n\nN A   26020001921/6\nVENDITORE: MARCO\n\nIl cambio e        ossibile, entro 7 gg.,\nesclusivamente a “prodotti integri,\nigitlati,  au presentazione del\ne scontrino. I] cambio non\ne        l      del denaro ma\nsolo di un eventuale buono acquisto\nspendibile entro 6 (sei) mesi.\n\n"
+        },
+        "gentle": {
+          "conf": 70,
+          "score": 40,
+          "hasTotal": false,
+          "snippet": "@ R-Siore | A-STORE ip, | socio u | Via Laurentina = Haxino \"Bho ping Center | co o 05984211218 | roma. Spa IOSFATO TOI | DOCUMENTO COMME | vendita 0 pres | DESCRIZIONE | QUICKSERVICE S | TOTALE COMPLESSIVO | di cui I",
+          "fullText": "@ R-Siore\n\nA-STORE ip,\n\nsocio u\nVia Laurentina = Haxino \"Bho ping Center\n\nco o 05984211218\nroma. Spa IOSFATO TOI\nDOCUMENTO COMME\n\nvendita 0 pres\nDESCRIZIONE\nQUICKSERVICE S\n\nTOTALE COMPLESSIVO\ndi cui IVA\n\nPagamento contante\nesto\nImporto pagato  É            Pa\nDOcHENTO N  602 -0001\n7 99TEC000641\n\ni fino FORME. di. PAGAMENTO\nCONTANTE EURO\n\nWE A   26020001921/6\nVENDITORE: MARCO\n\nIl cambio e     possibile, entro 7 gg.,\nesci]usivamente per prodotti inte, rim\nigitlati,  au presentazione del\ne scontrino. I] cambio non\nE        l      del denaro ma\nsolo di un eventuale buono acquisto\nspendibile entro 6 (sei) mesi.\n\n"
+        },
+        "sharpened": {
+          "conf": 70,
+          "score": 65,
+          "hasTotal": false,
+          "snippet": "@ R-Store |4 | I STORE Ì. Dà, | ocio                 | | Via Laurentina - “Vagina o sh ping Center | P.Iva 05984211218 | roma. Muli ie it | DOCUMENTO   COBiRcIALE | pe     di vendita o prestazione      i | DESCRI",
+          "fullText": "@ R-Store |4\n\nI STORE Ì. Dà,\n\nocio                 |\nVia Laurentina - “Vagina o sh ping Center\n\nP.Iva 05984211218\nroma. Muli ie it\n\nDOCUMENTO   COBiRcIALE\npe     di vendita o prestazione      i\nDESCRIZIONE                            IVA          Prezzo(€)\n;                                                    22,00%                   19,01\nQUICKSERVICE S\n\nTOTALE COMPLESSIVO\ndi cui IVA\nPagamento contante\nesto\nImporto pagato\n16-08-2026 11:52\nDOCUMENTO     i\nART 99IEC000641\n\nDETTAGLIO FORME di. PAGAMENTO\nCONTANTE EURO\n\nRU  26020001921/6\nVENDITORE: MARCO\n\nDi lia\n\nI) cambio e     possibile, entro 7 gg.,\nesclusivamente per prodotti inte Ci\nsigillati, previa presentazione del\npresente scontrino, I]   a non\nprevede la restituzione del denaro ma\nsolo di un eventuale buono acquisto\nspendibile entro 6 (sei) mesi.\n\nDIO\n\n"
+        },
+        "regionalFooter": {
+          "hasTotal": false,
+          "snippet": "LI GaANDIO E POSSINIT IE, entro / gg.,        pe | esclusivamente per prodotti integri,           RS | sigillati, previa presentaz ione ce)            ne | presente scontrino. Il cambio non             E | pr",
+          "fullText": "LI GaANDIO E POSSINIT IE, entro / gg.,        pe\nesclusivamente per prodotti integri,           RS\nsigillati, previa presentaz ione ce)            ne\npresente scontrino. Il cambio non             E\nprevede la restituzione del denaro ma          i\n\n|   solo di un eventuale buono acquisto            Si\nspendibile entro 6 (sei) mesi.                i\n\nIE. TETTE TETTE IENE TITO PER PITT TI\n"
+        },
+        "regionalBody": {
+          "snippet": "SIE). | ci | “Hay ino SPagoino Center | app | là 05904211218 | 1aximo@rstore.it | W.rstore.it | NÎO COMMERCIALE                 i | lita o prestazione           E:   i. | IVA    Prezzo(€)    i | 22,00%         19,00 | o |   ",
+          "fullText": "SIE).\nci\n“Hay ino SPagoino Center\napp\nlà 05904211218\n1aximo@rstore.it\nW.rstore.it\nNÎO COMMERCIALE                 i\nlita o prestazione           E:   i.\nIVA    Prezzo(€)    i\n22,00%         19,00\no\n              19,00 pa\ndA) Pu\n20,00 PE\n1400\n4      ERE di\n08-2026 11:52             VO\nNTO N. 2023-0001            (ua\n\" 991EC000641                  vi\nFORME. di. PAGAMENTO         i\n120,00 RE\ni\nBA:\n1/6                       N\nSKI\nNSA\nN\nsibile, entro 7 gg.,        NS\nprodotti i ntegri i                    Si\nresentazione del             ge\nI] cambio non             E\nione del denaro ma            E\n"
+        }
+      }
+    ]
+  },
+  {
+    "documentId": "EURORISPARMIO_CASA_001",
+    "expectedTotal": 5.9,
+    "expectedLines": 1,
+    "images": [
+      {
+        "imageName": "RR-012_EURORISPARMIO_CASA_p01.jpeg",
+        "winner": "sharpened_light",
+        "original": {
+          "conf": 79,
+          "score": 64,
+          "hasTotal": false,
+          "snippet": "EURORISPARMIO CASA | DI FU YONG QING | PARTITA IVA 02219850395 / | VIA DI DRAGONE 127/129 | 00125 DRAGONA ROMA | DOCUMENTO COMMERCIALE | DI VENDITA O PRESTAZIONE | DESCRIZIONE IVA | 1          224 | REPARTO | TOTALE ",
+          "fullText": "EURORISPARMIO CASA\nDI FU YONG QING\nPARTITA IVA 02219850395 /\nVIA DI DRAGONE 127/129\n00125 DRAGONA ROMA\n\nDOCUMENTO COMMERCIALE\nDI VENDITA O PRESTAZIONE\n\nDESCRIZIONE IVA\n1          224\n\nREPARTO\n\nTOTALE COMPLESSIVO\n\nDI CUI IVA\n\nPAGAMENTO ELETTRONICO\nIMPORTO PAGATO\n\n27-08-2026 13:11\nDOCUMENTO N. 0273-0021\n\nAT 3CICE153916\n\nCARTA CREDITO\n\n"
+        },
+        "gentle": {
+          "conf": 82,
+          "score": 65,
+          "hasTotal": false,
+          "snippet": "EURORISPARNIO CASA | DI FU YONG QING | PARTITA IVA 0221 98503957 | VIA DI DRAGONE 127/129 | 00125 DRAGONA ROMA | DOCUMENTO COMMERCIALE | DI VENDITA O PRESTAZIONE | DESCRIZIONE IVA | 22% | REPARTO 1 | TOTALE COMPLESS",
+          "fullText": "EURORISPARNIO CASA\n\nDI FU YONG QING\nPARTITA IVA 0221 98503957\nVIA DI DRAGONE 127/129\n00125 DRAGONA ROMA\n\nDOCUMENTO COMMERCIALE\nDI VENDITA O PRESTAZIONE\n\nDESCRIZIONE IVA\n22%\n\nREPARTO 1\n\nTOTALE COMPLESSIVO\n\nDI CUI IVA\n\nPAGAMENTO ELETTRONICO\nIMPORTO PAGATO\n\n27-08-2026 13:11\nDOCUMENTO N. 0273-0021\n\nAT 3CICE153916\n\nCARTA CREDITO\n\n"
+        },
+        "sharpened": {
+          "conf": 78,
+          "score": 70,
+          "hasTotal": false,
+          "snippet": "EURORTSPARNIO CASA | DI FU YONG QING | PARTITA IVA 02219850367 | VIA DI DRAGONE 127/129 | 00125 DRAGONA ROMA | DOCUMENTO COMMERCIALE | DI VENDITA O PRESTAZIONE | DESRIZIOE NA ERO | 1                   227        ",
+          "fullText": "EURORTSPARNIO CASA\n\nDI FU YONG QING\nPARTITA IVA 02219850367\nVIA DI DRAGONE 127/129\n\n00125 DRAGONA ROMA\n\nDOCUMENTO COMMERCIALE\nDI VENDITA O PRESTAZIONE\n\nDESRIZIOE NA ERO\n1                   227           5\n\nREPARTO                                     90\n\nTOTALE COMPLESSIVO         d,9)\n\nDI CUI IVA                1,06\n\nPAGAMENTO ELETTRONICO            6,90\nIMPORTO PAGATO                         6,90\n\n27-08-2026 13:11\nDOCUMENTO N. 0273-0021\n\nAT 3CICE153916\n\nCARTA CREDITO\n\n"
+        },
+        "regionalFooter": {
+          "hasTotal": false,
+          "snippet": "AT 93CICE153916                    e | ARTA CREDITO                so | ",
+          "fullText": "AT 93CICE153916                    e\nARTA CREDITO                so\n"
+        },
+        "regionalBody": {
+          "snippet": "QING | 219850357 | E 127/129      : | NA ROMA     LG | MERCIALE              O | RESTAZIONE              Po | o | MM ER | 2 6,90 EP | GO | SR | )    4  po | 1:06 MO | NICO    5,90 MO | 5,90 RSI | 6 13:11           I | 0273-0021    n",
+          "fullText": "QING\n219850357\nE 127/129      :\nNA ROMA     LG\nMERCIALE              O\nRESTAZIONE              Po\no\nMM ER\n2 6,90 EP\nGO\nSR\n)    4  po\n1:06 MO\nNICO    5,90 MO\n5,90 RSI\n6 13:11           I\n0273-0021    n\n153916         o\n"
+        }
+      }
+    ]
+  }
+]

@@ -25,10 +25,12 @@ import {
   Info,
   Terminal,
   Copy,
+  Download,
   ChevronDown,
   ChevronUp,
 } from 'lucide-react';
 import { db } from '../../database/db';
+import { buildDiagnosticReport } from '../../utils/diagnosticReport';
 import {
   documentSessionRepository,
   documentPageSegmentRepository,
@@ -1108,13 +1110,17 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
     }
   };
 
-  // Funzione per copiare l'intero stato diagnostico OCR grezzo e strutturato
+  // Funzione per copiare l'intero stato diagnostico OCR grezzo e strutturato (Schema D1)
   const handleCopyDiagnostics = async () => {
     try {
       const finalSupplierName =
         selectedSupplierId === 'new'
           ? newSupplierName.trim()
           : suppliers.find((s) => s.id === selectedSupplierId)?.name || detectedSupplierName;
+
+      const persistedDbLines = ocrProcess?.id
+        ? await ocrReceiptLineRepository.getByOcrProcessId(ocrProcess.id)
+        : [];
 
       const raw = ocrProcess?.rawText || '';
       const metaObj = (ocrProcess?.metadata as Record<string, any>) || {};
@@ -1123,54 +1129,85 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
         ? metaNorm
         : (raw ? TextNormalizationModule.normalize(raw).normalizedLines : []);
 
-      const persistedDbLines = ocrProcess?.id
-        ? await ocrReceiptLineRepository.getByOcrProcessId(ocrProcess.id)
-        : [];
-
-      const diagData = {
-        timestamp: new Date().toISOString(),
-        ocrProcessId: ocrProcess?.id || null,
-        sessionId: session?.id || null,
-        documentTitle: (session?.metadata?.title as string) || null,
-        documentCategory: documentCategory || null,
-        confidence: ocrProcess?.confidence || null,
-        selectedVariant: metaObj.selectedVariant || null,
-        variantScores: metaObj.variantScores || [],
-        detectedSupplier: detectedSupplierName,
-        selectedSupplier: finalSupplierName,
-        detectedDate: expenseDate,
-        isDateDetectedFromOcr,
-        detectedTotal: documentTotal,
-        paymentMethod,
-        rawText: raw,
-        normalizedLines,
-        persistedDbLinesCount: persistedDbLines.length,
-        extractedLines: editableLines.map((l, index) => ({
-          index: index + 1,
-          id: l.id,
-          originalText: l.originalText,
-          description: l.description,
-          quantity: l.quantity,
-          unitPrice: l.unitPrice,
-          lineTotal: l.lineTotal,
-          isNegative: l.lineTotal < 0,
-          confidence: l.confidence,
-          warnings: Array.isArray(l.warnings) ? l.warnings : [],
-          categoryId: l.categoryId,
-          productId: l.productId,
-          actionMode: l.actionMode,
-        })),
+      const diagData = await buildDiagnosticReport({
+        session,
+        segments,
+        attachmentsMap,
+        ocrProcess,
+        editableLines,
+        documentCategory,
         calculatedSumLines: roundedSumLines,
         discrepancy: effectiveDiscrepancy,
         hasDiscrepancy: hasTotalDiscrepancy,
         isDiscrepancyApproved,
         validationErrors: getFinalValidationErrors(),
-      };
+        detectedSupplierName,
+        selectedSupplierName: finalSupplierName,
+        expenseDate,
+        isDateDetectedFromOcr,
+        documentTotal,
+        paymentMethod,
+        persistedDbLinesCount: persistedDbLines.length,
+        normalizedLines,
+      });
       await navigator.clipboard.writeText(JSON.stringify(diagData, null, 2));
       setCopySuccess(true);
       setTimeout(() => setCopySuccess(false), 2500);
     } catch (err) {
       console.error('Errore nella copia della diagnostica:', err);
+    }
+  };
+
+  const handleDownloadDiagnostics = async () => {
+    try {
+      const finalSupplierName =
+        selectedSupplierId === 'new'
+          ? newSupplierName.trim()
+          : suppliers.find((s) => s.id === selectedSupplierId)?.name || detectedSupplierName;
+
+      const persistedDbLines = ocrProcess?.id
+        ? await ocrReceiptLineRepository.getByOcrProcessId(ocrProcess.id)
+        : [];
+
+      const raw = ocrProcess?.rawText || '';
+      const metaObj = (ocrProcess?.metadata as Record<string, any>) || {};
+      const metaNorm = metaObj.normalizedLines;
+      const normalizedLines = Array.isArray(metaNorm) && metaNorm.length > 0
+        ? metaNorm
+        : (raw ? TextNormalizationModule.normalize(raw).normalizedLines : []);
+
+      const diagData = await buildDiagnosticReport({
+        session,
+        segments,
+        attachmentsMap,
+        ocrProcess,
+        editableLines,
+        documentCategory,
+        calculatedSumLines: roundedSumLines,
+        discrepancy: effectiveDiscrepancy,
+        hasDiscrepancy: hasTotalDiscrepancy,
+        isDiscrepancyApproved,
+        validationErrors: getFinalValidationErrors(),
+        detectedSupplierName,
+        selectedSupplierName: finalSupplierName,
+        expenseDate,
+        isDateDetectedFromOcr,
+        documentTotal,
+        paymentMethod,
+        persistedDbLinesCount: persistedDbLines.length,
+        normalizedLines,
+      });
+      const blob = new Blob([JSON.stringify(diagData, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `diagnostic-report-D1-${session?.id || 'session'}.json`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error('Errore nel download della diagnostica:', err);
     }
   };
 
@@ -1932,23 +1969,33 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
                   <p className="text-[11px] text-slate-500 dark:text-slate-400">
                     Visualizza il testo grezzo ricevuto direttamente da Tesseract nel browser e le righe analizzate. Questa sezione è dedicata al debug e non compare nella registrazione contabile.
                   </p>
-                  <button
-                    type="button"
-                    onClick={handleCopyDiagnostics}
-                    className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold transition-all shrink-0 cursor-pointer shadow-xs self-start sm:self-auto"
-                  >
-                    {copySuccess ? (
-                      <>
-                        <Check className="w-3.5 h-3.5" />
-                        <span>Diagnostica copiata!</span>
-                      </>
-                    ) : (
-                      <>
-                        <Copy className="w-3.5 h-3.5" />
-                        <span>Copia diagnostica</span>
-                      </>
-                    )}
-                  </button>
+                  <div className="flex items-center gap-2 self-start sm:self-auto shrink-0">
+                    <button
+                      type="button"
+                      onClick={handleCopyDiagnostics}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold transition-all cursor-pointer shadow-xs"
+                    >
+                      {copySuccess ? (
+                        <>
+                          <Check className="w-3.5 h-3.5" />
+                          <span>Diagnostica copiata!</span>
+                        </>
+                      ) : (
+                        <>
+                          <Copy className="w-3.5 h-3.5" />
+                          <span>Copia diagnostica (D1)</span>
+                        </>
+                      )}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleDownloadDiagnostics}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-white rounded-xl text-xs font-bold transition-all cursor-pointer shadow-xs border border-slate-700"
+                    >
+                      <Download className="w-3.5 h-3.5 text-indigo-400" />
+                      <span>Scarica JSON</span>
+                    </button>
+                  </div>
                 </div>
 
                 {/* Metadata & Variant Selection Details */}

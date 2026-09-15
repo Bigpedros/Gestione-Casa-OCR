@@ -12,10 +12,27 @@ import {
   evaluateReceiptOcrQuality,
   ReceiptVariantName,
   OcrQualityEvaluation,
+  computeStringSha256,
 } from '../utils/imagePreprocessing';
 import {
   runRegionalSecondPassShadow,
 } from './ocrParser/regional';
+import { receiptParserService } from './ocrParser/receiptParserService';
+import { regionalEvidenceStore } from './ocrParser/regional/regionalEvidenceStore';
+import { generateGeometricPriceProposals, type GeometricPriceProposal } from './ocrParser/geometricPriceAlignment';
+import { buildGeometryCalibrationReport, type GeometryCalibrationReport } from './ocrParser/geometryCalibration';
+import {
+  applyStrictVariantEvidenceFusion,
+  applyVariantDateConflictGuard,
+  applyVariantTotalConsensus,
+  collectVariantPriceEvidence,
+  collectVariantTotalConsensus,
+  selectVariantWinnerIndex,
+  type VariantPreviewCandidate,
+  type VariantPriceEvidence,
+  type VariantTotalConsensus,
+} from './ocrParser/variantEvidenceFusion';
+import type { OcrWordGeometry, ParsedReceiptDraft } from './ocrParser/types';
 
 /**
  * RC-05F-R1: Kill Switch immutabile e non esposto a runtime.
@@ -187,7 +204,27 @@ class OCRService {
         overallScore: number;
         reasons: string[];
         snippet: string;
+        imageEncodedSha256?: string | null;
+        imagePixelSha256?: string | null;
+        imageSizeBytes?: number;
+        imageWidth?: number;
+        imageHeight?: number;
+        ocrTextSha256?: string;
+        ocrTextLength?: number;
+        ocrLineCount?: number;
+        processingTimeMs?: number;
       }>;
+      variantsAttempted?: number;
+      variantsSkipped?: number;
+      earlyExitTriggered?: boolean;
+      preprocessingTelemetry?: any;
+      ocrWords?: OcrWordGeometry[];
+      previewCandidates?: VariantPreviewCandidate[];
+      variantPriceEvidence?: VariantPriceEvidence[];
+      variantTotalConsensus?: VariantTotalConsensus | null;
+      baselineParsed?: ParsedReceiptDraft | null;
+      geometricProposals?: GeometricPriceProposal[];
+      fileName?: string;
     }> = [];
 
     try {
@@ -273,6 +310,17 @@ class OCRService {
           snippet: string;
         }> = [];
 
+        let pageVariantsAttempted = 1;
+        let pageVariantsSkipped = 0;
+        let pageEarlyExitTriggered = false;
+        let pagePreprocessingTelemetry: any = null;
+        let winnerOcrWords: OcrWordGeometry[] = [];
+        let pagePreviewCandidates: VariantPreviewCandidate[] = [];
+        let pageVariantPriceEvidence: VariantPriceEvidence[] = [];
+        let pageVariantTotalConsensus: VariantTotalConsensus | null = null;
+        let pageBaselineParsed: ParsedReceiptDraft | null = null;
+        let pageGeometricProposals: GeometricPriceProposal[] = [];
+
         if (this.mockEngine) {
           if (i === 0) {
             primaryImageSource = attachment.storageKey;
@@ -304,6 +352,17 @@ class OCRService {
             reasons: ['Esecuzione con mockEngine'],
             snippet: pageText.slice(0, 100),
           });
+          regionalEvidenceStore.clear();
+          pageBaselineParsed = receiptParserService.parseText(pageText, {
+            overallOcrConfidence: pageConfidence,
+          });
+          pagePreviewCandidates = [
+            {
+              variant: 'original',
+              evaluationScore: pageConfidence,
+              draft: pageBaselineParsed,
+            },
+          ];
         } else if (worker) {
           // 1. Generazione non-distruttiva delle varianti dell'immagine
           const variants = await createReceiptImageVariants(attachment.storageKey, {
@@ -311,7 +370,18 @@ class OCRService {
             maxDimension: 2400,
           });
 
+          pagePreprocessingTelemetry = variants.map((v) => ({
+            name: v.name,
+            telemetry: v.telemetry,
+            preprocessingMeta: v.preprocessingMeta,
+          }));
+
           // Testiamo le varianti generate (prioritizzando la conservazione dell'originale e contrasto dolce)
+          let earlyExitTriggered = false;
+          let variantsAttempted = 0;
+          let variantsSkipped = 0;
+          const totalGeneratedVariants = variants.length;
+
           interface VariantCandidate {
             name: ReceiptVariantName;
             label: string;
@@ -319,16 +389,68 @@ class OCRService {
             confidence: number;
             evaluation: OcrQualityEvaluation;
             dataUrl: string;
+            ocrWords: OcrWordGeometry[];
+            preview: ParsedReceiptDraft;
+            imageEncodedSha256: string | null;
+            imagePixelSha256: string | null;
+            imageSizeBytes: number;
+            imageWidth: number;
+            imageHeight: number;
+            ocrTextSha256: string;
+            ocrTextLength: number;
+            ocrLineCount: number;
+            processingTimeMs: number;
           }
           const candidates: VariantCandidate[] = [];
 
           for (let vIdx = 0; vIdx < variants.length; vIdx++) {
             const v = variants[vIdx];
+            variantsAttempted++;
             try {
-              const res = await worker.recognize(v.dataUrl);
+              const ocrStart = typeof performance !== 'undefined' ? performance.now() : Date.now();
+              const res = await worker.recognize(v.dataUrl, {}, { blocks: true } as any);
+              const ocrDuration = Math.round(
+                (typeof performance !== 'undefined' ? performance.now() : Date.now()) - ocrStart
+              );
               const txt = res.data.text || '';
               const conf = Math.round(res.data.confidence || 0);
               const evaluation = evaluateReceiptOcrQuality(txt, conf);
+              const ocrTextSha256 = await computeStringSha256(txt);
+              const ocrTextLength = txt.length;
+              const ocrLineCount = txt.split(/\r?\n/).filter((l) => l.trim().length > 0).length;
+
+              const ocrWords: OcrWordGeometry[] = [];
+              for (const block of (res.data as any).blocks ?? []) {
+                for (const paragraph of block.paragraphs ?? []) {
+                  for (const line of paragraph.lines ?? []) {
+                    for (const word of line.words ?? []) {
+                      if (
+                        word.text?.trim() &&
+                        word.bbox &&
+                        word.bbox.x1 > word.bbox.x0 &&
+                        word.bbox.y1 > word.bbox.y0
+                      ) {
+                        ocrWords.push({
+                          text: word.text,
+                          confidence: Number.isFinite(word.confidence) ? word.confidence : 0,
+                          bbox: {
+                            x0: word.bbox.x0,
+                            y0: word.bbox.y0,
+                            x1: word.bbox.x1,
+                            y1: word.bbox.y1,
+                          },
+                        });
+                      }
+                    }
+                  }
+                }
+              }
+
+              regionalEvidenceStore.clear();
+              const preview = receiptParserService.parseText(txt, {
+                overallOcrConfidence: conf,
+                ocrWords,
+              });
 
               candidates.push({
                 name: v.name,
@@ -337,11 +459,24 @@ class OCRService {
                 confidence: conf,
                 evaluation,
                 dataUrl: v.dataUrl,
+                ocrWords,
+                preview,
+                imageEncodedSha256: v.telemetry?.encodedSha256 || null,
+                imagePixelSha256: v.telemetry?.pixelSha256 || null,
+                imageSizeBytes: v.telemetry?.encodedSizeBytes || 0,
+                imageWidth: v.telemetry?.width || 0,
+                imageHeight: v.telemetry?.height || 0,
+                ocrTextSha256,
+                ocrTextLength,
+                ocrLineCount,
+                processingTimeMs: (v.telemetry?.processingTimeMs || 0) + ocrDuration,
               });
 
               // Se la prima variante ha già un punteggio eccellente (> 88), confidenza elevata e importo/totale rilevato, possiamo terminare in anticipo
               const hasAmountEvidence = /\b(?:TOTALE|IMPORTO|IMP\.?|EUR|EURO|€)\b/i.test(txt) && /\b\d+[.,]\d{2}\b/.test(txt);
               if (evaluation.overallScore >= 88 && conf >= 75 && hasAmountEvidence) {
+                earlyExitTriggered = true;
+                variantsSkipped = totalGeneratedVariants - variantsAttempted;
                 break;
               }
             } catch (vErr) {
@@ -349,10 +484,18 @@ class OCRService {
             }
           }
 
+          pageVariantsAttempted = variantsAttempted;
+          pageVariantsSkipped = variantsSkipped;
+          pageEarlyExitTriggered = earlyExitTriggered;
+
           if (candidates.length > 0) {
-            // Ordiniamo le varianti in base al punteggio complessivo oggettivo
-            candidates.sort((a, b) => b.evaluation.overallScore - a.evaluation.overallScore);
-            const winner = candidates[0];
+            const previewCandidates: VariantPreviewCandidate[] = candidates.map((candidate) => ({
+              variant: candidate.name,
+              evaluationScore: candidate.evaluation.overallScore,
+              draft: candidate.preview,
+            }));
+            const winnerIndex = selectVariantWinnerIndex(previewCandidates);
+            const winner = candidates[winnerIndex];
 
             pageText = winner.text;
             pageConfidence = winner.confidence;
@@ -361,6 +504,21 @@ class OCRService {
               primaryImageSource = winner.dataUrl;
             }
 
+            winnerOcrWords = winner.ocrWords;
+            pagePreviewCandidates = previewCandidates;
+            pageVariantPriceEvidence = collectVariantPriceEvidence(previewCandidates, winner.name);
+            pageVariantTotalConsensus = collectVariantTotalConsensus(previewCandidates);
+
+            regionalEvidenceStore.clear();
+            pageBaselineParsed = receiptParserService.parseText(winner.text, {
+              overallOcrConfidence: winner.confidence,
+            });
+            pageGeometricProposals = generateGeometricPriceProposals(
+              pageBaselineParsed.lines,
+              winner.ocrWords,
+              pageBaselineParsed.total.value
+            );
+
             pageVariantScores = candidates.map((c) => ({
               variant: c.name,
               label: c.label,
@@ -368,16 +526,38 @@ class OCRService {
               overallScore: c.evaluation.overallScore,
               reasons: c.evaluation.reasons,
               snippet: c.text.slice(0, 120).replace(/\n+/g, ' '),
+              imageEncodedSha256: c.imageEncodedSha256,
+              imagePixelSha256: c.imagePixelSha256,
+              imageSizeBytes: c.imageSizeBytes,
+              imageWidth: c.imageWidth,
+              imageHeight: c.imageHeight,
+              ocrTextSha256: c.ocrTextSha256,
+              ocrTextLength: c.ocrTextLength,
+              ocrLineCount: c.ocrLineCount,
+              processingTimeMs: c.processingTimeMs,
             }));
           } else {
             // Fallback diretto sull'allegato senza varianti
-            const res = await worker.recognize(attachment.storageKey);
-            pageText = res.data.text || '';
-            pageConfidence = Math.round(res.data.confidence || 0);
-            pageSelectedVariant = 'original';
-            if (i === 0) {
-              primaryImageSource = attachment.storageKey;
+            if (!this.mockEngine && worker) {
+              const res = await worker.recognize(attachment.storageKey);
+              pageText = res.data.text || '';
+              pageConfidence = Math.round(res.data.confidence || 0);
+              pageSelectedVariant = 'original';
+              if (i === 0) {
+                primaryImageSource = attachment.storageKey;
+              }
             }
+            regionalEvidenceStore.clear();
+            pageBaselineParsed = receiptParserService.parseText(pageText, {
+              overallOcrConfidence: pageConfidence,
+            });
+            pagePreviewCandidates = [
+              {
+                variant: 'original',
+                evaluationScore: pageConfidence,
+                draft: pageBaselineParsed,
+              },
+            ];
           }
         } else {
           throw workerInitError || new Error('Nessun motore OCR disponibile o inizializzato per elaborare l\'immagine');
@@ -389,6 +569,17 @@ class OCRService {
           sequenceIndex: seg.sequenceIndex,
           selectedVariant: pageSelectedVariant,
           variantScores: pageVariantScores,
+          variantsAttempted: pageVariantsAttempted,
+          variantsSkipped: pageVariantsSkipped,
+          earlyExitTriggered: pageEarlyExitTriggered,
+          preprocessingTelemetry: pagePreprocessingTelemetry,
+          ocrWords: winnerOcrWords,
+          previewCandidates: pagePreviewCandidates,
+          variantPriceEvidence: pageVariantPriceEvidence,
+          variantTotalConsensus: pageVariantTotalConsensus,
+          baselineParsed: pageBaselineParsed,
+          geometricProposals: pageGeometricProposals,
+          fileName: attachment.fileName,
         });
 
         // Aggiorna lo stato del segmento
@@ -423,6 +614,7 @@ class OCRService {
       const allVariantScores = pageResults.flatMap((p) => p.variantScores || []);
 
       // 6.5. Second-Pass Regional OCR — Controlled Shadow Runtime Integration (RC-05F / RC-05F-R1)
+      let geometryCalibration: GeometryCalibrationReport | null = null;
       try {
         const shadowEnabled = SECOND_PASS_SHADOW_ENABLED;
         await runRegionalSecondPassShadow({
@@ -439,6 +631,32 @@ class OCRService {
             tessedit_pageseg_mode: '4',
           },
         });
+
+        const primaryOcrWords = pageResults[0]?.ocrWords || [];
+        const parsedBeforeVariantFusion = receiptParserService.parseText(combinedRawText, {
+          overallOcrConfidence: avgConfidence,
+          ocrWords: primaryOcrWords,
+        });
+        const parsedWithTotalConsensus = applyVariantTotalConsensus(
+          parsedBeforeVariantFusion,
+          pageResults[0]?.variantTotalConsensus ?? null
+        );
+        const parsedAfterVariantFusion = applyStrictVariantEvidenceFusion(
+          parsedWithTotalConsensus,
+          pageResults[0]?.variantPriceEvidence ?? []
+        );
+        const finalParsed = applyVariantDateConflictGuard(
+          parsedAfterVariantFusion,
+          pageResults[0]?.previewCandidates ?? []
+        );
+
+        geometryCalibration = buildGeometryCalibrationReport(
+          pageResults[0]?.fileName || 'receipt',
+          pageResults[0]?.baselineParsed ?? finalParsed,
+          finalParsed,
+          primaryOcrWords,
+          pageResults[0]?.geometricProposals ?? []
+        );
       } catch (shadowErr) {
         console.warn('[OCRService:SecondPass] Errore non gestito nello shadow runner:', shadowErr);
       }
@@ -455,6 +673,15 @@ class OCRService {
           ...ocrProcess.metadata,
           selectedVariant: primarySelectedVariant,
           variantScores: allVariantScores,
+          variantsAttempted: pageResults[0]?.variantsAttempted ?? 1,
+          variantsSkipped: pageResults[0]?.variantsSkipped ?? 0,
+          earlyExitTriggered: pageResults[0]?.earlyExitTriggered ?? false,
+          preprocessingTelemetry: pageResults[0]?.preprocessingTelemetry ?? null,
+          ocrWords: pageResults[0]?.ocrWords || [],
+          geometryCalibration,
+          variantTotalConsensus: pageResults[0]?.variantTotalConsensus ?? null,
+          variantPriceEvidence: pageResults[0]?.variantPriceEvidence ?? [],
+          previewCandidates: pageResults[0]?.previewCandidates ?? [],
         } as any,
       });
 

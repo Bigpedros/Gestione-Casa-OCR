@@ -48,10 +48,29 @@ export class ReceiptZoneSegmenter {
     // FASE 1: Identificazione dei confini (Anchors)
 
     // A. Ricerca dell'intestazione tabella esplicita (es. "DESCRIZIONE IVA EURO", "ARTICOLO PREZZO", ecc.)
+    // OCR-01: alcuni scontrini fotografati separano l'intestazione su più righe,
+    // ad esempio "IVA PREZZO" seguito da "DESCRIZIONE". In quel caso il body
+    // deve iniziare dopo l'ultima riga dell'intestazione, così un eventuale
+    // prezzo isolato immediatamente successivo resta disponibile al parser righe.
     let tableHeaderIndex = -1;
     for (let i = 0; i < n; i++) {
       if (this.isExplicitTableHeader(lines[i].normalizedText)) {
         tableHeaderIndex = i;
+        break;
+      }
+
+      const currentIsHeaderFragment =
+        receiptKnowledgeBase.hasRole(lines[i].normalizedText, 'ITEM_TABLE_HEADER') ||
+        this.isDescriptionHeaderFragment(lines[i].normalizedText);
+      const nextIsHeaderFragment =
+        i + 1 < n &&
+        (
+          receiptKnowledgeBase.hasRole(lines[i + 1].normalizedText, 'ITEM_TABLE_HEADER') ||
+          this.isDescriptionHeaderFragment(lines[i + 1].normalizedText)
+        );
+
+      if (currentIsHeaderFragment && nextIsHeaderFragment) {
+        tableHeaderIndex = i + 1;
         break;
       }
     }
@@ -120,7 +139,14 @@ export class ReceiptZoneSegmenter {
                   break;
                 }
               } else {
-                if (this.hasCommercialItemCharacteristics(candidateText) && this.hasStrongItemCharacteristics(candidateText)) {
+                // OCR-04 R3: tra un SUBTOTALE e il totale finale una riga con sola
+                // aliquota IVA non basta a riaprire il BODY. Richiediamo anche un prezzo
+                // decimale esplicito, così rumore OCR/bleed-through non diventa articolo.
+                if (
+                  this.hasCommercialItemCharacteristics(candidateText) &&
+                  this.hasStrongItemCharacteristics(candidateText) &&
+                  /[-−]?\s*\d{1,4}[.,]\d{2}\b/.test(candidateText)
+                ) {
                   hasSubsequentItems = true;
                   break;
                 }
@@ -302,6 +328,27 @@ export class ReceiptZoneSegmenter {
   // =========================================================================
   // PREDICATI E REGOLE DI EVIDENZA MULTIPLA
   // =========================================================================
+
+  /**
+   * OCR-04 R4 — Frammento descrizione dell'intestazione tabella.
+   * Tolleriamo esclusivamente poche corruzioni OCR osservate sul corpus reale,
+   * senza applicare fuzzy generico a tutte le righe.
+   */
+  private static isDescriptionHeaderFragment(text: string): boolean {
+    const compact = text
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toUpperCase()
+      .replace(/[^A-Z]/g, '');
+
+    return (
+      compact === 'DESCRIZIONE' ||
+      compact === 'ESCRIZIONE' ||
+      compact === 'DESCRZIONE' ||
+      compact === 'DESCRIONE' ||
+      compact === 'PESCRZIONE'
+    );
+  }
 
   private static isExplicitTableHeader(text: string): boolean {
     const u = text.toUpperCase();

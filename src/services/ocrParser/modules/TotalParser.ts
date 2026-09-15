@@ -54,6 +54,7 @@ export class TotalParser implements ReceiptParserModule<number> {
     { pattern: /\bIMPORTO\s+TOTALE\b/i, scoreBonus: 80 },
     { pattern: /\[?OLE\s+COMPLESSIVO\b/i, scoreBonus: 80 },
     { pattern: /\(?UTALE\s+COMPLESSIVO\b/i, scoreBonus: 80 },
+    { pattern: /\b(?:IR|1R|TR|RT)?TOTALE\b/i, scoreBonus: 72 },
     { pattern: /\bTOTALE\b/i, scoreBonus: 70 },
     { pattern: /\bTOT\.\s*€?/i, scoreBonus: 65 },
   ];
@@ -235,7 +236,7 @@ export class TotalParser implements ReceiptParserModule<number> {
 
       // 4. Candidato: PAGAMENTO ELETTRONICO / POS / CARTE / CONTANTE / TRANSAZIONE POS
       if (
-        (/\b(?:PAGAMENTO|PAGAMENTI)\s+(?:ELETTRONICO|CONTANTE|CARTA|BANCOMAT)\b/i.test(line) ||
+        (/\b(?:PAGAMENTO|PAGAMENTI)\s+(?:ELETTRONICO|ELE\s*I?TRONICO|CONTANTE|CARTA|BANCOMAT)\b/i.test(line) ||
           /\bPOS(?:\s+BANCOMAT)?\b/i.test(line) ||
           /\b(?:C\.?CREDITO|CARTA\s+DI\s+CREDITO|BANCOMAT)\b/i.test(line) ||
           /\bDETTAGLIO\s+(?:FORME\s+DI\s+)?PAGAMENT[OI]\b/i.test(line) ||
@@ -470,8 +471,54 @@ export class TotalParser implements ReceiptParserModule<number> {
       cluster.effectiveScore = score;
     }
 
+    // OCR-05 closure — nearby monetary conflict reconciliation.
+    // Strict equality remains ±0.02. For 0.03–0.05 € conflicts we do not merge:
+    // we compare independent semantic/arithmetic evidence instead.
+    const evidenceWeight = (cluster: ValueCluster): number => {
+      let weight = 0;
+
+      if (cluster.distinctRoles.has('fiscal_total')) weight += 2;
+      if (cluster.distinctRoles.has('subtotal')) weight += 2;
+      if (cluster.distinctRoles.has('paid_amount')) weight += 2;
+      if (cluster.distinctRoles.has('payment_pos')) weight += 2;
+      if (cluster.distinctRoles.has('cash_minus_change')) weight += 2;
+      if (cluster.distinctRoles.has('composite_total')) weight += 4;
+
+      return weight;
+    };
+
     // Ordina i cluster per score effettivo decrescente
     clusters.sort((a, b) => b.effectiveScore - a.effectiveScore);
+
+    if (clusters.length >= 2) {
+      const top = clusters[0];
+      const contenders = clusters.slice(1).filter((cluster) => {
+        const diff = Math.abs(cluster.value - top.value);
+        return diff >= 0.03 - 1e-9 && diff <= 0.05 + 1e-9;
+      });
+
+      if (contenders.length > 0) {
+        const topWeight = evidenceWeight(top);
+        const ranked = contenders
+          .map((cluster) => ({ cluster, weight: evidenceWeight(cluster) }))
+          .sort((a, b) => b.weight - a.weight);
+
+        const winner = ranked[0];
+
+        if (
+          winner &&
+          winner.weight >= 5 &&
+          winner.weight >= topWeight + 2
+        ) {
+          const winnerIndex = clusters.indexOf(winner.cluster);
+          if (winnerIndex > 0) {
+            clusters.splice(winnerIndex, 1);
+            clusters.unshift(winner.cluster);
+          }
+        }
+      }
+    }
+
     const bestCluster = clusters[0];
 
     // Safety Gate: Se la riga del totale fiscale conteneva un importo esplicito ma degradato dall'OCR,

@@ -2,6 +2,7 @@ import {
   ocrProcessRepository,
   ocrReceiptLineRepository,
 } from '../../repositories';
+import { productClassificationService } from '../productClassification/ProductClassificationService';
 import {
   ParsedReceiptDraft,
   ReceiptParserContext,
@@ -14,6 +15,7 @@ import {
   ReceiptZones,
   ShadowPaymentEvidenceResult,
   PaymentEvidenceParseResult,
+  OcrWordGeometry,
 } from './types';
 import type { OcrQualityEvaluation } from '../../utils/imagePreprocessing';
 import { TextNormalizationModule } from './modules/TextNormalizationModule';
@@ -32,10 +34,22 @@ import { DocumentTypeClassifier } from './modules/DocumentTypeClassifier';
 import { ReceiptZoneSegmenter } from './modules/ReceiptZoneSegmenter';
 import { LineItemParserV2 } from './modules/LineItemParserV2';
 import { PaymentEvidenceParser } from './modules/PaymentEvidenceParser';
-import { productClassificationService } from '../productClassification/ProductClassificationService';
 import { regionalEvidenceStore } from './regional/regionalEvidenceStore';
+import type { RegionalOcrEvidence } from './regional/types';
 import { DocumentCategory } from '../../types';
 import { evaluateReceiptOcrQuality } from '../../utils/imagePreprocessing';
+import {
+  applyVariantTotalConsensus,
+  applyStrictVariantEvidenceFusion,
+  applyVariantDateConflictGuard,
+} from './variantEvidenceFusion';
+import { generateGeometricPriceProposals } from './geometricPriceAlignment';
+import { applySingleLineTotalRecovery } from './lineSumTotalRecovery';
+import {
+  applyStructuralLineCleanup,
+  applyUniqueLeadingDigitPriceCorrection,
+  applyUniqueTotalSubsetCleanup,
+} from './aggregateRemediation';
 
 export class ReceiptParserService {
   private supplierParser = new SupplierParser();
@@ -93,7 +107,6 @@ export class ReceiptParserService {
     }
 
     const rawText = ocrProcess.rawText;
-
     if (!rawText || rawText.trim().length === 0) {
       await ocrProcessRepository.update(ocrProcessId, {
         status: 'failed',
@@ -104,11 +117,24 @@ export class ReceiptParserService {
 
     // 1. Esegue il parsing logico del testo
     const normResult = TextNormalizationModule.normalize(rawText);
-    const draft = this.parseText(rawText, {
+    const ocrWords = (ocrProcess.metadata as any)?.ocrWords || (ocrProcess.metadata as any)?.words;
+    let draft = this.parseText(rawText, {
       overallOcrConfidence: ocrProcess.confidence || 85,
       ocrQualityScore: (ocrProcess.metadata as any)?.ocrQualityScore,
       ocrProcessId,
+      ocrWords,
     });
+
+    const meta = (ocrProcess.metadata as any) || {};
+    if (meta.variantTotalConsensus) {
+      draft = applyVariantTotalConsensus(draft, meta.variantTotalConsensus);
+    }
+    if (Array.isArray(meta.variantPriceEvidence) && meta.variantPriceEvidence.length > 0) {
+      draft = applyStrictVariantEvidenceFusion(draft, meta.variantPriceEvidence);
+    }
+    if (Array.isArray(meta.previewCandidates) && meta.previewCandidates.length > 0) {
+      draft = applyVariantDateConflictGuard(draft, meta.previewCandidates);
+    }
 
     // 2. Aggiorna OCRProcess con i dati estratti (SENZA impostare confirmedByUser: true)
     await ocrProcessRepository.update(ocrProcessId, {
@@ -147,7 +173,6 @@ export class ReceiptParserService {
           priceNotDetected: l.warnings?.includes('PRICE_NOT_DETECTED') || false,
         },
       }));
-
       await ocrReceiptLineRepository.bulkCreate(newLinesData);
     }
 
@@ -171,6 +196,7 @@ export class ReceiptParserService {
       sourceMode?: string;
       processingMode?: string;
       ocrProcessId?: string;
+      ocrWords?: readonly OcrWordGeometry[];
     }
   ): ParsedReceiptDraft {
     const normResult = TextNormalizationModule.normalize(rawText);
@@ -470,8 +496,31 @@ export class ReceiptParserService {
       paymentEvidence: officialPaymentEvidence,
     };
 
-    // 2.5 Reconciliazione evidenze regionali ad alta confidenza (Remediation 3B)
+    // 2.4 OCR-03: riconciliazione geometrica ad alta confidenza.
+    // Ha precedenza sul TIER_2 regionale perché usa la relazione spaziale reale
+    // descrizione-prezzo. Restano eleggibili al secondo passaggio solo le righe
+    // che rimangono irrisolte.
+    if (
+      documentCategory === 'COMMERCIAL_RECEIPT' &&
+      options?.ocrWords &&
+      options.ocrWords.length > 0
+    ) {
+      this.reconcileGeometricBodyPrices(initialDraft, options.ocrWords);
+    }
+
+    // 2.5 Reconciliazione evidenze regionali ad alta confidenza (Remediation 3B / OCR-02)
     const regionalEvidence = regionalEvidenceStore.consume();
+
+    // OCR-02: promozione controllata dei prezzi BODY recuperati dal secondo passaggio regionale.
+    // Vengono accettate esclusivamente proposte TIER_2 prodotte da strict count + ordine monotono,
+    // con token monetario esatto e senza sovrascrivere prezzi già presenti.
+    if (regionalEvidence && documentCategory === 'COMMERCIAL_RECEIPT') {
+      this.reconcileRecoveredBodyDocument(initialDraft, regionalEvidence);
+      this.reconcileOrderedRecoveredPrices(initialDraft, regionalEvidence);
+      this.reconcileRegionalBodyPrices(initialDraft, regionalEvidence);
+      this.reconcileExpandedBodyRecoveredLines(initialDraft, regionalEvidence);
+    }
+
     if (
       regionalEvidence &&
       regionalEvidence.totalRecovered !== null &&
@@ -496,6 +545,22 @@ export class ReceiptParserService {
         };
       }
     }
+
+    // OCR-05B1-A1: single-line total recovery (fail-closed)
+    // Interviene solo nel caso strettissimo definito dal modulo:
+    // COMMERCIAL_RECEIPT, totale mancante, una sola riga positiva e completamente risolta,
+    // nessuna evidenza contabile concorrente incompatibile.
+    if (documentCategory === 'COMMERCIAL_RECEIPT') {
+      applySingleLineTotalRecovery(initialDraft);
+    }
+
+    // OCR-05D final aggregate post-reconciliation cleanup.
+    // 1) exact subset closure removes leaked rows;
+    // 2) strong structural cleanup removes only unmistakable fiscal/payment rows;
+    // 3) unique leading-digit correction runs last against the cleaned set.
+    applyUniqueTotalSubsetCleanup(initialDraft);
+    applyStructuralLineCleanup(initialDraft);
+    applyUniqueLeadingDigitPriceCorrection(initialDraft);
 
     // 3. Esecuzione del modulo di validazione coerenza e Safety Gate
     const validation = ReceiptConsistencyValidator.validate(initialDraft, context);
@@ -715,6 +780,315 @@ export class ReceiptParserService {
         ambiguousCount: zones.ambiguous.length,
       },
     };
+  }
+
+  /**
+   * OCR-03 — Promuove prezzi riconosciuti nello stesso allineamento verticale
+   * della descrizione. Le proposte sono già fail-closed nel generatore e qui
+   * vengono ricontrollate prima della mutazione dell'output ufficiale.
+   */
+  private reconcileGeometricBodyPrices(
+    draft: ParsedReceiptDraft,
+    words: readonly OcrWordGeometry[]
+  ): number {
+    const proposals = generateGeometricPriceProposals(
+      draft.lines,
+      words,
+      draft.total.value
+    );
+
+    let promotedCount = 0;
+
+    for (const proposal of proposals) {
+      const line = draft.lines[proposal.itemIndex];
+      if (!line) continue;
+
+      const lineIsStillUnresolved =
+        line.lineTotal <= 0 &&
+        line.unitPrice <= 0 &&
+        line.quantity === 1 &&
+        !line.isNegative &&
+        (line.warnings?.includes('PRICE_NOT_DETECTED') ?? false);
+
+      if (!lineIsStillUnresolved || proposal.proposedPrice <= 0) {
+        continue;
+      }
+
+      const warnings = (line.warnings ?? []).filter(
+        (warning) => warning !== 'PRICE_NOT_DETECTED' && warning !== 'LOW_CONFIDENCE'
+      );
+      if (!warnings.includes('PRICE_RECOVERED_FROM_GEOMETRY')) {
+        warnings.push('PRICE_RECOVERED_FROM_GEOMETRY');
+      }
+
+      draft.lines[proposal.itemIndex] = {
+        ...line,
+        unitPrice: proposal.proposedPrice,
+        lineTotal: proposal.proposedPrice,
+        confidence: Math.max(
+          line.confidence,
+          Math.min(0.95, proposal.priceWordConfidence / 100)
+        ),
+        warnings,
+      };
+      promotedCount += 1;
+    }
+
+    return promotedCount;
+  }
+
+  /**
+   * OCR-02 — Promuove nell'output ufficiale esclusivamente evidenze BODY regionali
+   * deterministiche. La promozione è fail-closed: qualunque incoerenza lascia
+   * invariata la riga e mantiene PRICE_NOT_DETECTED.
+   */
+  /**
+   * OCR-05B1-B3-P1 — promozione document-level del BODY recuperato.
+   * È volutamente fail-closed: interviene solo quando il first pass non ha
+   * prodotto alcuna riga e la recovery contiene almeno 3 articoli prezzati
+   * che quadrano con evidenza indipendente cash-minus-change.
+   */
+  private reconcileOrderedRecoveredPrices(
+    draft: ParsedReceiptDraft,
+    evidence: RegionalOcrEvidence
+  ): number {
+    const prices = evidence.orderedRecoveredPrices;
+    if (!evidence.executed || !prices?.length) return 0;
+    if (prices.length !== draft.lines.length) return 0;
+    if (!draft.lines.every((line) =>
+      line.quantity === 1 &&
+      !line.isNegative &&
+      line.lineTotal <= 0 &&
+      line.unitPrice <= 0
+    )) return 0;
+
+    const total = evidence.totalRecovered ?? draft.total.value;
+    if (total === null || total === undefined || total <= 0) return 0;
+    const sum = Math.round(prices.reduce((s, p) => s + p, 0) * 100) / 100;
+    if (Math.abs(sum - total) > 0.05) return 0;
+
+    draft.lines = draft.lines.map((line, index) => {
+      const warnings = (line.warnings ?? []).filter(
+        (w) => w !== 'PRICE_NOT_DETECTED' && w !== 'LOW_CONFIDENCE'
+      );
+      warnings.push('PRICE_RECOVERED_BY_UNIQUE_ORDERED_TOTAL_CLOSURE');
+      return {
+        ...line,
+        unitPrice: prices[index],
+        lineTotal: prices[index],
+        confidence: Math.max(line.confidence, 0.9),
+        warnings,
+      };
+    });
+    return draft.lines.length;
+  }
+
+  private reconcileRecoveredBodyDocument(
+    draft: ParsedReceiptDraft,
+    evidence: RegionalOcrEvidence
+  ): number {
+    const recovered = evidence.recoveredDocument;
+    if (!evidence.executed || !recovered) return 0;
+    if (draft.lines.length !== 0) return 0;
+    if (recovered.lines.length < 3 || recovered.lines.length > 20) return 0;
+    if (recovered.total <= 0 || recovered.closureDiff > 0.05) return 0;
+
+    const lineSum =
+      Math.round(recovered.lines.reduce((sum, row) => sum + row.price, 0) * 100) / 100;
+    const expectedTotal =
+      Math.round((lineSum - recovered.discountAmount) * 100) / 100;
+
+    if (Math.abs(expectedTotal - recovered.total) > 0.05) return 0;
+
+    draft.lines = recovered.lines.map((row) => ({
+      originalText: row.rawText,
+      normalizedDescription: row.description,
+      quantity: 1,
+      unitOfMeasure: null,
+      unitPrice: row.price,
+      lineTotal: row.price,
+      discount: null,
+      isNegative: false,
+      confidence: Math.max(0.90, row.confidence / 100),
+      reviewStatus: 'pending',
+      warnings: ['LINE_RECOVERED_FROM_PHYSICAL_BODY_OCR'],
+    }));
+
+    draft.total = {
+      value: recovered.total,
+      confidence: Math.max(92, recovered.confidence),
+      sourceText: 'CASH_MINUS_CHANGE',
+      warnings: [],
+    };
+
+    if (recovered.discountAmount > 0) {
+      draft.discounts = {
+        value: recovered.discountAmount,
+        confidence: Math.max(92, recovered.confidence),
+        sourceText: 'PHYSICAL_BODY_ROUNDING_DISCOUNT',
+        warnings: [],
+      };
+    }
+
+    if (!draft.paymentMethod.value) {
+      draft.paymentMethod = {
+        value: recovered.paymentMethod,
+        confidence: Math.max(92, recovered.confidence),
+        sourceText: 'PAGAMENTO CONTANTE',
+        warnings: [],
+      };
+    }
+
+    return draft.lines.length;
+  }
+
+  private reconcileExpandedBodyRecoveredLines(
+    draft: ParsedReceiptDraft,
+    evidence: RegionalOcrEvidence
+  ): number {
+    const recovered = evidence.recoveredLines;
+    if (!evidence.executed || !recovered?.length) return 0;
+
+    const effectiveTotal = evidence.totalRecovered ?? draft.total.value;
+    if (effectiveTotal === null || effectiveTotal === undefined || effectiveTotal <= 0) return 0;
+
+    const recoveredSum =
+      Math.round(recovered.reduce((sum, row) => sum + row.price, 0) * 100) / 100;
+    if (Math.abs(recoveredSum - effectiveTotal) > 0.05) return 0;
+
+    let promoted = 0;
+
+    for (const row of recovered) {
+      if (row.price <= 0 || row.confidence < 90 || !row.description.trim()) continue;
+
+      if (row.existingItemIndex !== null) {
+        const line = draft.lines[row.existingItemIndex];
+        if (!line) continue;
+
+        const unresolved =
+          line.lineTotal <= 0 &&
+          line.unitPrice <= 0 &&
+          line.quantity === 1 &&
+          !line.isNegative &&
+          (line.warnings?.includes('PRICE_NOT_DETECTED') ?? false);
+        if (!unresolved) continue;
+
+        const warnings = (line.warnings ?? []).filter(
+          (warning) => warning !== 'PRICE_NOT_DETECTED' && warning !== 'LOW_CONFIDENCE'
+        );
+        if (!warnings.includes('PRICE_RECOVERED_FROM_EXPANDED_BODY_OCR')) {
+          warnings.push('PRICE_RECOVERED_FROM_EXPANDED_BODY_OCR');
+        }
+
+        draft.lines[row.existingItemIndex] = {
+          ...line,
+          unitPrice: row.price,
+          lineTotal: row.price,
+          confidence: Math.max(line.confidence, row.confidence / 100),
+          warnings,
+        };
+        promoted += 1;
+        continue;
+      }
+
+      const normalizedDescription = row.description.toUpperCase().replace(/\s+/g, ' ').trim();
+      if (draft.lines.some((line) =>
+        line.normalizedDescription.toUpperCase().replace(/\s+/g, ' ').trim() === normalizedDescription
+      )) continue;
+
+      draft.lines.push({
+        originalText: row.rawText,
+        normalizedDescription: row.description,
+        quantity: 1,
+        unitOfMeasure: null,
+        unitPrice: row.price,
+        lineTotal: row.price,
+        discount: null,
+        isNegative: false,
+        confidence: row.confidence / 100,
+        reviewStatus: 'pending',
+        warnings: ['LINE_RECOVERED_FROM_EXPANDED_BODY_OCR'],
+      });
+      promoted += 1;
+    }
+
+    return promoted;
+  }
+
+  private reconcileRegionalBodyPrices(
+    draft: ParsedReceiptDraft,
+    evidence: RegionalOcrEvidence
+  ): number {
+    if (!evidence.executed || !evidence.bodyEvidence?.executed || !evidence.proposals?.length) {
+      return 0;
+    }
+
+    const tokens = evidence.bodyEvidence.tokens;
+    let promotedCount = 0;
+
+    for (const proposal of evidence.proposals) {
+      if (
+        proposal.status !== 'PROPOSED' ||
+        proposal.tier !== 'TIER_2' ||
+        proposal.reason !== 'strict_count_monotonic_agreement' ||
+        proposal.proposedPrice === null ||
+        proposal.proposedPrice <= 0
+      ) {
+        continue;
+      }
+
+      const line = draft.lines[proposal.itemIndex];
+      const token = tokens[proposal.tokenIndex];
+      if (!line || !token) {
+        continue;
+      }
+
+      const normalizedProposalDescription = proposal.itemDescription.toUpperCase().replace(/\s+/g, ' ').trim();
+      const normalizedLineDescription = line.normalizedDescription.toUpperCase().replace(/\s+/g, ' ').trim();
+      const tokenMatchesProposal =
+        token.parsedValue !== null &&
+        Math.abs(token.parsedValue - proposal.proposedPrice) < 0.001;
+
+      const lineIsStrictlyUnresolved =
+        line.lineTotal <= 0 &&
+        line.unitPrice <= 0 &&
+        line.quantity === 1 &&
+        !line.isNegative &&
+        (line.warnings?.includes('PRICE_NOT_DETECTED') ?? false);
+
+      const tokenIsExactRegionalPrice =
+        token.classification === 'exact_monetary' &&
+        token.confidence >= 90 &&
+        token.reason === 'standard_exact_price' &&
+        !token.isNegative;
+
+      if (
+        normalizedProposalDescription !== normalizedLineDescription ||
+        !tokenMatchesProposal ||
+        !lineIsStrictlyUnresolved ||
+        !tokenIsExactRegionalPrice
+      ) {
+        continue;
+      }
+
+      const warnings = (line.warnings ?? []).filter(
+        (warning) => warning !== 'PRICE_NOT_DETECTED' && warning !== 'LOW_CONFIDENCE'
+      );
+      if (!warnings.includes('PRICE_RECOVERED_FROM_REGIONAL_OCR')) {
+        warnings.push('PRICE_RECOVERED_FROM_REGIONAL_OCR');
+      }
+
+      draft.lines[proposal.itemIndex] = {
+        ...line,
+        unitPrice: proposal.proposedPrice,
+        lineTotal: proposal.proposedPrice,
+        confidence: Math.max(line.confidence, 0.9),
+        warnings,
+      };
+      promotedCount += 1;
+    }
+
+    return promotedCount;
   }
 
   private createEmptyDraft(

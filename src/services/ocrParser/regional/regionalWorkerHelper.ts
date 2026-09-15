@@ -104,3 +104,43 @@ export async function executeRegionalCropRecognition(
 
   return ocrResult;
 }
+
+
+export async function createPhysicalCropDataUrl(
+  imageSource: string,
+  cropBox: PixelCropBox
+): Promise<string | null> {
+  if (
+    typeof document === 'undefined' ||
+    typeof Image === 'undefined' ||
+    typeof document.createElement !== 'function'
+  ) return null;
+
+  return new Promise<string | null>((resolve) => {
+    try {
+      const img = new Image();
+      let done = false;
+      const finish = (v: string | null) => { if (!done) { done = true; resolve(v); } };
+      const timer = setTimeout(() => finish(null), 1200);
+
+      img.onload = () => {
+        try {
+          clearTimeout(timer);
+          const canvas = document.createElement('canvas');
+          canvas.width = cropBox.width;
+          canvas.height = cropBox.height;
+          const ctx = canvas.getContext('2d');
+          if (!ctx) return finish(null);
+          ctx.drawImage(
+            img,
+            cropBox.left, cropBox.top, cropBox.width, cropBox.height,
+            0, 0, cropBox.width, cropBox.height
+          );
+          finish(canvas.toDataURL('image/png'));
+        } catch { finish(null); }
+      };
+      img.onerror = () => { clearTimeout(timer); finish(null); };
+      img.src = imageSource;
+    } catch { resolve(null); }
+  });
+}

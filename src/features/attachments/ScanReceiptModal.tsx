@@ -26,6 +26,7 @@ import {
   validateReceiptFile,
   processReceiptImage,
   computeFileHash,
+  computeDataUrlBinaryHash,
 } from '../../utils/imagePreprocessing';
 import {
   documentSessionRepository,
@@ -247,7 +248,16 @@ export const ScanReceiptModal: React.FC<ScanReceiptModalProps> = ({
   };
 
   // Create new session & ingest files
-  const handleFilesIngest = async (files: FileList | File[], isPdf = false) => {
+  const handleFilesIngest = async (
+    files: FileList | File[],
+    isPdf = false,
+    sourceInfo: {
+      acquisitionSource: 'camera_direct' | 'gallery_picker' | 'drag_and_drop' | 'file_picker';
+      inputAccept?: string;
+      hasCaptureAttribute?: boolean;
+      isMultiple?: boolean;
+    } = { acquisitionSource: 'gallery_picker', isMultiple: true }
+  ) => {
     if (!files || files.length === 0) return;
     setIsLoading(true);
     setErrorMsg(null);
@@ -281,7 +291,13 @@ export const ScanReceiptModal: React.FC<ScanReceiptModalProps> = ({
           sourceMode,
           processingMode: initialProcessingMode,
           status: 'draft',
-          metadata: { title: defaultTitle },
+          metadata: {
+            title: defaultTitle,
+            acquisitionSource: sourceInfo.acquisitionSource,
+            inputAccept: sourceInfo.inputAccept,
+            hasCaptureAttribute: sourceInfo.hasCaptureAttribute ?? false,
+            isMultiple: sourceInfo.isMultiple ?? false,
+          },
         });
 
         setCurrentSession(session);
@@ -328,6 +344,8 @@ export const ScanReceiptModal: React.FC<ScanReceiptModalProps> = ({
           reader.readAsDataURL(file);
         });
 
+        const persistedDataHash = await computeDataUrlBinaryHash(dataUrl);
+
         // Save Attachment
         const attachment = await attachmentRepository.create({
           entityType: 'unlinked',
@@ -352,6 +370,20 @@ export const ScanReceiptModal: React.FC<ScanReceiptModalProps> = ({
           segmentMode: session.processingMode === 'longReceipt' ? 'overlappingSegment' : 'page',
           fileHash,
           processingStatus: 'pending',
+          metadata: {
+            acquisitionSource: sourceInfo.acquisitionSource,
+            inputAccept: sourceInfo.inputAccept,
+            hasCaptureAttribute: sourceInfo.hasCaptureAttribute ?? false,
+            isMultiple: sourceInfo.isMultiple ?? false,
+            originalFileSha256: fileHash,
+            originalFileSizeBytes: file.size,
+            originalFileMimeType: file.type || (file.name.endsWith('.pdf') ? 'application/pdf' : 'image/jpeg'),
+            originalFileName: file.name,
+            originalFileLastModified: file.lastModified,
+            persistedDataUrlSha256: persistedDataHash.sha256,
+            persistedDataUrlLength: dataUrl.length,
+            persistedDataUrlSizeBytes: persistedDataHash.sizeBytes,
+          },
         });
 
         nextSeqIndex++;
@@ -642,7 +674,15 @@ export const ScanReceiptModal: React.FC<ScanReceiptModalProps> = ({
           type="file"
           accept="image/*"
           capture="environment"
-          onChange={(e) => e.target.files && handleFilesIngest(e.target.files)}
+          onChange={(e) =>
+            e.target.files &&
+            handleFilesIngest(e.target.files, false, {
+              acquisitionSource: 'camera_direct',
+              inputAccept: 'image/*',
+              hasCaptureAttribute: true,
+              isMultiple: false,
+            })
+          }
           className="hidden"
         />
         <input
@@ -650,7 +690,15 @@ export const ScanReceiptModal: React.FC<ScanReceiptModalProps> = ({
           type="file"
           accept="image/jpeg,image/jpg,image/png,image/webp,image/bmp"
           multiple
-          onChange={(e) => e.target.files && handleFilesIngest(e.target.files)}
+          onChange={(e) =>
+            e.target.files &&
+            handleFilesIngest(e.target.files, false, {
+              acquisitionSource: 'gallery_picker',
+              inputAccept: 'image/jpeg,image/jpg,image/png,image/webp,image/bmp',
+              hasCaptureAttribute: false,
+              isMultiple: true,
+            })
+          }
           className="hidden"
         />
         <input
@@ -658,7 +706,15 @@ export const ScanReceiptModal: React.FC<ScanReceiptModalProps> = ({
           type="file"
           accept="application/pdf,.pdf"
           multiple
-          onChange={(e) => e.target.files && handleFilesIngest(e.target.files, true)}
+          onChange={(e) =>
+            e.target.files &&
+            handleFilesIngest(e.target.files, true, {
+              acquisitionSource: 'file_picker',
+              inputAccept: 'application/pdf,.pdf',
+              hasCaptureAttribute: false,
+              isMultiple: true,
+            })
+          }
           className="hidden"
         />
         <input
@@ -666,7 +722,15 @@ export const ScanReceiptModal: React.FC<ScanReceiptModalProps> = ({
           type="file"
           accept="image/jpeg,image/jpg,image/png,image/webp,image/bmp,application/pdf,.pdf"
           multiple
-          onChange={(e) => e.target.files && handleFilesIngest(e.target.files)}
+          onChange={(e) =>
+            e.target.files &&
+            handleFilesIngest(e.target.files, false, {
+              acquisitionSource: 'gallery_picker',
+              inputAccept: 'image/jpeg,image/jpg,image/png,image/webp,image/bmp,application/pdf,.pdf',
+              hasCaptureAttribute: false,
+              isMultiple: true,
+            })
+          }
           className="hidden"
         />
         <input

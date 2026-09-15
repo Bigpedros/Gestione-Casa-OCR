@@ -40,6 +40,31 @@ export interface RegionalBodyEvidence {
   readonly rawText?: string;
 }
 
+export interface RegionalRecoveredLineCandidate {
+  readonly description: string;
+  readonly price: number;
+  readonly rawText: string;
+  readonly existingItemIndex: number | null;
+  readonly confidence: number;
+}
+
+export interface RegionalRecoveredDocumentLine {
+  readonly description: string;
+  readonly price: number;
+  readonly rawText: string;
+  readonly confidence: number;
+}
+
+export interface RegionalRecoveredDocumentCandidate {
+  readonly lines: readonly RegionalRecoveredDocumentLine[];
+  readonly discountAmount: number;
+  readonly total: number;
+  readonly paymentMethod: 'contanti';
+  readonly confidence: number;
+  readonly score: number;
+  readonly closureDiff: number;
+}
+
 export interface RegionalFooterEvidence {
   readonly executed: boolean;
   readonly variantUsed: string;
@@ -78,6 +103,9 @@ export interface RegionalOcrEvidence {
   readonly bodyEvidence?: RegionalBodyEvidence;
   readonly footerEvidence?: RegionalFooterEvidence;
   readonly proposals?: readonly RegionalAlignmentProposal[];
+  readonly recoveredLines?: readonly RegionalRecoveredLineCandidate[];
+  readonly recoveredDocument?: RegionalRecoveredDocumentCandidate;
+  readonly orderedRecoveredPrices?: readonly number[];
   readonly totalRecovered?: number | null;
   readonly durationMs?: number;
 }

@@ -75,6 +75,25 @@ export interface ReceiptParserModule<T> {
   parse(context: ReceiptParserContext): ParsedField<T> | ParsedField<T>[] | ParsedReceiptLine[] | ParserWarning[];
 }
 
+
+/**
+ * OCR-03 — Geometria minimale delle parole riconosciute.
+ * Derivata dai bounding box Tesseract `blocks` e usata esclusivamente
+ * per associazioni descrizione-prezzo geometricamente forti.
+ */
+export interface OcrBoundingBox {
+  readonly x0: number;
+  readonly y0: number;
+  readonly x1: number;
+  readonly y1: number;
+}
+
+export interface OcrWordGeometry {
+  readonly text: string;
+  readonly confidence: number;
+  readonly bbox: OcrBoundingBox;
+}
+
 /**
  * =========================================================================
  * ARCHITETTURA REGOLA CECCOTTI (CONTRATTI DI STADIO OCR IMMUTABILI)

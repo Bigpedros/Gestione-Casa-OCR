@@ -102,6 +102,22 @@ export class LineItemParserV2 {
         continue;
       }
 
+      // OCR-01: una riga composta esclusivamente da un importo può precedere
+      // il prodotto a cui appartiene quando Tesseract separa la colonna prezzi.
+      // La promozione in avanti è ammessa solo con evidenza stretta:
+      // - importo monetario isolato certo/plausibile;
+      // - prodotto successivo descrittivo e privo di prezzo;
+      // - nessun articolo precedente in attesa di prezzo.
+      // In caso contrario resta invariata la regola storica di merge all'indietro.
+      const next = candidates[i + 1];
+      const previousItem = parsedItems.length > 0 ? parsedItems[parsedItems.length - 1] : null;
+      if (this.shouldMergeLeadingIsolatedPrice(current, next, previousItem)) {
+        const nextItem = this.buildLineItem(next);
+        parsedItems.push(this.mergeLeadingPriceLine(nextItem, current));
+        i += 1; // il prodotto successivo è stato consumato insieme al prezzo
+        continue;
+      }
+
       // Controllo se si aggancia al candidato precedente
       if (parsedItems.length > 0) {
         const lastItem = parsedItems[parsedItems.length - 1];
@@ -624,6 +640,118 @@ export class LineItemParserV2 {
           normalizedText: rawLine.text,
         },
       ],
+    };
+  }
+
+  /**
+   * OCR-01 — Decide se un prezzo isolato deve essere associato al prodotto
+   * immediatamente successivo anziché al precedente. La regola è volutamente
+   * conservativa per rispettare la Regola Ceccotti.
+   */
+  private static shouldMergeLeadingIsolatedPrice(
+    current: RawLineCandidate,
+    next: RawLineCandidate | undefined,
+    previousItem: ParsedLineItemV2 | null
+  ): boolean {
+    if (!next) return false;
+
+    const currentIsStandalonePrice =
+      current.type === 'ARTICLE' &&
+      current.isPureContinuationOrMultiplier &&
+      !current.isWeightOnly &&
+      !current.isUnitPriceOnly &&
+      current.multiplierCandidate === null &&
+      current.quantityCandidate === null &&
+      current.unitOfMeasureCandidate === null &&
+      // OCR-04 R5: dopo la rimozione del token monetario Tesseract può lasciare
+      // sola punteggiatura (es. "; 8,50" -> ";"). Non è una descrizione:
+      // richiediamo quindi assenza di qualunque carattere alfanumerico residuo,
+      // mantenendo invariati tutti gli altri gate conservativi di OCR-01.
+      !/[A-Za-z0-9\u00C0-\u017F]/.test(current.descriptionCandidate) &&
+      current.lineTotalCandidate !== null &&
+      (current.monetaryEvidence.lineTotalEvidence === 'CERTAIN' ||
+        current.monetaryEvidence.lineTotalEvidence === 'PLAUSIBLE');
+
+    if (!currentIsStandalonePrice) return false;
+
+    const nextIsUnpricedProduct =
+      !next.isNoise &&
+      next.type === 'ARTICLE' &&
+      !next.isPureContinuationOrMultiplier &&
+      next.descriptionCandidate.trim().length >= 3 &&
+      next.lineTotalCandidate === null &&
+      next.monetaryEvidence.lineTotalEvidence === 'MISSING';
+
+    if (!nextIsUnpricedProduct) return false;
+
+    // Se il prodotto precedente è ancora senza prezzo, la riga monetaria resta
+    // una continuazione retroattiva: non la sottraiamo al candidato precedente.
+    const previousNeedsPrice =
+      previousItem !== null &&
+      previousItem.type === 'ARTICLE' &&
+      previousItem.monetaryEvidence.lineTotalEvidence === 'MISSING';
+
+    return !previousNeedsPrice;
+  }
+
+  /**
+   * Associa una riga monetaria isolata al prodotto che la segue conservando
+   * l'ordine originale delle righe e la tracciabilità completa dell'evidenza.
+   */
+  private static mergeLeadingPriceLine(
+    product: ParsedLineItemV2,
+    leadingPrice: RawLineCandidate
+  ): ParsedLineItemV2 {
+    const monetaryEvidence = leadingPrice.monetaryEvidence;
+    const lineTotalConf =
+      monetaryEvidence.lineTotalEvidence === 'CERTAIN'
+        ? 0.95
+        : monetaryEvidence.lineTotalEvidence === 'PLAUSIBLE'
+        ? 0.75
+        : 0.0;
+
+    const unitPriceConf = lineTotalConf;
+    const vatConf = product.vatRate !== null ? product.confidence.vat : 0.0;
+    const overallConf =
+      Math.round(
+        (product.confidence.description * 0.35 +
+          lineTotalConf * 0.35 +
+          product.confidence.quantity * 0.15 +
+          vatConf * 0.15) *
+          100
+      ) / 100;
+
+    const warnings = Array.from(
+      new Set([...leadingPrice.warnings, ...product.warnings])
+    ).filter((w) => w !== 'PRICE_NOT_DETECTED' && w !== 'LOW_CONFIDENCE');
+
+    return {
+      ...product,
+      rawIndices: [leadingPrice.line.rawIndex, ...product.rawIndices],
+      rawText: `${leadingPrice.line.rawText}\n${product.rawText}`,
+      normalizedText: `${leadingPrice.line.text} ${product.normalizedText}`.trim(),
+      unitPrice: leadingPrice.unitPriceCandidate ?? leadingPrice.lineTotalCandidate,
+      lineTotal: leadingPrice.lineTotalCandidate,
+      monetaryEvidence,
+      warnings,
+      reasons: [
+        ...product.reasons,
+        `merged_leading_isolated_price_line_${leadingPrice.line.rawIndex}`,
+      ],
+      rawLines: [
+        {
+          rawIndex: leadingPrice.line.rawIndex,
+          rawText: leadingPrice.line.rawText,
+          normalizedText: leadingPrice.line.text,
+        },
+        ...product.rawLines,
+      ],
+      confidence: {
+        ...product.confidence,
+        unitPrice: unitPriceConf,
+        lineTotal: lineTotalConf,
+        overall: overallConf,
+      },
     };
   }
 

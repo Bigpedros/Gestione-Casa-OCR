@@ -24,8 +24,21 @@ import { extractRegionalMonetaryTokens } from './monetaryTokenParser';
 import { generateShadowAlignmentProposals } from './shadowAlignment';
 import { shouldRunRegionalSecondPass } from './triggerPolicy';
 import { regionalEvidenceStore } from './regionalEvidenceStore';
+import { findAnchoredElectronicBodyTotalCandidate } from './regionalBodyAnchoredTotalRecovery';
+import { recoverExpandedBodyLines } from './expandedBodyLineRecovery';
+import {
+  findDirectTotalAnchor,
+  isPlausibleBodyTotalCandidate,
+  recoverUniqueOrderedPricesByTotal,
+  recoverUniqueSelfClosingTotalAndPrices,
+} from './aggregateRegionalRecovery';
+import {
+  buildPhysicalBodyDocumentRecoveryCandidate,
+  selectBestPhysicalBodyDocumentRecoveryCandidate,
+} from './physicalBodyDocumentRecovery';
 import {
   executeRegionalCropRecognition,
+  createPhysicalCropDataUrl,
   WorkerParameterConfig,
   PRODUCTION_TESSERACT_PARAMETERS,
 } from './regionalWorkerHelper';
@@ -33,6 +46,7 @@ import { receiptParserService } from '../receiptParserService';
 import { TextNormalizationModule } from '../modules/TextNormalizationModule';
 import { ReceiptZoneSegmenter } from '../modules/ReceiptZoneSegmenter';
 import { LineItemParserV2 } from '../modules/LineItemParserV2';
+import { processReceiptImage } from '../../../utils/imagePreprocessing';
 
 export type RegionalSkipReason =
   | 'shadow_mode_disabled'
@@ -339,6 +353,9 @@ export async function runRegionalSecondPassShadow(
     let bodyEvidence: RegionalBodyEvidence | undefined;
     let footerEvidence: RegionalFooterEvidence | undefined;
     let proposals: readonly RegionalAlignmentProposal[] | undefined;
+    let recoveredLines: ReturnType<typeof recoverExpandedBodyLines> | undefined;
+    let recoveredDocument: NonNullable<ReturnType<typeof selectBestPhysicalBodyDocumentRecoveryCandidate>> | undefined;
+    let orderedRecoveredPrices: readonly number[] | undefined;
     let pricesExtractedCount = 0;
     let mergeSuccessCount = 0;
     let totalRecovered: number | null = null;
@@ -432,10 +449,40 @@ export async function runRegionalSecondPassShadow(
 
       // Se il totale non è stato recuperato dal footer, cerchiamo un candidato ad alta confidenza nei token regionali
       if (totalRecovered === null && bodyTokens.length > 0) {
-        const bodyCandidate = findHighConfidenceBodyTotalCandidate(bodyTokens, firstParseDraft);
-        if (bodyCandidate !== null) {
+        let bodyCandidate = findHighConfidenceBodyTotalCandidate(bodyTokens, firstParseDraft);
+
+        if (
+          bodyCandidate !== null &&
+          !isPlausibleBodyTotalCandidate(bodyCandidate.parsedValue, bodyTokens)
+        ) {
+          bodyCandidate = null;
+        }
+
+        // OCR-05B1-B1-P1: anchored electronic BODY recovery.
+        if (bodyCandidate === null) {
+          bodyCandidate = findAnchoredElectronicBodyTotalCandidate(
+            bodyTokens,
+            firstParseDraft,
+            combinedRawText
+          );
+        }
+
+        if (
+          bodyCandidate !== null &&
+          isPlausibleBodyTotalCandidate(bodyCandidate.parsedValue, bodyTokens)
+        ) {
           totalRecovered = bodyCandidate.parsedValue;
           pricesExtractedCount += 1;
+        } else {
+          const directAnchor = findDirectTotalAnchor(
+            [combinedRawText, bodyOcrRes.text, footerEvidence?.rawText ?? '']
+              .filter(Boolean)
+              .join('\n')
+          );
+          if (directAnchor !== null) {
+            totalRecovered = directAnchor;
+            pricesExtractedCount += 1;
+          }
         }
       }
 
@@ -456,6 +503,179 @@ export async function runRegionalSecondPassShadow(
         cropBox: SHADOW_REFERENCE_POLICY.bodyBox,
         rawText: bodyOcrRes.text,
       };
+
+      // OCR-05D — self-closing regional total + prices.
+      // If no trusted total survived but the regional exact monetary evidence
+      // contains exactly one solution where N prices sum to one other token,
+      // recover BOTH total and ordered price vector in one fail-closed step.
+      if (totalRecovered === null) {
+        const selfClosing = recoverUniqueSelfClosingTotalAndPrices(
+          firstParseDraft.lines,
+          bodyTokens
+        );
+        if (selfClosing) {
+          totalRecovered = selfClosing.total;
+          orderedRecoveredPrices = selfClosing.prices;
+          pricesExtractedCount += selfClosing.prices.length + 1;
+          mergeSuccessCount += selfClosing.prices.length;
+        }
+      }
+
+      // OCR-05C — unique ordered price-vector recovery.
+      // Only if ALL official lines are unresolved and exactly one ordered
+      // subset of exact regional tokens closes a trusted total.
+      if (totalRecovered !== null && totalRecovered > 0) {
+        const recoveredVector = recoverUniqueOrderedPricesByTotal(
+          firstParseDraft.lines,
+          bodyTokens,
+          totalRecovered
+        );
+        if (recoveredVector) {
+          orderedRecoveredPrices = recoveredVector;
+          pricesExtractedCount += recoveredVector.length;
+          mergeSuccessCount += recoveredVector.length;
+        }
+      }
+
+      // OCR-05B1-B3-P1 — document-level physical BODY rescue.
+      // Merchant-agnostic and fail-closed:
+      // - official first pass has zero lines and no valid total;
+      // - generate a gentle-contrast derivative of the selected source;
+      // - evaluate three full-width BODY crops with PSM 4;
+      // - accept only candidates whose priced commercial rows close on
+      //   independent cash-minus-change payment evidence within 0.05 EUR.
+      if (
+        documentCategory === 'COMMERCIAL_RECEIPT' &&
+        firstParseDraft.lines.length === 0 &&
+        (firstParseDraft.total.value === null || firstParseDraft.total.value <= 0)
+      ) {
+        const rescueCandidates = [];
+
+        const gentleResult = await processReceiptImage(imageSource, {
+          maxDimension: 2400,
+          variant: 'gentle_contrast',
+          enhanceContrast: true,
+          sharpen: false,
+        });
+
+        const rescueCropSpecs = [
+          { xPct: 0, yPct: 8, widthPct: 100, heightPct: 64 },
+          { xPct: 0, yPct: 12, widthPct: 100, heightPct: 60 },
+          { xPct: 0, yPct: 16, widthPct: 100, heightPct: 56 },
+          { xPct: 0, yPct: 20, widthPct: 100, heightPct: 52 },
+          { xPct: 0, yPct: 24, widthPct: 100, heightPct: 48 },
+          { xPct: 0, yPct: 28, widthPct: 100, heightPct: 44 },
+        ] as const;
+
+        for (const cropSpec of rescueCropSpecs) {
+          const pixelBox = resolveRelativeCropBox(
+            imageWidth,
+            imageHeight,
+            cropSpec
+          );
+          const physicalCrop = await createPhysicalCropDataUrl(
+            gentleResult.processedDataUrl,
+            pixelBox
+          );
+          if (!physicalCrop) continue;
+
+          await worker.setParameters({
+            preserve_interword_spaces: '1',
+            user_defined_dpi: '300',
+            tessedit_pageseg_mode: '4' as any,
+          });
+
+          let rescueText = '';
+          let rescueConfidence = 0;
+          try {
+            const rescueRes = await worker.recognize(physicalCrop);
+            rescueText = rescueRes?.data?.text || '';
+            rescueConfidence = Math.round(rescueRes?.data?.confidence || 0);
+          } finally {
+            await worker.setParameters(
+              restoreParameters ?? PRODUCTION_TESSERACT_PARAMETERS
+            );
+          }
+
+          const rescueNorm = TextNormalizationModule.normalizeToStructuredOcrText(rescueText);
+          const rescueZones = ReceiptZoneSegmenter.segment(rescueNorm);
+          const rescueV2 = LineItemParserV2.parseBody(rescueZones.body);
+
+          const candidate = buildPhysicalBodyDocumentRecoveryCandidate(
+            rescueText,
+            rescueV2.items,
+            rescueConfidence
+          );
+          if (candidate) rescueCandidates.push(candidate);
+        }
+
+        const selectedRescue =
+          selectBestPhysicalBodyDocumentRecoveryCandidate(rescueCandidates);
+
+        if (selectedRescue !== null) {
+          recoveredDocument = selectedRescue;
+          totalRecovered = selectedRescue.total;
+          pricesExtractedCount += selectedRescue.lines.length;
+          mergeSuccessCount += selectedRescue.lines.length;
+        }
+      }
+
+      // OCR-05B1-B2-P1-R2 — physical full-width BODY.
+      const effectiveTotal = totalRecovered ?? firstParseDraft.total.value;
+      const hasUnresolvedOfficialLine = firstParseDraft.lines.some(
+        (line) =>
+          line.lineTotal <= 0 &&
+          line.unitPrice <= 0 &&
+          line.quantity === 1 &&
+          !line.isNegative &&
+          (line.warnings?.includes('PRICE_NOT_DETECTED') ?? false)
+      );
+
+      if (
+        effectiveTotal !== null &&
+        effectiveTotal !== undefined &&
+        effectiveTotal > 0 &&
+        firstParseDraft.lines.length >= 1 &&
+        firstParseDraft.lines.length <= 3 &&
+        hasUnresolvedOfficialLine
+      ) {
+        const expandedBodyBox = {
+          xPct: 0,
+          yPct: 22,
+          widthPct: 100,
+          heightPct: 34,
+        } as const;
+        const expandedPixelBox = resolveRelativeCropBox(imageWidth, imageHeight, expandedBodyBox);
+        const physicalCrop = await createPhysicalCropDataUrl(imageSource, expandedPixelBox);
+
+        if (physicalCrop) {
+          await worker.setParameters({
+            preserve_interword_spaces: '1',
+            user_defined_dpi: '300',
+            tessedit_pageseg_mode: '4' as any,
+          });
+
+          let expandedText = '';
+          try {
+            const expandedRes = await worker.recognize(physicalCrop);
+            expandedText = expandedRes?.data?.text || '';
+          } finally {
+            await worker.setParameters(restoreParameters ?? PRODUCTION_TESSERACT_PARAMETERS);
+          }
+
+          const expandedRecovered = recoverExpandedBodyLines(
+            expandedText,
+            effectiveTotal,
+            firstParseDraft.lines
+          );
+
+          if (expandedRecovered.length > 0) {
+            recoveredLines = expandedRecovered;
+            pricesExtractedCount += expandedRecovered.length;
+            mergeSuccessCount += expandedRecovered.length;
+          }
+        }
+      }
     }
 
     const evidence: RegionalOcrEvidence = {
@@ -464,6 +684,9 @@ export async function runRegionalSecondPassShadow(
       bodyEvidence,
       footerEvidence,
       proposals,
+      recoveredLines,
+      recoveredDocument,
+      orderedRecoveredPrices,
       totalRecovered,
       durationMs: Date.now() - startTime,
     };

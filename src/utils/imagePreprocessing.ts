@@ -8,11 +8,36 @@ export interface ProcessReceiptOptions {
   variant?: ReceiptVariantName;
 }
 
+export interface VariantTelemetry {
+  variant: ReceiptVariantName;
+  width: number;
+  height: number;
+  encodedMimeType: string;
+  encodedSizeBytes: number;
+  encodedSha256: string;
+  pixelSha256: string;
+  processingTimeMs: number;
+}
+
+export interface ReceiptPreprocessingMeta {
+  originalWidth: number;
+  originalHeight: number;
+  decodedWidth?: number;
+  decodedHeight?: number;
+  rotationDegrees?: number;
+  maxDimension?: number;
+  canvasWidth?: number;
+  canvasHeight?: number;
+  canvasOutputMimeType?: string;
+}
+
 export interface ReceiptImageVariant {
   name: ReceiptVariantName;
   dataUrl: string;
   label: string;
   description: string;
+  telemetry?: VariantTelemetry;
+  preprocessingMeta?: ReceiptPreprocessingMeta;
 }
 
 export interface ProcessReceiptResult {
@@ -22,8 +47,16 @@ export interface ProcessReceiptResult {
   height: number;
   originalWidth: number;
   originalHeight: number;
+  decodedWidth?: number;
+  decodedHeight?: number;
+  rotationDegrees?: number;
+  maxDimension?: number;
+  canvasWidth?: number;
+  canvasHeight?: number;
+  canvasOutputMimeType?: string;
   sizeBytes: number;
   variant?: ReceiptVariantName;
+  telemetry?: VariantTelemetry;
 }
 
 export const validateReceiptFile = (file: File): { valid: boolean; error?: string } => {
@@ -79,6 +112,86 @@ export const computeFileHash = async (file: File): Promise<string> => {
 };
 
 /**
+ * Calcola l'hash SHA-256 su un buffer di byte (ArrayBuffer o TypedArray).
+ */
+export const computeBufferSha256 = async (
+  buffer: ArrayBuffer | Uint8Array | Uint8ClampedArray
+): Promise<string> => {
+  try {
+    const u8 =
+      buffer instanceof Uint8Array
+        ? buffer
+        : buffer instanceof ArrayBuffer
+        ? new Uint8Array(buffer)
+        : new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength);
+
+    if (typeof crypto !== 'undefined' && crypto.subtle) {
+      const hashBuffer = await crypto.subtle.digest('SHA-256', u8);
+      const hashArray = Array.from(new Uint8Array(hashBuffer));
+      return hashArray.map((b) => b.toString(16).padStart(2, '0')).join('');
+    }
+    let hash = 0;
+    for (let i = 0; i < u8.length; i += Math.max(1, Math.floor(u8.length / 1000))) {
+      hash = (hash << 5) - hash + u8[i];
+      hash |= 0;
+    }
+    return `hash-buf-${u8.length}-${Math.abs(hash)}`;
+  } catch {
+    return `hash-buf-err`;
+  }
+};
+
+/**
+ * Calcola l'hash SHA-256 su una stringa UTF-8.
+ */
+export const computeStringSha256 = async (text: string): Promise<string> => {
+  try {
+    const encoder = new TextEncoder();
+    const data = encoder.encode(text);
+    return computeBufferSha256(data);
+  } catch {
+    return `hash-str-${text.length}`;
+  }
+};
+
+/**
+ * Calcola l'hash SHA-256 e dimensione in byte del payload binario decodificato da un DataURL base64.
+ * Non calcola l'hash della stringa testuale base64, bensì dei byte effettivi decodificati.
+ */
+export const computeDataUrlBinaryHash = async (
+  dataUrl: string
+): Promise<{ sha256: string; sizeBytes: number }> => {
+  try {
+    if (!dataUrl) {
+      return { sha256: '', sizeBytes: 0 };
+    }
+    const commaIdx = dataUrl.indexOf(',');
+    const base64 = commaIdx >= 0 ? dataUrl.slice(commaIdx + 1).replace(/\s/g, '') : dataUrl;
+
+    let bytes: Uint8Array;
+    if (typeof atob === 'function') {
+      const binStr = atob(base64);
+      bytes = new Uint8Array(binStr.length);
+      for (let i = 0; i < binStr.length; i++) {
+        bytes[i] = binStr.charCodeAt(i);
+      }
+    } else if (typeof (globalThis as any).Buffer !== 'undefined') {
+      const buf = (globalThis as any).Buffer.from(base64, 'base64');
+      bytes = new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength);
+    } else {
+      const encoder = new TextEncoder();
+      bytes = encoder.encode(base64);
+    }
+
+    const sha256 = await computeBufferSha256(bytes);
+    return { sha256, sizeBytes: bytes.byteLength };
+  } catch (err) {
+    console.warn('[imagePreprocessing] Errore calcolo hash binario DataURL:', err);
+    return { sha256: `err-${dataUrl.length}`, sizeBytes: dataUrl.length };
+  }
+};
+
+/**
  * Legge un File o DataURL e restituisce sia l'immagine originale che quella pre-elaborata
  * (ridimensionata, ruotata, con correzione dell'illuminazione locale, contrasto ottimizzato e nitidezza per Tesseract OCR).
  */
@@ -86,6 +199,7 @@ export const processReceiptImage = async (
   fileOrDataUrl: File | string,
   options: ProcessReceiptOptions = {}
 ): Promise<ProcessReceiptResult> => {
+  const startTime = typeof performance !== 'undefined' ? performance.now() : Date.now();
   const {
     maxDimension = 2400,
     rotationDegrees = 0,
@@ -119,8 +233,25 @@ export const processReceiptImage = async (
       height: 1200,
       originalWidth: 800,
       originalHeight: 1200,
+      decodedWidth: 800,
+      decodedHeight: 1200,
+      rotationDegrees,
+      maxDimension,
+      canvasWidth: 800,
+      canvasHeight: 1200,
+      canvasOutputMimeType: 'image/png',
       sizeBytes: fileSizeBytes,
       variant,
+      telemetry: {
+        variant,
+        width: 800,
+        height: 1200,
+        encodedMimeType: 'image/png',
+        encodedSizeBytes: fileSizeBytes,
+        encodedSha256: 'mock-encoded-sha256',
+        pixelSha256: 'mock-pixel-sha256',
+        processingTimeMs: 0,
+      },
     };
   }
 
@@ -210,7 +341,14 @@ export const processReceiptImage = async (
 
   // Se la variante richiesta è 'original', restituisci l'immagine disegnata senza filtri distruttivi
   if (variant === 'original') {
+    const rawImgData = ctx.getImageData(0, 0, canvasWidth, canvasHeight);
+    const pixelSha256 = await computeBufferSha256(rawImgData.data);
     const originalProcessedDataUrl = canvas.toDataURL('image/png');
+    const { sha256: encodedSha256, sizeBytes: encodedSizeBytes } = await computeDataUrlBinaryHash(originalProcessedDataUrl);
+    const processingTimeMs = Math.round(
+      (typeof performance !== 'undefined' ? performance.now() : Date.now()) - startTime
+    );
+
     return {
       originalDataUrl,
       processedDataUrl: originalProcessedDataUrl,
@@ -218,8 +356,25 @@ export const processReceiptImage = async (
       height: canvasHeight,
       originalWidth: origWidth,
       originalHeight: origHeight,
+      decodedWidth: origWidth,
+      decodedHeight: origHeight,
+      rotationDegrees,
+      maxDimension,
+      canvasWidth,
+      canvasHeight,
+      canvasOutputMimeType: 'image/png',
       sizeBytes: fileSizeBytes,
       variant: 'original',
+      telemetry: {
+        variant: 'original',
+        width: canvasWidth,
+        height: canvasHeight,
+        encodedMimeType: 'image/png',
+        encodedSizeBytes,
+        encodedSha256,
+        pixelSha256,
+        processingTimeMs,
+      },
     };
   }
 
@@ -339,7 +494,13 @@ export const processReceiptImage = async (
     console.warn('[imagePreprocessing] Errore filtri Canvas, fallback su immagine originale:', err);
   }
 
+  const finalImgData = ctx.getImageData(0, 0, canvasWidth, canvasHeight);
+  const pixelSha256 = await computeBufferSha256(finalImgData.data);
   const processedDataUrl = canvas.toDataURL('image/png');
+  const { sha256: encodedSha256, sizeBytes: encodedSizeBytes } = await computeDataUrlBinaryHash(processedDataUrl);
+  const processingTimeMs = Math.round(
+    (typeof performance !== 'undefined' ? performance.now() : Date.now()) - startTime
+  );
 
   return {
     originalDataUrl,
@@ -348,8 +509,25 @@ export const processReceiptImage = async (
     height: canvasHeight,
     originalWidth: origWidth,
     originalHeight: origHeight,
+    decodedWidth: origWidth,
+    decodedHeight: origHeight,
+    rotationDegrees,
+    maxDimension,
+    canvasWidth,
+    canvasHeight,
+    canvasOutputMimeType: 'image/png',
     sizeBytes: fileSizeBytes,
     variant,
+    telemetry: {
+      variant,
+      width: canvasWidth,
+      height: canvasHeight,
+      encodedMimeType: 'image/png',
+      encodedSizeBytes,
+      encodedSha256,
+      pixelSha256,
+      processingTimeMs,
+    },
   };
 };
 
@@ -376,6 +554,18 @@ export const createReceiptImageVariants = async (
       dataUrl: origResult.processedDataUrl,
       label: 'Originale (Senza filtri)',
       description: 'Immagine intatta con orientamento e risoluzione ottimali',
+      telemetry: origResult.telemetry,
+      preprocessingMeta: {
+        originalWidth: origResult.originalWidth,
+        originalHeight: origResult.originalHeight,
+        decodedWidth: origResult.decodedWidth,
+        decodedHeight: origResult.decodedHeight,
+        rotationDegrees: origResult.rotationDegrees,
+        maxDimension: origResult.maxDimension,
+        canvasWidth: origResult.canvasWidth,
+        canvasHeight: origResult.canvasHeight,
+        canvasOutputMimeType: origResult.canvasOutputMimeType,
+      },
     });
   } catch (err) {
     console.warn('[createReceiptImageVariants] Errore variante originale:', err);
@@ -394,6 +584,18 @@ export const createReceiptImageVariants = async (
       dataUrl: gentleResult.processedDataUrl,
       label: 'Contrasto Dolce',
       description: 'Miglioramento dinamica e conservazione matrice di punti termica',
+      telemetry: gentleResult.telemetry,
+      preprocessingMeta: {
+        originalWidth: gentleResult.originalWidth,
+        originalHeight: gentleResult.originalHeight,
+        decodedWidth: gentleResult.decodedWidth,
+        decodedHeight: gentleResult.decodedHeight,
+        rotationDegrees: gentleResult.rotationDegrees,
+        maxDimension: gentleResult.maxDimension,
+        canvasWidth: gentleResult.canvasWidth,
+        canvasHeight: gentleResult.canvasHeight,
+        canvasOutputMimeType: gentleResult.canvasOutputMimeType,
+      },
     });
   } catch (err) {
     console.warn('[createReceiptImageVariants] Errore variante gentle_contrast:', err);
@@ -412,6 +614,18 @@ export const createReceiptImageVariants = async (
       dataUrl: sharpResult.processedDataUrl,
       label: 'Nitidezza Calibrata',
       description: 'Filtro di contrasto e sharpening conservativo',
+      telemetry: sharpResult.telemetry,
+      preprocessingMeta: {
+        originalWidth: sharpResult.originalWidth,
+        originalHeight: sharpResult.originalHeight,
+        decodedWidth: sharpResult.decodedWidth,
+        decodedHeight: sharpResult.decodedHeight,
+        rotationDegrees: sharpResult.rotationDegrees,
+        maxDimension: sharpResult.maxDimension,
+        canvasWidth: sharpResult.canvasWidth,
+        canvasHeight: sharpResult.canvasHeight,
+        canvasOutputMimeType: sharpResult.canvasOutputMimeType,
+      },
     });
   } catch (err) {
     console.warn('[createReceiptImageVariants] Errore variante sharpened_light:', err);

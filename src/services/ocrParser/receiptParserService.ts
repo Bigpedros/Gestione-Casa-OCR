@@ -148,6 +148,8 @@ export class ReceiptParserService {
         ...ocrProcess.metadata,
         documentCategory: draft.documentCategory,
         detectedPaymentMethod: draft.paymentMethod?.value || null,
+        detectedTime: draft.time?.value || null,
+        detectedTaxIdentifier: draft.taxIdentifier?.value || null,
         normalizedLines: normResult.normalizedLines,
       } as any,
     });

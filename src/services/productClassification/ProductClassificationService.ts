@@ -11,6 +11,7 @@ import {
 } from '../../repositories';
 import type { Product, ProductAlias, Supplier, OCRReceiptLine, Category, Expense, ExpenseItem } from '../../types';
 import { ProductFingerprintService } from './ProductFingerprint';
+import { DuplicateReceiptDetector } from '../duplicateDetection/DuplicateReceiptDetector';
 import type {
   ReceiptClassificationProposal,
   ClassificationMatchResult,
@@ -20,6 +21,7 @@ import type {
   ConfidenceLevel,
   ConfirmReceiptClassificationParams,
   CreateAccountingRegistrationParams,
+  UpdateAccountingRegistrationParams,
 } from './types';
 
 export class ProductClassificationService {
@@ -739,6 +741,41 @@ export class ProductClassificationService {
       }
     }
 
+    // 3.5. SAFETY CHECK CONTABILE OBBLIGATORIO: Rilevazione Duplicati Scontrino (PATCH DR-1)
+    const duplicateCheckResult = await DuplicateReceiptDetector.detect({
+      ocrProcessId: ocrProc.id,
+      sessionId: session?.id,
+      supplierName: paramSupplierName || ocrProc.detectedSupplier,
+      supplierId: params.supplierId || null,
+      expenseDate: paramExpenseDate || ocrProc.detectedDate,
+      total:
+        typeof paramDocumentTotal === 'number' && paramDocumentTotal > 0
+          ? paramDocumentTotal
+          : ocrProc.detectedTotal,
+      lines:
+        decisions && decisions.length > 0
+          ? decisions.map((d) => ({
+              description: d.description,
+              originalText: d.originalText,
+              quantity: d.quantity,
+              unitPrice: d.unitPrice,
+              lineTotal: d.lineTotal,
+            }))
+          : undefined,
+    });
+
+    if (duplicateCheckResult.matchLevel === 'EXACT_DUPLICATE') {
+      throw new Error(
+        `[DUPLICATE_RECEIPT_EXACT] Impossibile creare la registrazione contabile: scontrino/documento già contabilizzato nella spesa ${duplicateCheckResult.matchedExpenseId}. Motivo: ${duplicateCheckResult.reasons.join('; ')}`
+      );
+    }
+
+    if (duplicateCheckResult.matchLevel === 'PROBABLE_DUPLICATE' && !params.allowProbableDuplicate) {
+      throw new Error(
+        `[DUPLICATE_RECEIPT_PROBABLE] Possibile spesa duplicata rilevata con la spesa ${duplicateCheckResult.matchedExpenseId} (${duplicateCheckResult.reasons.join('; ')}). Per procedere con la registrazione, confermare esplicitamente l'operazione.`
+      );
+    }
+
     let createdProductsCount = 0;
     let createdAliasesCount = 0;
     let createdExpense: Expense | null = null;
@@ -1054,6 +1091,8 @@ export class ProductClassificationService {
             documentSessionId: session?.id || null,
             ocrProcessId: ocrProc.id,
             origin: 'OCR',
+            probableDuplicateOverridden: duplicateCheckResult.matchLevel === 'PROBABLE_DUPLICATE' && params.allowProbableDuplicate ? true : undefined,
+            matchedDuplicateExpenseId: duplicateCheckResult.matchedExpenseId || undefined,
           } as any,
         };
 
@@ -1180,6 +1219,519 @@ export class ProductClassificationService {
     }
 
     return createdExpense;
+  }
+
+  /**
+   * PATCH WR-2: Aggiorna atomicamente una registrazione contabile esistente (stessa Expense).
+   * Mantiene expense.id, rigenera le ExpenseItem corrispondenti e sincronizza OCRProcess e righe.
+   */
+  public async updateAccountingRegistration(
+    params: UpdateAccountingRegistrationParams
+  ): Promise<Expense> {
+    const {
+      expenseId,
+      ocrProcessId,
+      sessionId,
+      paymentMethod = 'card',
+      notes,
+      supplierName: paramSupplierName,
+      expenseDate: paramExpenseDate,
+      documentTotal: paramDocumentTotal,
+      decisions,
+      deletedLineIds,
+    } = params;
+
+    // 1. Verifica esistenza Expense target
+    const targetExpense = await db.expenses.get(expenseId);
+    if (!targetExpense) {
+      throw new Error(`Impossibile aggiornare la registrazione contabile: spesa ${expenseId} non trovata`);
+    }
+
+    // 2. Carica OCRProcess e Session
+    const ocrProc = await ocrProcessRepository.getById(ocrProcessId);
+    if (!ocrProc) {
+      throw new Error(`Processo OCR ${ocrProcessId} non trovato`);
+    }
+
+    let session: DocumentSession | null = null;
+    if (sessionId) {
+      session = (await documentSessionRepository.getById(sessionId)) || null;
+    } else {
+      const allSessions = await documentSessionRepository.getAll();
+      session = allSessions.find((s) => s.ocrProcessId === ocrProcessId) || null;
+    }
+
+    // 3. Controllo duplicati con excludeExpenseId
+    const effectiveSupplierName =
+      paramSupplierName || ocrProc.detectedSupplier || targetExpense.description.replace(/^Scontrino\s*/i, '') || 'Fornitore scontrino';
+    const effectiveExpenseDate = paramExpenseDate || ocrProc.detectedDate || targetExpense.expenseDate;
+    const effectiveDocumentTotal =
+      typeof paramDocumentTotal === 'number' && paramDocumentTotal > 0
+        ? paramDocumentTotal
+        : typeof ocrProc.detectedTotal === 'number' && ocrProc.detectedTotal > 0
+        ? ocrProc.detectedTotal
+        : targetExpense.amount;
+
+    const duplicateCheckResult = await DuplicateReceiptDetector.detect({
+      ocrProcessId: ocrProc.id,
+      sessionId: session?.id,
+      excludeExpenseId: expenseId,
+      supplierName: effectiveSupplierName,
+      supplierId: params.supplierId || targetExpense.supplierId || null,
+      expenseDate: effectiveExpenseDate,
+      total: effectiveDocumentTotal,
+      lines:
+        decisions && decisions.length > 0
+          ? decisions.map((d) => ({
+              description: d.description,
+              originalText: d.originalText,
+              quantity: d.quantity,
+              unitPrice: d.unitPrice,
+              lineTotal: d.lineTotal,
+            }))
+          : undefined,
+    });
+
+    if (duplicateCheckResult.matchLevel === 'EXACT_DUPLICATE') {
+      throw new Error(
+        `[DUPLICATE_RECEIPT_EXACT] Impossibile aggiornare la registrazione contabile: scontrino/documento già contabilizzato in un'ALTRA spesa (${duplicateCheckResult.matchedExpenseId}). Motivo: ${duplicateCheckResult.reasons.join('; ')}`
+      );
+    }
+
+    if (duplicateCheckResult.matchLevel === 'PROBABLE_DUPLICATE' && !params.allowProbableDuplicate) {
+      throw new Error(
+        `[DUPLICATE_RECEIPT_PROBABLE] Possibile spesa duplicata rilevata con la spesa ${duplicateCheckResult.matchedExpenseId} (${duplicateCheckResult.reasons.join('; ')}). Per procedere con l'aggiornamento, confermare esplicitamente l'operazione.`
+      );
+    }
+
+    let createdProductsCount = 0;
+    let createdAliasesCount = 0;
+    let updatedExpense: Expense | null = null;
+
+    // 4. UNICA TRANSAZIONE ATOMICA SU TUTTE LE TABELLE COINVOLTE
+    await db.transaction(
+      'rw',
+      [
+        db.categories,
+        db.documentSessions,
+        db.documentPageSegments,
+        db.attachments,
+        db.ocrProcesses,
+        db.ocrReceiptLines,
+        db.products,
+        db.productAliases,
+        db.suppliers,
+        db.expenses,
+        db.expenseItems,
+        db.auditLogs,
+      ],
+      async () => {
+        // Fornitore
+        let supplierId: string | null = params.supplierId || targetExpense.supplierId || null;
+
+        if (effectiveSupplierName && (!supplierId || supplierId === 'new')) {
+          const supMatch = await supplierRepository.getByNameOrAlias(effectiveSupplierName);
+          if (supMatch) {
+            supplierId = supMatch.id;
+          } else if (effectiveSupplierName.trim()) {
+            const newSup = await supplierRepository.create({
+              name: effectiveSupplierName.trim(),
+              aliases: [],
+              status: 'confirmed',
+            });
+            supplierId = newSup.id;
+          }
+        }
+
+        // Cancellazione righe scontrino eliminate dall'utente
+        if (deletedLineIds && deletedLineIds.length > 0) {
+          for (const lineId of deletedLineIds) {
+            if (!lineId.startsWith('temp-line-')) {
+              await ocrReceiptLineRepository.delete(lineId);
+            }
+          }
+        }
+
+        // Processa decisioni di classificazione prodotti/alias e righe OCR
+        if (decisions && decisions.length > 0) {
+          for (const decision of decisions) {
+            const rawDesc = decision.description || decision.originalText;
+            const normText = ProductFingerprintService.normalizeText(rawDesc);
+            const cleanNormName = ProductFingerprintService.computeCleanNormalizedName(rawDesc);
+
+            let finalProductId: string | null = null;
+
+            if (decision.action === 'link_existing' && decision.productId) {
+              finalProductId = decision.productId;
+
+              const existingAliases = await productAliasRepository.getByProduct(finalProductId);
+              const aliasExists = existingAliases.some(
+                (a) => a.normalizedText === normText || a.originalText.toUpperCase().trim() === rawDesc.toUpperCase().trim()
+              );
+
+              if (!aliasExists && normText.length > 1) {
+                await productAliasRepository.create({
+                  productId: finalProductId,
+                  originalText: decision.originalText || decision.description,
+                  normalizedText: normText,
+                  supplierId: supplierId || null,
+                  confidence: 100,
+                  confirmedByUser: true,
+                });
+                createdAliasesCount++;
+              }
+            } else if (decision.action === 'create_new') {
+              const existingProduct = await productRepository.getByNormalizedName(cleanNormName);
+
+              if (existingProduct) {
+                finalProductId = existingProduct.id;
+              } else {
+                const details = decision.newProductDetails;
+                const newProd = await productRepository.create({
+                  displayName: details?.displayName || decision.description,
+                  normalizedName: cleanNormName,
+                  brand: details?.brand || ProductFingerprintService.extractBrand(rawDesc) || null,
+                  barcode: details?.barcode || ProductFingerprintService.extractBarcode(rawDesc) || null,
+                  unitOfMeasure:
+                    details?.unitOfMeasure ||
+                    ProductFingerprintService.extractUnitOfMeasure(rawDesc).unitOfMeasure ||
+                    null,
+                  categoryId: decision.categoryId || details?.categoryId || null,
+                  subcategoryId: decision.subcategoryId || details?.subcategoryId || null,
+                });
+                finalProductId = newProd.id;
+                createdProductsCount++;
+              }
+
+              const existingAliases = await productAliasRepository.getByProduct(finalProductId);
+              const aliasExists = existingAliases.some(
+                (a) => a.normalizedText === normText || a.originalText.toUpperCase().trim() === rawDesc.toUpperCase().trim()
+              );
+
+              if (!aliasExists && normText.length > 1) {
+                await productAliasRepository.create({
+                  productId: finalProductId,
+                  originalText: decision.originalText || decision.description,
+                  normalizedText: normText,
+                  supplierId: supplierId || null,
+                  confidence: 100,
+                  confirmedByUser: true,
+                });
+                createdAliasesCount++;
+              }
+            }
+
+            if (decision.lineId && !decision.lineId.startsWith('temp-line-')) {
+              const existingLine = await ocrReceiptLineRepository.getById(decision.lineId);
+              const prevMeta = (existingLine?.metadata as Record<string, any>) || {};
+              const cleanWarnings = Array.isArray(prevMeta.warnings)
+                ? prevMeta.warnings.filter(
+                    (w: string) =>
+                      w !== 'PRICE_NOT_DETECTED' &&
+                      w !== 'PRICE_ASSOCIATION_UNCERTAIN' &&
+                      w !== 'VAT_PRICE_AMBIGUOUS' &&
+                      w !== 'DISCOUNT_VALUE_NOT_DETECTED' &&
+                      w !== 'prezzo_riga_non_rilevato'
+                  )
+                : [];
+
+              await ocrReceiptLineRepository.update(decision.lineId, {
+                description: decision.description,
+                quantity: decision.quantity,
+                unitPrice: decision.unitPrice,
+                lineTotal: decision.lineTotal,
+                productId: finalProductId,
+                reviewStatus: 'confirmed',
+                metadata: {
+                  ...prevMeta,
+                  warnings: decision.lineTotal > 0 ? cleanWarnings : prevMeta.warnings,
+                  priceNotDetected: decision.lineTotal > 0 ? false : prevMeta.priceNotDetected,
+                } as any,
+              });
+            } else {
+              await ocrReceiptLineRepository.create({
+                ocrProcessId,
+                originalText: decision.originalText || decision.description,
+                description: decision.description,
+                quantity: decision.quantity,
+                unitPrice: decision.unitPrice,
+                lineTotal: decision.lineTotal,
+                confidence: decision.confidence || 100,
+                reviewStatus: 'confirmed',
+                productId: finalProductId,
+                metadata: {
+                  warnings: [],
+                  priceNotDetected: false,
+                } as any,
+              });
+            }
+          }
+        }
+
+        // Righe scontrino confermate
+        const ocrLines = await ocrReceiptLineRepository.getByOcrProcessId(ocrProc.id);
+        const confirmedLines = ocrLines.filter((l) => l.reviewStatus === 'confirmed');
+        const linesToImport = confirmedLines.length > 0 ? confirmedLines : ocrLines;
+
+        // Regola Ceccotti: Prezzo non rilevato bloccante
+        for (const line of linesToImport) {
+          const lineDesc = line.description || line.originalText || 'Riga articolo';
+          const lineMeta = (line.metadata as Record<string, any>) || {};
+          const lineWarns: string[] = Array.isArray(lineMeta.warnings) ? lineMeta.warnings : [];
+
+          const isModifierOrDiscount =
+            (line.lineTotal && line.lineTotal < 0) ||
+            /SCONTO|PROMO|ABBUONO|COUPON|BUONO|RESO|STORNO|ARROTONDAMENTO/i.test(lineDesc);
+
+          const hasUnresolvedPriceWarning =
+            lineWarns.includes('PRICE_NOT_DETECTED') ||
+            lineWarns.includes('PRICE_ASSOCIATION_UNCERTAIN') ||
+            lineWarns.includes('VAT_PRICE_AMBIGUOUS') ||
+            lineWarns.includes('DISCOUNT_VALUE_NOT_DETECTED') ||
+            lineWarns.includes('prezzo_riga_non_rilevato') ||
+            lineMeta.priceNotDetected === true;
+
+          if (!isModifierOrDiscount && (line.lineTotal <= 0 || line.unitPrice <= 0 || hasUnresolvedPriceWarning)) {
+            if (hasUnresolvedPriceWarning) {
+              throw new Error(
+                `Impossibile aggiornare la registrazione contabile: la riga "${lineDesc}" ha un prezzo non rilevato o ambiguo dall'OCR. Inserisci un prezzo valido prima di confermare.`
+              );
+            }
+          }
+        }
+
+        if (!supplierId && effectiveSupplierName) {
+          const matchedSup = await supplierRepository.getByNameOrAlias(effectiveSupplierName);
+          if (matchedSup) supplierId = matchedSup.id;
+        }
+
+        const expenseDate = effectiveExpenseDate;
+        const d = new Date(expenseDate);
+        const competenceYear = isNaN(d.getFullYear()) ? new Date().getFullYear() : d.getFullYear();
+        const competenceMonth = isNaN(d.getMonth()) ? new Date().getMonth() + 1 : d.getMonth() + 1;
+
+        const lineTotalSum = Math.round(linesToImport.reduce((sum, line) => sum + (line.lineTotal || 0), 0) * 100) / 100;
+        const totalAmount =
+          typeof paramDocumentTotal === 'number' && paramDocumentTotal > 0
+            ? Math.round(paramDocumentTotal * 100) / 100
+            : typeof ocrProc.detectedTotal === 'number' && ocrProc.detectedTotal > 0
+            ? Math.round(ocrProc.detectedTotal * 100) / 100
+            : lineTotalSum > 0
+            ? lineTotalSum
+            : targetExpense.amount;
+
+        // Discrepanza non approvata
+        if (
+          linesToImport.length > 0 &&
+          totalAmount > 0 &&
+          lineTotalSum > 0 &&
+          Math.abs(totalAmount - lineTotalSum) > 0.01 &&
+          !params.allowDiscrepancy
+        ) {
+          const diff = Math.abs(totalAmount - lineTotalSum).toFixed(2);
+          throw new Error(
+            `Discrepanza di € ${diff} tra il totale del documento (€ ${totalAmount.toFixed(2)}) e la somma delle righe (€ ${lineTotalSum.toFixed(2)}). Conferma la discrepanza o modifica gli importi per proseguire.`
+          );
+        }
+
+        // Categorie
+        const allCategories = await categoryRepository.getAll();
+        let mainCategoryId = params.categoryId || targetExpense.categoryId || null;
+        let mainSubcategoryId = params.subcategoryId || targetExpense.subcategoryId || null;
+
+        if (!mainCategoryId) {
+          if (supplierId) {
+            const sup = await supplierRepository.getById(supplierId);
+            if (sup?.defaultCategoryId) {
+              mainCategoryId = sup.defaultCategoryId;
+              mainSubcategoryId = sup.defaultSubcategoryId || null;
+            }
+          }
+          if (!mainCategoryId) {
+            for (const line of linesToImport) {
+              if (line.productId) {
+                const prod = await productRepository.getById(line.productId);
+                if (prod?.categoryId) {
+                  mainCategoryId = prod.categoryId;
+                  mainSubcategoryId = prod.subcategoryId || null;
+                  break;
+                }
+              }
+            }
+          }
+          if (!mainCategoryId) {
+            const defaultCat =
+              allCategories.find((c) => c.code === 'CAT_FOOD' || c.code === 'CAT_MISC') || allCategories[0];
+            mainCategoryId = defaultCat?.id || 'cat-food';
+          }
+        }
+
+        if (!mainSubcategoryId) {
+          const subs = await categoryRepository.getSubcategories(mainCategoryId);
+          mainSubcategoryId = subs[0]?.id || mainCategoryId;
+        }
+
+        const now = new Date().toISOString();
+
+        // 5. Aggiornamento ATOMICO della stessa Expense
+        const previousVersion = (targetExpense.metadata as any)?.version || 1;
+        const updatedExpenseRecord: Expense = {
+          ...targetExpense,
+          supplierId,
+          description: `Scontrino ${effectiveSupplierName}`,
+          amount: totalAmount,
+          expenseDate,
+          paymentDate: expenseDate,
+          competenceMonth,
+          competenceYear,
+          categoryId: mainCategoryId,
+          subcategoryId: mainSubcategoryId,
+          paymentMethod,
+          notes: notes !== undefined ? (notes || undefined) : targetExpense.notes,
+          metadata: {
+            ...targetExpense.metadata,
+            updatedAt: now,
+            version: previousVersion + 1,
+            documentSessionId: session?.id || (targetExpense.metadata as any)?.documentSessionId || null,
+            ocrProcessId: ocrProc.id,
+            origin: 'OCR',
+          } as any,
+        };
+
+        await db.expenses.put(updatedExpenseRecord);
+
+        // 6. Cancellazione e ricreazione atomica degli ExpenseItems
+        const existingItems = await db.expenseItems.where('expenseId').equals(expenseId).toArray();
+        if (existingItems.length > 0) {
+          await db.expenseItems.bulkDelete(existingItems.map((item) => item.id));
+        }
+
+        const decisionMap = new Map(decisions?.map((d) => [d.lineId || d.originalText, d]));
+
+        const newExpenseItems: ExpenseItem[] = linesToImport.map((line, idx) => {
+          const dec = decisionMap.get(line.id) || decisionMap.get(line.originalText);
+          const itemCatId = dec?.categoryId || (line as any).categoryId || mainCategoryId!;
+          const itemSubcatId = dec?.subcategoryId || (line as any).subcategoryId || mainSubcategoryId!;
+
+          return {
+            id: `exp-item-${Date.now()}-${idx}-${Math.random().toString(36).substring(2, 7)}`,
+            expenseId,
+            description: line.description || line.originalText,
+            quantity: line.quantity || 1,
+            unitPrice: line.unitPrice || line.lineTotal || 0,
+            total: line.lineTotal || 0,
+            categoryId: itemCatId,
+            subcategoryId: itemSubcatId,
+            classification: 'necessary',
+            classificationSource: line.reviewStatus === 'modified' ? 'userCorrected' : 'automatic',
+            productId: line.productId || null,
+            ocrReceiptLineId: line.id,
+            metadata: { createdAt: now, updatedAt: now, version: 1 },
+          };
+        });
+
+        if (newExpenseItems.length > 0) {
+          await db.expenseItems.bulkAdd(newExpenseItems);
+        }
+
+        // 7. Aggiorna DocumentSession se presente
+        if (session?.id) {
+          await db.documentSessions.update(session.id, {
+            status: 'completed',
+            expenseId: updatedExpenseRecord.id,
+            updatedAt: now,
+          });
+        }
+
+        // 8. Aggiorna OCRProcess
+        await db.ocrProcesses.update(ocrProc.id, {
+          detectedSupplier: effectiveSupplierName,
+          detectedDate: expenseDate,
+          detectedTotal: totalAmount,
+          expenseId: updatedExpenseRecord.id,
+          status: 'completed',
+          confirmedByUser: true,
+        });
+
+        // 9. Propagazione collegamento allegati
+        const attachmentIdsToLink = new Set<string>();
+        if (ocrProc.attachmentId) {
+          attachmentIdsToLink.add(ocrProc.attachmentId);
+        }
+        if (session?.id) {
+          const sessionSegments = await db.documentPageSegments
+            .where('sessionId')
+            .equals(session.id)
+            .toArray();
+          for (const seg of sessionSegments) {
+            if (seg.attachmentId) {
+              attachmentIdsToLink.add(seg.attachmentId);
+            }
+          }
+          const directSessionAttachments = await db.attachments
+            .where('entityId')
+            .equals(session.id)
+            .toArray();
+          for (const att of directSessionAttachments) {
+            attachmentIdsToLink.add(att.id);
+          }
+        }
+
+        for (const attId of attachmentIdsToLink) {
+          const existingAtt = await db.attachments.get(attId);
+          if (existingAtt) {
+            await db.attachments.update(attId, {
+              entityType: 'expense',
+              entityId: updatedExpenseRecord.id,
+              expenseId: updatedExpenseRecord.id,
+              metadata: {
+                ...existingAtt.metadata,
+                updatedAt: now,
+                version: (existingAtt.metadata?.version || 1) + 1,
+              },
+            });
+          }
+        }
+
+        // 10. Audit Log con action 'update_accounting_registration'
+        await db.auditLogs.add({
+          id: `audit-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+          entityType: 'expense',
+          entityId: updatedExpenseRecord.id,
+          action: 'update_accounting_registration' as any,
+          oldValues: {
+            amount: targetExpense.amount,
+            expenseDate: targetExpense.expenseDate,
+            supplierId: targetExpense.supplierId,
+            description: targetExpense.description,
+            itemsCount: existingItems.length,
+          },
+          newValues: {
+            expenseId: updatedExpenseRecord.id,
+            documentSessionId: session?.id || null,
+            ocrProcessId: ocrProc.id,
+            importedLinesCount: newExpenseItems.length,
+            createdProductsCount,
+            createdAliasesCount,
+            supplierId: updatedExpenseRecord.supplierId || null,
+            supplierName: effectiveSupplierName,
+            amount: updatedExpenseRecord.amount,
+            confirmedByUser: true,
+            origin: 'OCR',
+            timestamp: now,
+          },
+          timestamp: now,
+        });
+
+        updatedExpense = updatedExpenseRecord;
+      }
+    );
+
+    if (!updatedExpense) {
+      throw new Error("Errore durante l'aggiornamento della registrazione contabile: spesa non aggiornata");
+    }
+
+    return updatedExpense;
   }
 }
 

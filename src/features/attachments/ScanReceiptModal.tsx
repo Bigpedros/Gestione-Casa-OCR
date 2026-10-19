@@ -28,6 +28,9 @@ import {
   computeFileHash,
   computeDataUrlBinaryHash,
 } from '../../utils/imagePreprocessing';
+import { processPdfDocument } from '../../services/pdfProcessingService';
+import { receiptParserService } from '../../services/ocrParser';
+import { DuplicateReceiptDetector } from '../../services/duplicateDetection/DuplicateReceiptDetector';
 import {
   documentSessionRepository,
   documentPageSegmentRepository,
@@ -50,6 +53,15 @@ export interface ScanReceiptModalProps {
 
 type WizardStep = 'recovery' | 'source' | 'pages' | 'summary';
 
+export const isMobileDevice = (): boolean => {
+  if (typeof window === 'undefined' || typeof navigator === 'undefined') return false;
+  const ua = navigator.userAgent || '';
+  return (
+    /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(ua) ||
+    (typeof navigator.maxTouchPoints === 'number' && navigator.maxTouchPoints > 1 && /Macintosh/i.test(ua))
+  );
+};
+
 export const ScanReceiptModal: React.FC<ScanReceiptModalProps> = ({
   isOpen,
   onClose,
@@ -61,8 +73,16 @@ export const ScanReceiptModal: React.FC<ScanReceiptModalProps> = ({
   const appendInputRef = useRef<HTMLInputElement>(null);
   const replaceInputRef = useRef<HTMLInputElement>(null);
 
+  // Desktop Webcam state & refs
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const mediaStreamRef = useRef<MediaStream | null>(null);
+  const [isWebcamActive, setIsWebcamActive] = useState<boolean>(false);
+  const [isWebcamStarting, setIsWebcamStarting] = useState<boolean>(false);
+
   // Wizard Navigation
   const [step, setStep] = useState<WizardStep>('source');
+  const stepRef = useRef<WizardStep>('source');
+  stepRef.current = step;
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [infoMsg, setInfoMsg] = useState<string | null>(null);
 
@@ -72,6 +92,8 @@ export const ScanReceiptModal: React.FC<ScanReceiptModalProps> = ({
 
   // Active Document Session state
   const [currentSession, setCurrentSession] = useState<DocumentSession | null>(null);
+  const currentSessionRef = useRef<DocumentSession | null>(null);
+  currentSessionRef.current = currentSession;
   const [segments, setSegments] = useState<DocumentPageSegment[]>([]);
   const [attachmentsMap, setAttachmentsMap] = useState<Record<string, Attachment>>({});
   const [processedPreviews, setProcessedPreviews] = useState<Record<string, string>>({});
@@ -93,8 +115,43 @@ export const ScanReceiptModal: React.FC<ScanReceiptModalProps> = ({
   const [confirmDeleteDraftId, setConfirmDeleteDraftId] = useState<string | null>(null);
   const [confirmDeleteCurrent, setConfirmDeleteCurrent] = useState<boolean>(false);
 
+  // Stop all active webcam tracks
+  const stopWebcam = useCallback(() => {
+    if (mediaStreamRef.current) {
+      mediaStreamRef.current.getTracks().forEach((track) => {
+        try {
+          track.stop();
+        } catch {
+          // ignore track stop error
+        }
+      });
+      mediaStreamRef.current = null;
+    }
+    if (videoRef.current) {
+      videoRef.current.srcObject = null;
+    }
+    setIsWebcamActive(false);
+    setIsWebcamStarting(false);
+  }, []);
+
+  // Cleanup webcam stream on unmount
+  useEffect(() => {
+    return () => {
+      stopWebcam();
+    };
+  }, [stopWebcam]);
+
+  // Ensure video element receives stream when ready
+  useEffect(() => {
+    if (isWebcamActive && mediaStreamRef.current && videoRef.current) {
+      videoRef.current.srcObject = mediaStreamRef.current;
+      videoRef.current.play().catch(() => {});
+    }
+  }, [isWebcamActive]);
+
   // Reset internal state
   const resetState = useCallback(() => {
+    stopWebcam();
     setStep('source');
     setErrorMsg(null);
     setInfoMsg(null);
@@ -110,7 +167,7 @@ export const ScanReceiptModal: React.FC<ScanReceiptModalProps> = ({
     setZoomedSegment(null);
     setConfirmDeleteDraftId(null);
     setConfirmDeleteCurrent(false);
-  }, []);
+  }, [stopWebcam]);
 
   // Fetch draft thumbnails helper
   const loadDraftThumbnails = async (drafts: DocumentSession[]) => {
@@ -138,18 +195,21 @@ export const ScanReceiptModal: React.FC<ScanReceiptModalProps> = ({
       const drafts = await documentSessionRepository.getDraftSessions();
       setDraftSessions(drafts);
 
-      if (drafts.length > 0 && !currentSession) {
-        await loadDraftThumbnails(drafts);
-        setStep('recovery');
-      } else if (!currentSession) {
-        setStep('source');
+      // Only alter wizard step if we are still at initial step and no session has started
+      if ((stepRef.current === 'source' || stepRef.current === 'recovery') && !currentSessionRef.current) {
+        if (drafts.length > 0) {
+          await loadDraftThumbnails(drafts);
+          setStep('recovery');
+        } else {
+          setStep('source');
+        }
       }
     } catch (err: any) {
       setErrorMsg(err?.message || 'Errore nel caricamento delle bozze');
     } finally {
       setIsLoading(false);
     }
-  }, [currentSession]);
+  }, []);
 
   useEffect(() => {
     if (isOpen) {
@@ -157,7 +217,7 @@ export const ScanReceiptModal: React.FC<ScanReceiptModalProps> = ({
     } else {
       resetState();
     }
-  }, [isOpen, checkForDrafts, resetState]);
+  }, [isOpen]);
 
   // Load active session segments & attachments from Dexie
   const refreshSessionData = useCallback(async (sessionId: string) => {
@@ -181,12 +241,16 @@ export const ScanReceiptModal: React.FC<ScanReceiptModalProps> = ({
             attMap[seg.id] = att;
             if (att.storageKey && !att.mimeType.includes('pdf')) {
               try {
-                const processed = await processReceiptImage(att.storageKey, {
-                  rotationDegrees: seg.rotationDegrees,
-                  enhanceContrast: true,
-                  sharpen: true,
-                });
-                prevMap[seg.id] = processed.processedDataUrl;
+                if (updatedSession?.metadata?.isTextNative) {
+                  prevMap[seg.id] = att.storageKey;
+                } else {
+                  const processed = await processReceiptImage(att.storageKey, {
+                    rotationDegrees: seg.rotationDegrees,
+                    enhanceContrast: true,
+                    sharpen: true,
+                  });
+                  prevMap[seg.id] = processed.processedDataUrl;
+                }
               } catch {
                 prevMap[seg.id] = att.storageKey;
               }
@@ -263,9 +327,10 @@ export const ScanReceiptModal: React.FC<ScanReceiptModalProps> = ({
     setErrorMsg(null);
     setInfoMsg(null);
 
-    try {
-      let session = currentSession;
+    const isNewSession = !currentSession;
+    let session = currentSession;
 
+    try {
       // Determine initial modes
       const firstFile = files[0];
       const isFirstPdf = isPdf || firstFile.type === 'application/pdf' || firstFile.name.endsWith('.pdf');
@@ -300,6 +365,7 @@ export const ScanReceiptModal: React.FC<ScanReceiptModalProps> = ({
           },
         });
 
+        currentSessionRef.current = session;
         setCurrentSession(session);
         setProcessingMode(initialProcessingMode);
         setDocumentTitle(defaultTitle);
@@ -321,10 +387,20 @@ export const ScanReceiptModal: React.FC<ScanReceiptModalProps> = ({
 
         const fileHash = await computeFileHash(file);
 
-        // Check if another active session already exists for this document
-        const activeExistingSession = await documentSessionRepository.findActiveSessionByFileHash(fileHash, session.id);
-        if (activeExistingSession) {
-          setErrorMsg(`Documento "${file.name}" è già in lavorazione nella sessione attiva (${activeExistingSession.id}). Impossibile creare una sessione duplicata.`);
+        // Preflight deterministico su fileHash: rileva sessioni attive, duplicati esatti storici e allegati orphan
+        const preflight = await DuplicateReceiptDetector.preflightFileHash(fileHash, session.id);
+
+        if (preflight.action === 'ACTIVE_SESSION') {
+          setErrorMsg(
+            preflight.userMessage ||
+              `Documento "${file.name}" è già in lavorazione nella sessione attiva (${preflight.activeSession?.id}). Impossibile creare una sessione duplicata.`
+          );
+          duplicateCount++;
+          continue;
+        }
+
+        if (preflight.action === 'EXACT_DUPLICATE') {
+          setErrorMsg(preflight.userMessage || 'Questo documento risulta già registrato.');
           duplicateCount++;
           continue;
         }
@@ -336,6 +412,8 @@ export const ScanReceiptModal: React.FC<ScanReceiptModalProps> = ({
           continue;
         }
 
+        const isFilePdf = isPdf || file.type === 'application/pdf' || file.name.endsWith('.pdf');
+
         // Read file contents
         const dataUrl = await new Promise<string>((resolve, reject) => {
           const reader = new FileReader();
@@ -346,62 +424,346 @@ export const ScanReceiptModal: React.FC<ScanReceiptModalProps> = ({
 
         const persistedDataHash = await computeDataUrlBinaryHash(dataUrl);
 
-        // Save Attachment
-        const attachment = await attachmentRepository.create({
-          entityType: 'unlinked',
-          entityId: session.id,
-          fileName: file.name,
-          description: `Pagina ${nextSeqIndex + 1} per ${session.id}`,
-          mimeType: file.type || (file.name.endsWith('.pdf') ? 'application/pdf' : 'image/jpeg'),
-          sizeBytes: file.size,
-          storageKey: dataUrl,
-          fileHash,
-          status: 'active',
-        });
+        if (isFilePdf) {
+          // --- PERCORSO PDF LOCALE ---
+          setInfoMsg('Analisi PDF in corso...');
 
-        // Save PageSegment
-        await documentPageSegmentRepository.create({
-          sessionId: session.id,
-          sequenceIndex: nextSeqIndex,
-          attachmentId: attachment.id,
-          originalFileName: file.name,
-          originalMimeType: file.type || (file.name.endsWith('.pdf') ? 'application/pdf' : 'image/jpeg'),
-          rotationDegrees: 0,
-          segmentMode: session.processingMode === 'longReceipt' ? 'overlappingSegment' : 'page',
-          fileHash,
-          processingStatus: 'pending',
-          metadata: {
-            acquisitionSource: sourceInfo.acquisitionSource,
-            inputAccept: sourceInfo.inputAccept,
-            hasCaptureAttribute: sourceInfo.hasCaptureAttribute ?? false,
-            isMultiple: sourceInfo.isMultiple ?? false,
-            originalFileSha256: fileHash,
-            originalFileSizeBytes: file.size,
-            originalFileMimeType: file.type || (file.name.endsWith('.pdf') ? 'application/pdf' : 'image/jpeg'),
+          // Save or reuse original PDF as primary Attachment
+          let originalPdfAttachment: Attachment;
+          if (preflight.action === 'REUSE_ORPHAN_ATTACHMENT' && preflight.existingAttachment) {
+            originalPdfAttachment = await attachmentRepository.update(preflight.existingAttachment.id, {
+              entityType: 'unlinked',
+              entityId: session.id,
+              fileName: file.name,
+              description: `Documento PDF originale per ${session.id}`,
+              mimeType: 'application/pdf',
+              sizeBytes: file.size,
+              storageKey: dataUrl,
+              status: 'active',
+            });
+          } else {
+            originalPdfAttachment = await attachmentRepository.create({
+              entityType: 'unlinked',
+              entityId: session.id,
+              fileName: file.name,
+              description: `Documento PDF originale per ${session.id}`,
+              mimeType: 'application/pdf',
+              sizeBytes: file.size,
+              storageKey: dataUrl,
+              fileHash,
+              status: 'active',
+            });
+          }
+
+          // Process PDF: extract structured text + render pages to canvas/images
+          const processedPdf = await processPdfDocument(file, {
+            fileName: file.name,
+            onProgress: (msg) => setInfoMsg(msg),
+          });
+
+          // Create page segments for each rendered page
+          for (let pIdx = 0; pIdx < processedPdf.pages.length; pIdx++) {
+            const pageData = processedPdf.pages[pIdx];
+            const pageImageDataUrl = pageData.imageDataUrl || dataUrl;
+            const pageImageHash = `${fileHash}-p${pageData.pageNumber}`;
+
+            // Check if page attachment already exists (orphan reuse)
+            const existingPageAtt = await attachmentRepository.getByFileHash(pageImageHash);
+            let pageAttachment: Attachment;
+            if (existingPageAtt) {
+              pageAttachment = await attachmentRepository.update(existingPageAtt.id, {
+                entityType: 'unlinked',
+                entityId: session.id,
+                fileName: `${file.name} (Pagina ${pageData.pageNumber}).jpg`,
+                description: `Pagina ${pageData.pageNumber} di ${processedPdf.totalPages} per ${session.id}`,
+                mimeType: 'image/jpeg',
+                sizeBytes: Math.round(pageImageDataUrl.length * 0.75),
+                storageKey: pageImageDataUrl,
+                status: 'active',
+              });
+            } else {
+              pageAttachment = await attachmentRepository.create({
+                entityType: 'unlinked',
+                entityId: session.id,
+                fileName: `${file.name} (Pagina ${pageData.pageNumber}).jpg`,
+                description: `Pagina ${pageData.pageNumber} di ${processedPdf.totalPages} per ${session.id}`,
+                mimeType: 'image/jpeg',
+                sizeBytes: Math.round(pageImageDataUrl.length * 0.75),
+                storageKey: pageImageDataUrl,
+                fileHash: pageImageHash,
+                status: 'active',
+              });
+            }
+
+            // Save segment for this page
+            await documentPageSegmentRepository.create({
+              sessionId: session.id,
+              sequenceIndex: nextSeqIndex,
+              attachmentId: pageAttachment.id,
+              originalFileName: `${file.name} (Pag. ${pageData.pageNumber})`,
+              originalMimeType: 'image/jpeg',
+              rotationDegrees: 0,
+              segmentMode: session.processingMode === 'longReceipt' ? 'overlappingSegment' : 'page',
+              fileHash: pageImageHash,
+              processingStatus: 'pending',
+              metadata: {
+                acquisitionSource: sourceInfo.acquisitionSource,
+                inputAccept: sourceInfo.inputAccept,
+                hasCaptureAttribute: sourceInfo.hasCaptureAttribute ?? false,
+                isMultiple: sourceInfo.isMultiple ?? false,
+                originalPdfAttachmentId: originalPdfAttachment.id,
+                pageNumber: pageData.pageNumber,
+                totalPages: processedPdf.totalPages,
+                isTextNative: processedPdf.isTextNative,
+                pageText: pageData.pageText,
+                pageWidth: pageData.width,
+                pageHeight: pageData.height,
+                originalFileSha256: fileHash,
+                originalFileSizeBytes: file.size,
+                originalFileMimeType: 'application/pdf',
+                originalFileName: file.name,
+                originalFileLastModified: file.lastModified,
+                persistedDataUrlSha256: persistedDataHash.sha256,
+                persistedDataUrlLength: dataUrl.length,
+                persistedDataUrlSizeBytes: persistedDataHash.sizeBytes,
+              },
+            });
+
+            nextSeqIndex++;
+            addedCount++;
+          }
+
+          // Update session metadata with PDF flags and extracted raw text
+          await documentSessionRepository.update(session.id, {
+            pageCount: nextSeqIndex,
+            metadata: {
+              ...session.metadata,
+              originalPdfAttachmentId: originalPdfAttachment.id,
+              isTextNative: processedPdf.isTextNative,
+              pdfRawText: processedPdf.extractedRawText,
+              originalFileName: file.name,
+              originalFileSize: file.size,
+            },
+          });
+        } else {
+          // --- PERCORSO IMMAGINE NORMALE ---
+          // Save or reuse Attachment
+          let attachment: Attachment;
+          if (preflight.action === 'REUSE_ORPHAN_ATTACHMENT' && preflight.existingAttachment) {
+            attachment = await attachmentRepository.update(preflight.existingAttachment.id, {
+              entityType: 'unlinked',
+              entityId: session.id,
+              fileName: file.name,
+              description: `Pagina ${nextSeqIndex + 1} per ${session.id}`,
+              mimeType: file.type || 'image/jpeg',
+              sizeBytes: file.size,
+              storageKey: dataUrl,
+              status: 'active',
+            });
+          } else {
+            attachment = await attachmentRepository.create({
+              entityType: 'unlinked',
+              entityId: session.id,
+              fileName: file.name,
+              description: `Pagina ${nextSeqIndex + 1} per ${session.id}`,
+              mimeType: file.type || 'image/jpeg',
+              sizeBytes: file.size,
+              storageKey: dataUrl,
+              fileHash,
+              status: 'active',
+            });
+          }
+
+          // Save PageSegment
+          await documentPageSegmentRepository.create({
+            sessionId: session.id,
+            sequenceIndex: nextSeqIndex,
+            attachmentId: attachment.id,
             originalFileName: file.name,
-            originalFileLastModified: file.lastModified,
-            persistedDataUrlSha256: persistedDataHash.sha256,
-            persistedDataUrlLength: dataUrl.length,
-            persistedDataUrlSizeBytes: persistedDataHash.sizeBytes,
-          },
-        });
+            originalMimeType: file.type || 'image/jpeg',
+            rotationDegrees: 0,
+            segmentMode: session.processingMode === 'longReceipt' ? 'overlappingSegment' : 'page',
+            fileHash,
+            processingStatus: 'pending',
+            metadata: {
+              acquisitionSource: sourceInfo.acquisitionSource,
+              inputAccept: sourceInfo.inputAccept,
+              hasCaptureAttribute: sourceInfo.hasCaptureAttribute ?? false,
+              isMultiple: sourceInfo.isMultiple ?? false,
+              originalFileSha256: fileHash,
+              originalFileSizeBytes: file.size,
+              originalFileMimeType: file.type || 'image/jpeg',
+              originalFileName: file.name,
+              originalFileLastModified: file.lastModified,
+              persistedDataUrlSha256: persistedDataHash.sha256,
+              persistedDataUrlLength: dataUrl.length,
+              persistedDataUrlSizeBytes: persistedDataHash.sizeBytes,
+            },
+          });
 
-        nextSeqIndex++;
-        addedCount++;
+          nextSeqIndex++;
+          addedCount++;
+        }
       }
 
-      if (duplicateCount > 0) {
-        setInfoMsg(
-          `${duplicateCount} file ignorato/i perché già presente/i in questa sessione.`
-        );
-      } else if (addedCount > 0) {
-        setInfoMsg(`${addedCount} file acquisito/i con successo.`);
-      }
+      if (isNewSession && addedCount === 0) {
+        // Nessun file valido o acquisito: ripulisci la sessione vuota creata per questo tentativo
+        await documentSessionRepository.delete(session.id);
+        currentSessionRef.current = null;
+        setCurrentSession(null);
+        if (duplicateCount > 0 && !errorMsg) {
+          setInfoMsg(`${duplicateCount} file ignorato/i perché duplicato/i.`);
+        }
+      } else {
+        if (duplicateCount > 0 && addedCount > 0) {
+          setInfoMsg(
+            `${addedCount} file acquisito/i (${duplicateCount} duplicato/i ignorato/i).`
+          );
+        } else if (addedCount > 0) {
+          setInfoMsg(`${addedCount} file acquisito/i con successo.`);
+        }
 
-      await refreshSessionData(session.id);
-      setStep('pages');
+        await refreshSessionData(session.id);
+        setStep('pages');
+      }
     } catch (err: any) {
+      if (isNewSession && session?.id) {
+        try {
+          const segs = await documentPageSegmentRepository.getBySessionId(session.id);
+          if (segs.length === 0) {
+            await documentSessionRepository.delete(session.id);
+            currentSessionRef.current = null;
+            setCurrentSession(null);
+          }
+        } catch {
+          // cleanup silent fallback
+        }
+      }
       setErrorMsg(err?.message || 'Errore durante l\'acquisizione del file');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // Start desktop webcam stream
+  const startDesktopWebcam = async () => {
+    setErrorMsg(null);
+
+    if (
+      typeof navigator === 'undefined' ||
+      !navigator.mediaDevices ||
+      typeof navigator.mediaDevices.getUserMedia !== 'function'
+    ) {
+      setErrorMsg('La fotocamera non è disponibile in questo browser.');
+      return;
+    }
+
+    setIsWebcamActive(true);
+    setIsWebcamStarting(true);
+
+    try {
+      const constraints = {
+        audio: false,
+        video: {
+          width: { ideal: 1920 },
+          height: { ideal: 1080 },
+          facingMode: 'environment',
+        },
+      };
+
+      let stream: MediaStream;
+      try {
+        stream = await navigator.mediaDevices.getUserMedia(constraints);
+      } catch (err: any) {
+        if (err?.name === 'OverconstrainedError' || err?.name === 'ConstraintNotSatisfiedError') {
+          stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+        } else {
+          throw err;
+        }
+      }
+
+      mediaStreamRef.current = stream;
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        try {
+          await videoRef.current.play();
+        } catch {
+          // ignore play interruption
+        }
+      }
+      setIsWebcamStarting(false);
+    } catch (err: any) {
+      stopWebcam();
+      const errName = err?.name || '';
+      if (errName === 'NotAllowedError' || errName === 'PermissionDeniedError') {
+        setErrorMsg(
+          "Permesso fotocamera negato. Consenti l'accesso alla fotocamera oppure seleziona un'immagine dal dispositivo."
+        );
+      } else if (errName === 'NotFoundError' || errName === 'DevicesNotFoundError') {
+        setErrorMsg('Nessuna fotocamera disponibile.');
+      } else if (errName === 'NotReadableError' || errName === 'TrackStartError') {
+        setErrorMsg(
+          "La fotocamera non può essere utilizzata. Potrebbe essere già in uso da un'altra applicazione."
+        );
+      } else {
+        setErrorMsg(
+          err?.message || 'Impossibile accedere alla fotocamera. Seleziona un\'immagine dal dispositivo.'
+        );
+      }
+    }
+  };
+
+  // Route camera action: native file capture on mobile, live getUserMedia on desktop
+  const handleCameraClick = () => {
+    setErrorMsg(null);
+    if (isMobileDevice()) {
+      cameraInputRef.current?.click();
+    } else {
+      startDesktopWebcam();
+    }
+  };
+
+  // Capture current frame from live desktop webcam
+  const handleCaptureFrame = async () => {
+    const video = videoRef.current;
+    if (!video) return;
+
+    try {
+      setIsLoading(true);
+      const canvas = document.createElement('canvas');
+      const width = video.videoWidth || 1280;
+      const height = video.videoHeight || 720;
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext('2d');
+      if (ctx) {
+        ctx.drawImage(video, 0, 0, width, height);
+      }
+
+      const blob = await new Promise<Blob | null>((resolve) => {
+        canvas.toBlob((b) => resolve(b), 'image/jpeg', 0.95);
+      });
+
+      if (!blob) {
+        throw new Error('Impossibile acquisire il frame dalla fotocamera.');
+      }
+
+      const fileName = `receipt-camera-${Date.now()}.jpg`;
+      const file = new File([blob], fileName, {
+        type: 'image/jpeg',
+        lastModified: Date.now(),
+      });
+
+      stopWebcam();
+
+      await handleFilesIngest([file], false, {
+        acquisitionSource: 'camera_direct',
+        inputAccept: 'image/*',
+        hasCaptureAttribute: false,
+        isMultiple: false,
+      });
+    } catch (err: any) {
+      setErrorMsg(err?.message || 'Errore durante lo scatto');
     } finally {
       setIsLoading(false);
     }
@@ -576,12 +938,50 @@ export const ScanReceiptModal: React.FC<ScanReceiptModalProps> = ({
 
       // 2. Create single OCRProcess linked to session
       const firstSegment = segments[0];
-      const ocrProc = await ocrProcessRepository.create({
-        attachmentId: firstSegment.attachmentId,
-        status: 'pending',
-        confirmationRequired: true,
-        confirmedByUser: false,
-      });
+      const isTextNative = Boolean(currentSession.metadata?.isTextNative);
+      const pdfRawText = (currentSession.metadata?.pdfRawText as string) || '';
+
+      let ocrProc: any;
+
+      if (isTextNative && pdfRawText.trim().length > 0) {
+        // PERCORSO A: PDF Digitale con testo nativo utilizzabile (Bypass OCR Tesseract)
+        ocrProc = await ocrProcessRepository.create({
+          attachmentId: firstSegment.attachmentId,
+          status: 'completed',
+          rawText: pdfRawText,
+          confidence: 100,
+          processedAt: now,
+          confirmationRequired: true,
+          confirmedByUser: false,
+          metadata: {
+            source: 'pdf_native_text',
+            pageCount: segments.length,
+            originalFileName: (currentSession.metadata?.originalFileName as string) || documentTitle,
+            originalPdfAttachmentId: currentSession.metadata?.originalPdfAttachmentId,
+          },
+        });
+
+        // Esegui parsing del testo con il parser ufficiale di produzione
+        try {
+          await receiptParserService.parse(ocrProc.id);
+        } catch (parseErr) {
+          console.warn('[ScanReceiptModal] Parsing automatico PDF fallito (sarà possibile completamento manuale):', parseErr);
+        }
+      } else {
+        // PERCORSO B: PDF Scansito / Immagini (invia alla pipeline OCR Tesseract)
+        ocrProc = await ocrProcessRepository.create({
+          attachmentId: firstSegment.attachmentId,
+          status: 'pending',
+          confirmationRequired: true,
+          confirmedByUser: false,
+          metadata: {
+            source: currentSession.sourceMode === 'pdf' ? 'pdf_rendered_ocr' : 'image_ocr',
+            pageCount: segments.length,
+            originalFileName: (currentSession.metadata?.originalFileName as string) || documentTitle,
+            originalPdfAttachmentId: currentSession.metadata?.originalPdfAttachmentId,
+          },
+        });
+      }
 
       // Link OCRProcess ID to session
       await documentSessionRepository.update(currentSession.id, {
@@ -661,11 +1061,13 @@ export const ScanReceiptModal: React.FC<ScanReceiptModalProps> = ({
       <Modal
         isOpen={isOpen}
         onClose={() => {
+          // Stop webcam stream if running
+          stopWebcam();
           // Default close button (X) preserves draft session in Dexie
           onClose();
         }}
         title="Acquisisci documento di spesa"
-        subtitle={getStepSubtitle()}
+        subtitle={isWebcamActive ? 'Anteprima fotocamera live — Inquadra e scatta' : getStepSubtitle()}
         maxWidth="2xl"
       >
         {/* Hidden inputs for camera, gallery, pdf, append, replace */}
@@ -869,7 +1271,59 @@ export const ScanReceiptModal: React.FC<ScanReceiptModalProps> = ({
           </div>
         )}
 
-        {step === 'source' && (
+        {step === 'source' && isWebcamActive && (
+          /* SCREEN: Live Desktop Webcam View */
+          <div className="py-2 space-y-4">
+            <div className="flex items-center justify-between pb-2 border-b border-slate-200 dark:border-slate-800">
+              <div className="flex items-center gap-2">
+                <Camera className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />
+                <h4 className="text-sm font-bold text-slate-900 dark:text-white">
+                  Anteprima Fotocamera
+                </h4>
+              </div>
+              <span className="text-xs text-slate-500 dark:text-slate-400">
+                Posiziona il documento davanti alla fotocamera
+              </span>
+            </div>
+
+            <div className="relative w-full rounded-2xl bg-slate-950 overflow-hidden flex items-center justify-center min-h-[300px] max-h-[55vh] border border-slate-800 shadow-inner">
+              <video
+                ref={videoRef}
+                autoPlay
+                playsInline
+                muted
+                className="w-full h-full max-h-[55vh] object-contain"
+              />
+              {isWebcamStarting && (
+                <div className="absolute inset-0 bg-slate-950/80 flex flex-col items-center justify-center gap-3 text-white">
+                  <RefreshCw className="w-8 h-8 text-indigo-400 animate-spin" />
+                  <span className="text-xs font-semibold">Avvio fotocamera in corso...</span>
+                </div>
+              )}
+            </div>
+
+            <div className="flex items-center justify-between pt-3 border-t border-slate-200 dark:border-slate-800">
+              <Button
+                type="button"
+                variant="secondary"
+                onClick={stopWebcam}
+              >
+                Annulla
+              </Button>
+              <Button
+                type="button"
+                variant="primary"
+                onClick={handleCaptureFrame}
+                disabled={isWebcamStarting || isLoading}
+                icon={<Camera className="w-4 h-4" />}
+              >
+                Scatta
+              </Button>
+            </div>
+          </div>
+        )}
+
+        {step === 'source' && !isWebcamActive && (
           /* SCREEN: Choose Source */
           <div className="py-4 space-y-6">
             <div className="text-center max-w-md mx-auto space-y-2">
@@ -880,7 +1334,7 @@ export const ScanReceiptModal: React.FC<ScanReceiptModalProps> = ({
                 Come desideri acquisire il documento?
               </h4>
               <p className="text-xs text-slate-500 dark:text-slate-400">
-                Puoi scattare foto da smartphone/tablet, selezionare immagini singole o multiple, oppure caricare file PDF.
+                Puoi scattare foto con webcam o smartphone, selezionare immagini singole o multiple, oppure caricare file PDF.
               </p>
             </div>
 
@@ -888,10 +1342,7 @@ export const ScanReceiptModal: React.FC<ScanReceiptModalProps> = ({
               {/* Camera Action */}
               <button
                 type="button"
-                onClick={() => {
-                  setErrorMsg(null);
-                  cameraInputRef.current?.click();
-                }}
+                onClick={handleCameraClick}
                 className="flex flex-col items-center justify-center p-5 bg-gradient-to-b from-indigo-50/70 to-white dark:from-slate-800 dark:to-slate-900 border-2 border-dashed border-indigo-200 dark:border-indigo-800 hover:border-indigo-500 dark:hover:border-indigo-500 rounded-3xl transition-all cursor-pointer group text-center space-y-2.5"
               >
                 <div className="w-11 h-11 rounded-2xl bg-indigo-600 text-white flex items-center justify-center group-hover:scale-110 transition-transform shadow-md">
@@ -902,7 +1353,7 @@ export const ScanReceiptModal: React.FC<ScanReceiptModalProps> = ({
                     Scatta con Fotocamera
                   </span>
                   <span className="block text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
-                    Smartphone o Tablet
+                    Webcam PC o Smartphone
                   </span>
                 </div>
               </button>
@@ -1039,6 +1490,28 @@ export const ScanReceiptModal: React.FC<ScanReceiptModalProps> = ({
                 <div>
                   <span className="font-bold block mb-0.5">Istruzione Scontrino Lungo:</span>
                   Includi in ciascuna nuova foto una piccola parte finale della foto precedente per permettere la corretta unione sequenziale delle sezioni.
+                </div>
+              </div>
+            )}
+
+            {/* Digital PDF Detected Banner */}
+            {Boolean(currentSession.metadata?.isTextNative) && (
+              <div className="flex items-start gap-3 p-3.5 bg-emerald-50/80 dark:bg-emerald-950/40 rounded-2xl border border-emerald-200 dark:border-emerald-900 text-xs text-emerald-800 dark:text-emerald-200">
+                <Sparkles className="w-5 h-5 text-emerald-600 shrink-0 mt-0.5" />
+                <div>
+                  <span className="font-bold block mb-0.5">Testo digitale rilevato nel PDF:</span>
+                  Questo documento PDF contiene testo digitale nativo. I dati delle righe e i totali verranno estratti direttamente con precisione assoluta senza richiedere scansione OCR.
+                </div>
+              </div>
+            )}
+
+            {/* Scanned PDF Banner */}
+            {currentSession.sourceMode === 'pdf' && !currentSession.metadata?.isTextNative && (
+              <div className="flex items-start gap-3 p-3.5 bg-blue-50/80 dark:bg-blue-950/40 rounded-2xl border border-blue-200 dark:border-blue-900 text-xs text-blue-800 dark:text-blue-200">
+                <FileText className="w-5 h-5 text-blue-600 shrink-0 mt-0.5" />
+                <div>
+                  <span className="font-bold block mb-0.5">Documento PDF scansito:</span>
+                  Le pagine del PDF sono state renderizzate in alta risoluzione e verranno elaborate tramite il motore di riconoscimento OCR.
                 </div>
               </div>
             )}

@@ -25,6 +25,7 @@ import type {
   OCRProcess,
   AuditLogEntry,
   DocumentSession,
+  DocumentSessionStatus,
   DocumentPageSegment,
   DocumentProcessingMode,
   OCRReceiptLine,
@@ -546,6 +547,9 @@ export const categoryRepository = {
 export const attachmentRepository = {
   getAll: () => db.attachments.where('status').equals('active').reverse().sortBy('createdAt'),
   getById: (id: string) => db.attachments.get(id),
+  getByFileHash: (fileHash: string) => db.attachments.where('fileHash').equals(fileHash).first(),
+  getByEntity: (entityType: string, entityId: string) =>
+    db.attachments.where('entityType').equals(entityType).and(a => a.entityId === entityId).toArray(),
   create: (data: Omit<Attachment, 'id' | 'metadata' | 'createdAt'>) => {
     const id = `att-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
     const now = new Date().toISOString();
@@ -707,7 +711,7 @@ export const ocrProcessRepository = {
   getById: (id: string) => db.ocrProcesses.get(id),
   getByAttachmentId: (attachmentId: string) =>
     db.ocrProcesses.where('attachmentId').equals(attachmentId).first(),
-  create: async (data: Omit<OCRProcess, 'id' | 'metadata'>) => {
+  create: async (data: Omit<OCRProcess, 'id' | 'metadata'> & { metadata?: Record<string, any> }) => {
     const id = `ocr-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
     const now = new Date().toISOString();
     const item: OCRProcess = {
@@ -717,6 +721,7 @@ export const ocrProcessRepository = {
         createdAt: now,
         updatedAt: now,
         version: 1,
+        ...(data.metadata || {}),
       },
     };
     await db.ocrProcesses.add(item);
@@ -826,19 +831,40 @@ export const documentSessionRepository = {
     const drafts = await db.documentSessions.where('status').equals('draft').toArray();
     return drafts.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
   },
+  getLegacyEmptySessions: async (): Promise<DocumentSession[]> => {
+    const all = await db.documentSessions.toArray();
+    const segments = await db.documentPageSegments.toArray();
+    const ocrProcesses = await db.ocrProcesses.toArray();
+    const ocrMap = new Map(ocrProcesses.map((p) => [p.id, p]));
+    const segMap = new Map<string, number>();
+    for (const seg of segments) {
+      segMap.set(seg.sessionId, (segMap.get(seg.sessionId) || 0) + 1);
+    }
+
+    return all.filter((s) => {
+      const pageCount = s.pageCount ?? 0;
+      const segCount = segMap.get(s.id) || 0;
+      const proc = s.ocrProcessId ? ocrMap.get(s.ocrProcessId) : undefined;
+      const hasUsefulProc = Boolean(
+        proc &&
+        ((proc.rawText && proc.rawText.trim().length > 0) ||
+         proc.detectedTotal !== undefined ||
+         proc.detectedSupplier)
+      );
+      const isTerminal = s.status === 'reviewed' || s.status === 'completed' || s.status === 'cancelled';
+
+      return pageCount === 0 && segCount === 0 && !s.expenseId && !hasUsefulProc && !isTerminal;
+    });
+  },
   getById: (id: string) => db.documentSessions.get(id),
   findActiveSessionByFileHash: async (fileHash: string, excludeSessionId?: string): Promise<DocumentSession | null> => {
     if (!fileHash) return null;
+    const activeStatuses: DocumentSessionStatus[] = ['draft', 'ready', 'processing', 'ready_for_review'];
     const segments = await db.documentPageSegments.where('fileHash').equals(fileHash).toArray();
     for (const seg of segments) {
       if (excludeSessionId && seg.sessionId === excludeSessionId) continue;
       const sess = await db.documentSessions.get(seg.sessionId);
-      if (
-        sess &&
-        sess.status !== 'reviewed' &&
-        sess.status !== 'failed' &&
-        (sess.status as string) !== 'cancelled'
-      ) {
+      if (sess && activeStatuses.includes(sess.status)) {
         return sess;
       }
     }
@@ -900,6 +926,18 @@ export const documentSessionRepository = {
             ) {
               await db.attachments.delete(seg.attachmentId);
             }
+          }
+        }
+        // Pulizia allegati diretti della sessione (es. originalPdfAttachment)
+        const directAttachments = await db.attachments.where('entityId').equals(id).toArray();
+        for (const att of directAttachments) {
+          if (
+            att &&
+            (att.entityType === 'documentSession' ||
+              att.entityType === 'documentPageSegment' ||
+              att.entityType === 'unlinked')
+          ) {
+            await db.attachments.delete(att.id);
           }
         }
         if (session.ocrProcessId) {

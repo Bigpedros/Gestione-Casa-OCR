@@ -28,9 +28,13 @@ import {
   Download,
   ChevronDown,
   ChevronUp,
+  FileCheck,
+  ExternalLink,
 } from 'lucide-react';
 import { db } from '../../database/db';
 import { buildDiagnosticReport } from '../../utils/diagnosticReport';
+import { formatDate, formatCurrency } from '../../utils/formatters';
+import { ROUTES } from '../../app/routes';
 import {
   documentSessionRepository,
   documentPageSegmentRepository,
@@ -115,6 +119,17 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
   const [progressText, setProgressText] = useState<string>('Caricamento e analisi dati OCR in corso...');
   const [progressPercentage, setProgressPercentage] = useState<number>(0);
 
+  // Dedicated EXACT DUPLICATE Outcome State
+  const [exactDuplicateInfo, setExactDuplicateInfo] = useState<{
+    matchedExpenseId?: string;
+    supplierName?: string;
+    expenseDate?: string;
+    amount?: number;
+    rawMessage?: string;
+  } | null>(null);
+  const [isDeleteDuplicateConfirmOpen, setIsDeleteDuplicateConfirmOpen] = useState<boolean>(false);
+  const [isDeletingDuplicate, setIsDeletingDuplicate] = useState<boolean>(false);
+
   // Concurrency, idempotency and lifecycle cancellation guard (Fase CI-R3)
   const processingSessionsRef = useRef<Set<string>>(new Set());
   const loadRequestIdRef = useRef<number>(0);
@@ -166,6 +181,8 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
     setIsLoading(true);
     setErrorMessage(null);
     setFeedbackMessage(null);
+    setExactDuplicateInfo(null);
+    setIsDeleteDuplicateConfirmOpen(false);
 
     try {
       // 1. Identify active session and ocrProcess
@@ -217,9 +234,15 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
         activeOcrProcess.rawText.trim().length > 0
       );
 
+      const isReviewedOrConfirmed = Boolean(
+        activeSession?.status === 'reviewed' ||
+        activeSession?.status === 'completed' ||
+        activeOcrProcess?.confirmedByUser
+      );
+
       const needsOcrRecognition = Boolean(
         activeSession &&
-        !activeOcrProcess?.confirmedByUser &&
+        !isReviewedOrConfirmed &&
         !hasValidCompletedText &&
         activeOcrProcess?.status !== 'processing' &&
         !processingSessionsRef.current.has(activeSession.id)
@@ -325,9 +348,8 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
 
       // 3. Load segments & attachments for image viewer
       if (activeSession) {
-        const segs = await documentPageSegmentRepository.getBySessionId(activeSession.id);
+        let segs = await documentPageSegmentRepository.getBySessionId(activeSession.id);
         if (!isCurrent()) return;
-        setSegments(segs);
 
         const atts: Record<string, Attachment> = {};
         for (const seg of segs) {
@@ -337,7 +359,45 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
             if (att) atts[seg.id] = att;
           }
         }
-        if (!isCurrent()) return;
+
+        // Fallback: If no attachments resolved through segments, look for direct attachment
+        if (Object.keys(atts).length === 0) {
+          let directAtt: Attachment | null = null;
+          if (activeOcrProcess?.attachmentId) {
+            directAtt = (await attachmentRepository.getById(activeOcrProcess.attachmentId)) || null;
+          }
+          if (!directAtt) {
+            const directAtts = await attachmentRepository.getByEntity('documentSession', activeSession.id);
+            if (directAtts.length > 0) directAtt = directAtts[0];
+          }
+          if (!directAtt) {
+            const unlinkedAtts = await attachmentRepository.getByEntity('unlinked', activeSession.id);
+            if (unlinkedAtts.length > 0) directAtt = unlinkedAtts[0];
+          }
+          if (directAtt) {
+            const fallbackKey = segs[0]?.id || 'default-seg';
+            atts[fallbackKey] = directAtt;
+            if (segs.length === 0) {
+              segs = [
+                {
+                  id: fallbackKey,
+                  sessionId: activeSession.id,
+                  sequenceIndex: 0,
+                  attachmentId: directAtt.id,
+                  originalFileName: directAtt.fileName,
+                  originalMimeType: directAtt.mimeType,
+                  rotationDegrees: 0,
+                  segmentMode: 'page',
+                  fileHash: directAtt.fileHash || '',
+                  processingStatus: 'processed',
+                  metadata: { createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), version: 1 },
+                },
+              ];
+            }
+          }
+        }
+
+        setSegments(segs);
         setAttachmentsMap(atts);
       } else if (activeOcrProcess.attachmentId) {
         const att = await attachmentRepository.getById(activeOcrProcess.attachmentId);
@@ -1023,6 +1083,7 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
     if (!ocrProcess) return;
     setIsSaving(true);
     setErrorMessage(null);
+    setExactDuplicateInfo(null);
 
     const valErrors = getFinalValidationErrors();
     if (valErrors.length > 0) {
@@ -1031,12 +1092,12 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
       return;
     }
 
-    try {
-      const finalSupplierName =
-        selectedSupplierId === 'new'
-          ? newSupplierName.trim()
-          : suppliers.find((s) => s.id === selectedSupplierId)?.name || detectedSupplierName;
+    const finalSupplierName =
+      selectedSupplierId === 'new'
+        ? newSupplierName.trim()
+        : suppliers.find((s) => s.id === selectedSupplierId)?.name || detectedSupplierName;
 
+    try {
       // Identify deleted lines to be removed inside the atomic transaction
       const existingDbLines = await ocrReceiptLineRepository.getByOcrProcessId(ocrProcess.id);
       const currentLineIds = new Set(editableLines.map((l) => l.id));
@@ -1104,9 +1165,64 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
         onClose();
       }, 800);
     } catch (err: any) {
-      setErrorMessage(err?.message || 'Errore durante la creazione della registrazione contabile');
+      const msg = err?.message || 'Errore durante la creazione della registrazione contabile';
+      if (msg.includes('[DUPLICATE_RECEIPT_EXACT]')) {
+        const match = msg.match(/nella spesa ([a-zA-Z0-9_-]+)/);
+        const matchedExpenseId = match ? match[1] : undefined;
+
+        let matchedSupplier = finalSupplierName;
+        let matchedDate = expenseDate;
+        let matchedAmount = documentTotal;
+
+        if (matchedExpenseId) {
+          try {
+            const matchedExp = await db.expenses.get(matchedExpenseId);
+            if (matchedExp) {
+              if (matchedExp.supplierId) {
+                const sup = await db.suppliers.get(matchedExp.supplierId);
+                if (sup?.name) matchedSupplier = sup.name;
+              } else if (matchedExp.description) {
+                matchedSupplier = matchedExp.description;
+              }
+              if (matchedExp.expenseDate) matchedDate = matchedExp.expenseDate;
+              if (typeof matchedExp.amount === 'number') matchedAmount = matchedExp.amount;
+            }
+          } catch {
+            // fallback
+          }
+        }
+
+        setExactDuplicateInfo({
+          matchedExpenseId,
+          supplierName: matchedSupplier,
+          expenseDate: matchedDate,
+          amount: matchedAmount,
+          rawMessage: msg,
+        });
+        setErrorMessage(null);
+      } else {
+        setErrorMessage(msg);
+        setExactDuplicateInfo(null);
+      }
     } finally {
       setIsSaving(false);
+    }
+  };
+
+  // Eliminazione della sola acquisizione duplicata corrente (preserva la spesa storica)
+  const handleDeleteDuplicateAcquisition = async () => {
+    if (!session) return;
+    try {
+      setIsDeletingDuplicate(true);
+      await documentSessionRepository.delete(session.id);
+      setIsDeleteDuplicateConfirmOpen(false);
+      setExactDuplicateInfo(null);
+      onClose();
+    } catch (err: any) {
+      console.error("Errore durante l'eliminazione della sessione duplicata:", err);
+      setErrorMessage(err?.message || "Errore durante l'eliminazione dell'acquisizione duplicata");
+    } finally {
+      setIsDeletingDuplicate(false);
     }
   };
 
@@ -1266,6 +1382,70 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
                   Riprova OCR
                 </button>
               )}
+            </div>
+          )}
+
+          {/* Dedicated EXACT DUPLICATE Outcome Box */}
+          {exactDuplicateInfo && (
+            <div className="p-4 bg-amber-50 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-800 rounded-2xl shadow-xs space-y-3 text-amber-950 dark:text-amber-100">
+              <div className="flex items-start gap-3">
+                <div className="w-9 h-9 rounded-xl bg-amber-500 text-white flex items-center justify-center shrink-0 mt-0.5 shadow-xs">
+                  <FileCheck className="w-5 h-5" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <h4 className="font-bold text-sm text-slate-900 dark:text-white">
+                    Documento già registrato
+                  </h4>
+                  <p className="text-xs text-slate-700 dark:text-slate-300 mt-1 leading-relaxed">
+                    Questo scontrino risulta già contabilizzato.
+                  </p>
+                  <p className="text-xs font-semibold text-amber-900 dark:text-amber-200 mt-1">
+                    Spesa esistente: {exactDuplicateInfo.supplierName} — {formatDate(exactDuplicateInfo.expenseDate || '')} — {formatCurrency(exactDuplicateInfo.amount || 0)}.
+                    {exactDuplicateInfo.matchedExpenseId && (
+                      <span className="ml-1.5 text-[11px] font-normal opacity-80">
+                        (ID: {exactDuplicateInfo.matchedExpenseId})
+                      </span>
+                    )}
+                  </p>
+                </div>
+              </div>
+
+              {/* Actions */}
+              <div className="flex flex-wrap items-center justify-end gap-2 pt-2 border-t border-amber-200/60 dark:border-amber-900/60">
+                {exactDuplicateInfo.matchedExpenseId && (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => {
+                      window.location.href = ROUTES.EXPENSES;
+                    }}
+                    icon={<ExternalLink className="w-3.5 h-3.5" />}
+                  >
+                    Apri spesa esistente
+                  </Button>
+                )}
+                {session && (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="text-rose-600 hover:text-rose-700 hover:bg-rose-100/50 dark:hover:bg-rose-950/40"
+                    onClick={() => setIsDeleteDuplicateConfirmOpen(true)}
+                    icon={<Trash2 className="w-3.5 h-3.5" />}
+                  >
+                    Elimina questa acquisizione
+                  </Button>
+                )}
+                <Button
+                  type="button"
+                  variant="amber"
+                  size="sm"
+                  onClick={onClose}
+                >
+                  Chiudi
+                </Button>
+              </div>
             </div>
           )}
 
@@ -2103,7 +2283,7 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
             </div>
 
             <div className="flex flex-wrap items-center gap-3 w-full sm:w-auto justify-end">
-              {!existingExpense && session && (
+              {!existingExpense && session && !exactDuplicateInfo && (
                 <Button
                   type="button"
                   variant="ghost"
@@ -2207,6 +2387,44 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
           </div>
         </div>
       )}
+      {/* Modal di Conferma Eliminazione Acquisizione Duplicata */}
+      <Modal
+        isOpen={isDeleteDuplicateConfirmOpen}
+        onClose={() => {
+          if (!isDeletingDuplicate) {
+            setIsDeleteDuplicateConfirmOpen(false);
+          }
+        }}
+        title="Eliminare questa acquisizione?"
+      >
+        <div className="space-y-4">
+          <p className="text-sm text-slate-600 dark:text-slate-300 leading-relaxed">
+            Verrà eliminata soltanto questa nuova acquisizione duplicata.
+          </p>
+          <p className="text-xs text-slate-500 dark:text-slate-400">
+            La spesa già registrata non verrà modificata.
+          </p>
+
+          <div className="flex items-center justify-end gap-3 pt-2">
+            <Button
+              type="button"
+              variant="ghost"
+              disabled={isDeletingDuplicate}
+              onClick={() => setIsDeleteDuplicateConfirmOpen(false)}
+            >
+              Annulla
+            </Button>
+            <Button
+              type="button"
+              variant="danger"
+              disabled={isDeletingDuplicate}
+              onClick={handleDeleteDuplicateAcquisition}
+            >
+              {isDeletingDuplicate ? 'Eliminazione...' : 'Elimina acquisizione'}
+            </Button>
+          </div>
+        </div>
+      </Modal>
     </Modal>
   );
 };

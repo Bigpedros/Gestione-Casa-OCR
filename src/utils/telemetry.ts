@@ -1,5 +1,12 @@
 import type { ReceiptVariantName } from './imagePreprocessing';
 
+declare const __APP_BUILD_INFO__: {
+  appVersion: string;
+  buildId: string;
+  gitCommit: string | null;
+  buildTimestamp: string;
+} | undefined;
+
 export type AcquisitionSource =
   | 'camera'
   | 'gallery'
@@ -10,21 +17,38 @@ export type AcquisitionSource =
 
 export interface AppBuildInfo {
   appVersion: string;
-  buildId: string;
+  buildId: string | null;
   gitCommit: string | null;
-  buildTimestamp: string;
+  buildTimestamp: string | null;
 }
 
 export const getAppBuildInfo = (): AppBuildInfo => {
-  const globalBuildInfo = (globalThis as any).__APP_BUILD_INFO__;
+  let globalBuildInfo: any = null;
+  try {
+    if (typeof __APP_BUILD_INFO__ !== 'undefined' && __APP_BUILD_INFO__) {
+      globalBuildInfo = __APP_BUILD_INFO__;
+    } else if (typeof globalThis !== 'undefined' && (globalThis as any).__APP_BUILD_INFO__) {
+      globalBuildInfo = (globalThis as any).__APP_BUILD_INFO__;
+    } else if (typeof window !== 'undefined' && (window as any).__APP_BUILD_INFO__) {
+      globalBuildInfo = (window as any).__APP_BUILD_INFO__;
+    }
+  } catch {
+    globalBuildInfo = null;
+  }
+
   if (globalBuildInfo) {
-    return globalBuildInfo;
+    return {
+      appVersion: globalBuildInfo.appVersion || '1.0.0',
+      buildId: globalBuildInfo.buildId ?? null,
+      gitCommit: globalBuildInfo.gitCommit ?? null,
+      buildTimestamp: globalBuildInfo.buildTimestamp ?? null,
+    };
   }
   return {
     appVersion: '1.0.0',
-    buildId: 'build-local-d1',
+    buildId: null,
     gitCommit: null,
-    buildTimestamp: new Date().toISOString(),
+    buildTimestamp: null,
   };
 };
 

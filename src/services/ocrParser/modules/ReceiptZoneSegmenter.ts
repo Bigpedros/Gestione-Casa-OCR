@@ -83,8 +83,16 @@ export class ReceiptZoneSegmenter {
         continue;
       }
 
-      // Valutazione evidenze articolo vs header
-      if (this.hasStrongItemCharacteristics(lines[i].normalizedText) && !this.hasStrongHeaderCharacteristics(lines[i].normalizedText)) {
+      const currentText = lines[i].normalizedText;
+
+      // Valutazione evidenze articolo standard a riga singola
+      if (this.hasStrongItemCharacteristics(currentText) && !this.hasStrongHeaderCharacteristics(currentText)) {
+        firstItemIndex = i;
+        break;
+      }
+
+      // LM-1: Valutazione coppia multilinea (Descrizione -> Codice/SKU + Prezzo)
+      if (i + 1 < n && this.isMultiLineItemPair(currentText, lines[i + 1].normalizedText)) {
         firstItemIndex = i;
         break;
       }
@@ -388,8 +396,14 @@ export class ReceiptZoneSegmenter {
   private static hasStrongItemCharacteristics(text: string): boolean {
     const u = text.toUpperCase();
 
-    // Se contiene parole esclusive di totale o header fiscale, non è un articolo certo
-    if (this.isTotalsStartAnchor(text) || this.isExplicitTableHeader(text) || this.hasStrongHeaderCharacteristics(text)) {
+    // Se contiene parole esclusive di totale, pagamento, metadati finali o header fiscale, non è un articolo certo
+    if (
+      this.isTotalsStartAnchor(text) ||
+      this.isPaymentOrRestoAnchor(text) ||
+      this.isTrailingMetadataLine(text) ||
+      this.isExplicitTableHeader(text) ||
+      this.hasStrongHeaderCharacteristics(text)
+    ) {
       return false;
     }
 
@@ -536,6 +550,63 @@ export class ReceiptZoneSegmenter {
     // Almeno una parola significativa con >= 3 caratteri alfabetici
     const hasSignificantWord = words.some((w) => w.length >= 3);
     if (!hasSignificantWord) return false;
+
+    return true;
+  }
+
+  /**
+   * LM-1: Riconoscimento prudente di una coppia multilinea (Descrizione -> Codice/SKU + Prezzo).
+   * Riconosce la struttura tipica di scontrini/ricevute come Leroy Merlin:
+   * Riga 1: Descrizione prodotto testuale (senza prezzo)
+   * Riga 2: Codice SKU / Barcode (con eventuale prefisso breve come 'J') + Prezzo decimale
+   */
+  private static isMultiLineItemPair(currentText: string, nextText: string): boolean {
+    // 1. Guardie negative stringenti su entrambe le righe (nessun totale, pagamento, header, iva, ecc.)
+    if (
+      this.isTotalsStartAnchor(currentText) ||
+      this.isPaymentOrRestoAnchor(currentText) ||
+      this.isTrailingMetadataLine(currentText) ||
+      this.isExplicitTableHeader(currentText) ||
+      this.hasStrongHeaderCharacteristics(currentText) ||
+      this.isTaxOrVatBreakdown(currentText) ||
+      this.isHeaderNoiseOrDepartment(currentText)
+    ) {
+      return false;
+    }
+
+    if (
+      this.isTotalsStartAnchor(nextText) ||
+      this.isPaymentOrRestoAnchor(nextText) ||
+      this.isTrailingMetadataLine(nextText) ||
+      this.isExplicitTableHeader(nextText) ||
+      this.hasStrongHeaderCharacteristics(nextText) ||
+      this.isTaxOrVatBreakdown(nextText)
+    ) {
+      return false;
+    }
+
+    // 2. CURRENT LINE: deve essere una descrizione testuale plausibile e significativa
+    if (!this.isPlausibleDescriptiveProductText(currentText)) {
+      return false;
+    }
+
+    // 3. NEXT LINE: deve contenere un prezzo decimale esplicito
+    const hasDecimalPrice = /[-−]?\s*\b\d{1,4}[.,]\d{2}\b/.test(nextText);
+    if (!hasDecimalPrice) {
+      return false;
+    }
+
+    // 4. NEXT LINE: deve contenere un codice SKU / articolo forte o pattern continuazione
+    // es. "J 98644099 179.00", "98644099 179.00", "COD 98644099 179.00", "ART 98644099 179.00"
+    const nextUpper = nextText.toUpperCase().trim();
+    const hasSkuOrCode =
+      /\b(?:[A-Z]\s+)?\d{6,14}\b/i.test(nextUpper) ||
+      /\b(?:COD\.?|ART\.?|SKU|EAN|BARCODE)\s*[:.]?\s*[A-Z0-9-]+\b/i.test(nextUpper) ||
+      /^[A-Z]\s+\d+/i.test(nextUpper);
+
+    if (!hasSkuOrCode) {
+      return false;
+    }
 
     return true;
   }

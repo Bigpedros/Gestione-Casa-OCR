@@ -33,11 +33,13 @@ import {
   type VariantTotalConsensus,
 } from './ocrParser/variantEvidenceFusion';
 import type { OcrWordGeometry, ParsedReceiptDraft } from './ocrParser/types';
+import { recognizeReceiptPageWithMotoreOcrAi } from './motoreOcrAiBridge';
 
 /**
  * RC-05F-R1: Kill Switch immutabile e non esposto a runtime.
  */
 const SECOND_PASS_SHADOW_ENABLED: boolean = true;
+const MOTORE_OCR_AI_ENABLED: boolean = true;
 
 interface ActiveProcessEntry {
   sessionId: string;
@@ -363,7 +365,56 @@ class OCRService {
               draft: pageBaselineParsed,
             },
           ];
-        } else if (worker) {
+        } else {
+          if (MOTORE_OCR_AI_ENABLED) {
+            if (i === 0) primaryImageSource = attachment.storageKey;
+
+            const engineResult = await recognizeReceiptPageWithMotoreOcrAi(
+              attachment.storageKey,
+              currentPage,
+              seg.rotationDegrees || 0
+            );
+
+            pageText = engineResult.text;
+            pageConfidence = engineResult.confidence;
+            pageSelectedVariant = 'original';
+            pageVariantScores.push({
+              variant: 'original',
+              label: 'MOTORE-OCR-AI · Tesseract + OCRS/RTen',
+              confidence: pageConfidence,
+              overallScore: pageConfidence,
+              reasons: engineResult.diagnostics,
+              snippet: pageText.slice(0, 100),
+            });
+            pageVariantsAttempted = engineResult.variantEvidenceCount + 1;
+            pageVariantsSkipped = 0;
+            pageEarlyExitTriggered = false;
+            pagePreprocessingTelemetry = {
+              engine: 'MOTORE-OCR-AI',
+              sourceCommit: engineResult.engineSourceCommit,
+              recognizer: engineResult.recognizer,
+              warnings: engineResult.warnings,
+              quality: engineResult.quality,
+              geometryCorrection: engineResult.geometryCorrection,
+              photoScan: engineResult.photoScan,
+              decisionCount: engineResult.decisionCount,
+              changedDecisionCount: engineResult.changedDecisionCount,
+              recognizerBUsed: engineResult.recognizerBUsed,
+              recognizerBTokens: engineResult.recognizerBTokens,
+            };
+            winnerOcrWords = engineResult.words;
+
+            regionalEvidenceStore.clear();
+            pageBaselineParsed = receiptParserService.parseText(pageText, {
+              overallOcrConfidence: pageConfidence,
+              ocrWords: winnerOcrWords,
+            });
+            pagePreviewCandidates = [{
+              variant: 'original',
+              evaluationScore: pageConfidence,
+              draft: pageBaselineParsed,
+            }];
+          } else if (worker) {
           // 1. Generazione non-distruttiva delle varianti dell'immagine
           const variants = await createReceiptImageVariants(attachment.storageKey, {
             rotationDegrees: seg.rotationDegrees || 0,
@@ -559,8 +610,10 @@ class OCRService {
               },
             ];
           }
-        } else {
-          throw workerInitError || new Error('Nessun motore OCR disponibile o inizializzato per elaborare l\'immagine');
+
+          } else {
+            throw workerInitError || new Error('Nessun motore OCR disponibile o inizializzato per elaborare l\'immagine');
+          }
         }
 
         pageResults.push({

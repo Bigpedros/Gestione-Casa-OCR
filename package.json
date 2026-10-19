@@ -19,7 +19,10 @@
     "format": "prettier --write \"src/**/*.{ts,tsx,json,css}\"",
     "format:check": "prettier --check \"src/**/*.{ts,tsx,json,css}\"",
     "generate:pwa": "node scripts/generate-pwa-assets.mjs",
-    "verify:pwa": "node scripts/verify-pwa-assets.mjs"
+    "verify:pwa": "node scripts/verify-pwa-assets.mjs",
+    "prepare:ocr-assets": "node scripts/sync-motore-ocr-ai-assets.mjs",
+    "predev": "npm run prepare:ocr-assets",
+    "prebuild": "npm run prepare:ocr-assets"
   },
   "dependencies": {
     "@gestione-casa/shared-sdk": "file:gestione-casa-shared-sdk-0.5.1.tgz",

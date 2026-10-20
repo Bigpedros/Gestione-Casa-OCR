@@ -174,10 +174,24 @@ export class TesseractLocalProvider implements OcrProvider {
           const bestSemantic=evaluateSemanticOcrQuality(best.page,best.score);
           if(best.score>=80&&best.score-second.score<=4&&shouldStopOcrCascade(bestSemantic,best.confidence??confidence,lowRatio,index))break;
 
+          const originalResult=results.find(item=>item.name==='original');
+          const challenger=results.find(item=>item!==originalResult);
+          if(originalResult&&challenger){
+            const originalSemantic=evaluateSemanticOcrQuality(originalResult.page,originalResult.score);
+            const originalLowRatio=originalResult.page.tokens.filter(t=>(t.confidence??0)<60).length/Math.max(1,originalResult.page.tokens.length);
+            if(shouldStopAfterVariantPair({
+              originalScore:originalResult.score,
+              originalConfidence:originalResult.confidence??averageConfidence(originalResult.page),
+              originalLowRatio,
+              originalSuspiciousRatio:originalSemantic.suspiciousRatio,
+              challengerScore:challenger.score,
+              challengerConfidence:challenger.confidence??averageConfidence(challenger.page)
+            }))break;
+          }
+
           // Se due varianti globali forti producono quasi lo stesso risultato, ulteriori
           // preprocessing raramente aggiungono informazione: fermiamo il global OCR e
           // lasciamo i campi critici al re-OCR locale contestuale.
-          const originalResult=results.find(item=>item.name==='original');
           const plateau=!!originalResult&&originalResult.score>=72&&best.score>=74&&Math.abs(best.score-originalResult.score)<=3.5;
           const localizedUncertainty=bestSemantic.suspiciousRatio<=.14;
           if(plateau&&localizedUncertainty)break;
@@ -671,6 +685,22 @@ function perspectiveScore(c:{topLeft:{x:number;y:number};topRight:{x:number;y:nu
   return Math.max(0,Math.min(1,(w+h)/2));
 }
 
+
+export function shouldStopAfterVariantPair(input:{
+  originalScore:number;
+  originalConfidence:number;
+  originalLowRatio:number;
+  originalSuspiciousRatio:number;
+  challengerScore:number;
+  challengerConfidence:number;
+}):boolean{
+  return input.originalScore>=80&&
+    input.originalConfidence>=80&&
+    input.originalLowRatio<=.18&&
+    input.originalSuspiciousRatio<=.20&&
+    input.challengerScore<=input.originalScore-6&&
+    input.challengerConfidence<=input.originalConfidence+3;
+}
 
 function profileConfig(profile:'min'|'med'|'max'){
   return profile==='min'?{maxDimension:1800,variantCount:2,retryLimit:4}

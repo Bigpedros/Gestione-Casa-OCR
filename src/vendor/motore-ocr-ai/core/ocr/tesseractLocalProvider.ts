@@ -3,12 +3,14 @@ import type {OcrPage,OcrToken,QualityReport} from '../../contracts.js';
 import {scanPhotographedDocument} from '../geometry/photoDocumentScanner.js';
 import {estimateOrientation,normalizeRasterGeometry,rotateRightAngle} from '../geometry/imageGeometryNormalizer.js';
 import {qualityFromCanvas} from '../quality/qualityAnalyzer.js';
+import {cleanCameraDocument} from '../geometry/cameraCleanup.js';
 import {detectStructuralRegions} from '../structure/regionDetector.js';
 import {detectNonTextObjects} from '../structure/objectDetector.js';
 import {buildTextHierarchy} from '../structure/textHierarchy.js';
 import type {OcrPageInput,OcrProvider,OcrRetryRegion} from './provider.js';
 import {
-  createOcrImageVariants,
+  createOcrImageVariant,
+  OCR_VARIANT_ORDER,
   remapVariantPage,
   scoreOcrVariant,
   selectRawOcrVariant,
@@ -42,9 +44,14 @@ export class TesseractLocalProvider implements OcrProvider {
       const original=input.image as HTMLCanvasElement;
       const cached=this.cache.get(original);
       if(cached)return clonePage(cached);
+      const perfStart=performance.now();
+      const scanStart=performance.now();
       const scan=scanPhotographedDocument(original);
+      const scanMs=performance.now()-scanStart;
       const pageBox=scan.metadata.corners?boundsOfCorners(scan.metadata.corners):undefined;
+      const qualityStart=performance.now();
       const quality=qualityFromCanvas(original,pageBox);
+      const qualityMs=performance.now()-qualityStart;
       if(scan.metadata.corners){
         quality.perspective=perspectiveScore(scan.metadata.corners);
         quality.score=Math.max(0,Math.min(1,quality.score*.9+quality.perspective*.1));
@@ -56,7 +63,9 @@ export class TesseractLocalProvider implements OcrProvider {
         this.cache.set(original,rejected);
         return clonePage(rejected);
       }
+      const orientationStart=performance.now();
       let orientation=await chooseOcrOrientation(worker,scan.canvas,input,this.options.dpi??300,signal);
+      let orientationMs=performance.now()-orientationStart;
       let preGeometry=orientation.canvas;
       let sourceFallback=false;
       let originalProbeScore:number|undefined;
@@ -65,7 +74,9 @@ export class TesseractLocalProvider implements OcrProvider {
       // Confrontiamo l'originale solo quando lo scanner è incerto o l'OCR rettificato è realmente debole.
       const trustedScan=scan.metadata.applied&&scan.metadata.confidence>=.90&&orientation.score>=68;
       if(scan.metadata.applied&&!trustedScan){
+        const fallbackOrientationStart=performance.now();
         const originalOrientation=await chooseOcrOrientation(worker,original,input,this.options.dpi??300,signal);
+        orientationMs+=performance.now()-fallbackOrientationStart;
         originalProbeScore=originalOrientation.score;
         const catastrophicDrop=orientation.score<45&&originalOrientation.score>=55;
         const clearOriginalAdvantage=originalOrientation.score>=orientation.score+15;
@@ -76,7 +87,9 @@ export class TesseractLocalProvider implements OcrProvider {
         }
       }
 
+      const geometryStart=performance.now();
       let geometry=normalizeRasterGeometry(preGeometry,orientation.degrees);
+      let geometryMs=performance.now()-geometryStart;
       let ocrSource=geometry.canvas;
       const transformedProbe=(geometry.metadata.deskewApplied||geometry.metadata.dewarpApplied)
         ?await quickOcrProbe(worker,ocrSource,input,this.options.dpi??300,signal)
@@ -92,11 +105,37 @@ export class TesseractLocalProvider implements OcrProvider {
         transformFallback=true;
       }
 
+      // Camera cleanup is a separate, reversible stage after geometry. It is only kept when
+      // it preserves or improves OCR evidence, so colour stamps/ink and already-clean scans
+      // are not sacrificed for cosmetic whitening.
+      const cleanupStart=performance.now();
+      const cleanup=cleanCameraDocument(ocrSource,60);
+      let cleanupMs=performance.now()-cleanupStart;
+      let cleanupAccepted=false;
+      let cleanupProbeScore:number|undefined;
+      if(cleanup.metrics.applied){
+        const lightingImproved=cleanup.metrics.backgroundVariationAfter<=cleanup.metrics.backgroundVariationBefore*.92;
+        if(lightingImproved){
+          const cleanupProbeStart=performance.now();
+          const cleanupProbe=await quickOcrProbe(worker,cleanup.canvas,input,this.options.dpi??300,signal);
+          cleanupMs+=performance.now()-cleanupProbeStart;
+          cleanupProbeScore=cleanupProbe.score;
+          const referenceScore=(geometry.metadata.deskewApplied||geometry.metadata.dewarpApplied)?transformedProbe.score:orientation.score;
+          const noOcrRegression=cleanupProbe.score>=referenceScore-4;
+          if(noOcrRegression){
+            ocrSource=cleanup.canvas;
+            cleanupAccepted=true;
+          }
+        }
+      }
+
       this.evidenceCanvas.set(original,ocrSource);
       const preparedInput={...input,width:ocrSource.width,height:ocrSource.height,image:ocrSource};
       const profile=profileConfig(this.options.performanceProfile??'med');
-      const variants=createOcrImageVariants(ocrSource,this.options.maxVariantDimension??profile.maxDimension).slice(0,profile.variantCount);
+      const variantNames=OCR_VARIANT_ORDER.slice(0,profile.variantCount);
+      const variants:ReturnType<typeof createOcrImageVariant>[]=[];
       const results:OcrVariantResult[]=[];
+      let variantPreprocessMs=0,variantOcrMs=0;
       const psm=chooseSegmentation(ocrSource.width,ocrSource.height,this.normalPsm());
 
       await worker.setParameters({
@@ -106,10 +145,15 @@ export class TesseractLocalProvider implements OcrProvider {
         tessedit_char_whitelist:''
       });
 
-      for(let index=0;index<variants.length;index++){
-        const variant=variants[index]!;
+      for(let index=0;index<variantNames.length;index++){
         signal?.throwIfAborted();
+        const variantStart=performance.now();
+        const variant=createOcrImageVariant(ocrSource,variantNames[index]!,this.options.maxVariantDimension??profile.maxDimension);
+        variants.push(variant);
+        variantPreprocessMs+=performance.now()-variantStart;
+        const ocrStart=performance.now();
         const recognized=await worker.recognize(variant.canvas as never,{}, {text:true,blocks:true});
+        variantOcrMs+=performance.now()-ocrStart;
         const local=pageFromResult(
           {...preparedInput,width:variant.canvas.width,height:variant.canvas.height,image:variant.canvas},
           recognized.data.blocks??[],
@@ -150,6 +194,7 @@ export class TesseractLocalProvider implements OcrProvider {
       const textHeight=median(rawPage.tokens.map(t=>t.box.height).filter(v=>v>0));
       if(textHeight){quality.estimatedTextHeightPx=Math.round(textHeight*10)/10;quality.estimatedEffectiveDpi=Math.round(textHeight*72/10);}
       const hierarchy=buildTextHierarchy(rawPage);
+      const totalMs=performance.now()-perfStart;
       const page:OcrPage={...rawPage,
         lines:hierarchy.lines,
         blocks:hierarchy.blocks,
@@ -180,6 +225,9 @@ export class TesseractLocalProvider implements OcrProvider {
           ...(originalProbeScore===undefined?[]:[`ORIGINAL_PROBE_SCORE:${originalProbeScore.toFixed(1)}`]),
           sourceFallback?'PHOTO_SCAN_REJECTED_BY_OCR_GATE':'PHOTO_SCAN_ACCEPTED_BY_OCR_GATE',
           transformFallback?'GEOMETRY_REJECTED_BY_OCR_GATE':'GEOMETRY_ACCEPTED_BY_OCR_GATE',
+          cleanupAccepted?`CAMERA_CLEANUP_APPLIED:BG_STD_${cleanup.metrics.backgroundVariationBefore.toFixed(1)}->${cleanup.metrics.backgroundVariationAfter.toFixed(1)}`:'CAMERA_CLEANUP_SKIPPED_OR_REJECTED',
+          ...(cleanupProbeScore===undefined?[]:[`CAMERA_CLEANUP_PROBE_SCORE:${cleanupProbeScore.toFixed(1)}`]),
+          `CAMERA_CLEANUP_DESPECKLED:${cleanup.metrics.despeckledPixels}`,
           'OCR_PIPELINE:GENERAL_HIGH_RELIABILITY',
           'OCR_RAW_POLICY:ORIGINAL_VARIANT_IMMUTABLE',
           `OCR_RAW_VARIANT:${rawResult.name}`,
@@ -189,6 +237,16 @@ export class TesseractLocalProvider implements OcrProvider {
           ...(winnerSemantic.receiptLike?[`CRITICAL_FIELD_GATE:${winnerSemantic.criticalFieldGate?'PASS':'FAIL'}`]:[]),
           ...winnerSemantic.reasons.map((reason:string)=>`SEMANTIC:${reason}`),
           `OCR_VARIANT_EVIDENCE_COUNT:${Math.max(0,results.length-1)}`,
+          `PERF_SCAN_MS:${Math.round(scanMs)}`,
+          `PERF_QUALITY_MS:${Math.round(qualityMs)}`,
+          `PERF_ORIENTATION_MS:${Math.round(orientationMs)}`,
+          `PERF_GEOMETRY_MS:${Math.round(geometryMs)}`,
+          `PERF_CLEANUP_MS:${Math.round(cleanupMs)}`,
+          `PERF_VARIANT_PREPROCESS_MS:${Math.round(variantPreprocessMs)}`,
+          `PERF_TESSERACT_MS:${Math.round(variantOcrMs)}`,
+          `PERF_VARIANTS_BUILT:${variants.length}/${variantNames.length}`,
+          variants.length<variantNames.length?'PERF_FAST_PATH:EARLY_EXIT':'PERF_FAST_PATH:FULL_CASCADE',
+          `PERF_TOTAL_PRIMARY_MS:${Math.round(totalMs)}`,
           ...(winnerDecision.acceptable?[]:[`OCR_WINNER_BELOW_FLOOR:${winnerDecision.score.toFixed(1)}`])
         ]
       };
@@ -365,7 +423,7 @@ export class TesseractLocalProvider implements OcrProvider {
         await worker.setParameters({tessedit_pageseg_mode:region.psm,preserve_interword_spaces:'1',user_defined_dpi:String(this.options.dpi??300),tessedit_char_whitelist:''});
         const result=await worker.recognize(crop as never,{}, {text:true,blocks:true});
         for(const block of result.data.blocks??[])for(const paragraph of block.paragraphs??[])for(const line of paragraph.lines??[])for(const word of line.words??[]){
-          const clean=word.text.trim().replace(/^[€"'[{(\s]+|[€"'\])}\s]+$/g,'');
+          const clean=word.text.trim().replace(/^[€"'\[({\s]+|[€"'\])}\s]+$/g,'');
           if(!/^[-−]?\d{1,4}[.,]\d{2}$/.test(clean)||(word.confidence??0)<70)continue;
           const {x0,y0,x1,y1}=word.bbox;
           const box={x:(x0+left)*scaleX,y:(y0+top)*scaleY,width:(x1-x0)*scaleX,height:(y1-y0)*scaleY};
@@ -385,7 +443,7 @@ export class TesseractLocalProvider implements OcrProvider {
 }
 
 function chooseSegmentation(width:number,height:number,fallback:PSM):PSM{const ratio=width/Math.max(1,height);return ratio<.72&&height>width*1.35?PSM.SINGLE_COLUMN:fallback;}
-function pageFromResult(input:OcrPageInput,blocks:any[],_text:string):OcrPage{
+function pageFromResult(input:OcrPageInput,blocks:any[],text:string):OcrPage{
   const tokens:OcrToken[]=[];let lineIndex=0,repairedCount=0,filteredCount=0;
   for(const block of blocks)for(const paragraph of block.paragraphs??[])for(const line of paragraph.lines??[]){
     const lineId=`p${input.pageNumber}-l${lineIndex++}`;
@@ -484,7 +542,7 @@ function unionBoxes(boxes:Array<{x:number;y:number;width:number;height:number}>)
 }
 function isSemanticallySuspiciousToken(text:string){
   if(/^[^\p{L}\p{N}]+$/u.test(text))return true;
-  if(/[{}[\]\\|]/.test(text))return true;
+  if(/[{}\[\]\\|]/.test(text))return true;
   if(/\p{Ll}\p{Lu}/u.test(text)&&text.length<=4)return true;
   const alnum=(text.match(/[\p{L}\p{N}]/gu)??[]).length;
   return alnum/Math.max(1,[...text].length)<.6;
@@ -614,7 +672,7 @@ function perspectiveScore(c:{topLeft:{x:number;y:number};topRight:{x:number;y:nu
 
 
 function profileConfig(profile:'min'|'med'|'max'){
-  return profile==='min'?{maxDimension:1800,variantCount:2,retryLimit:8}
+  return profile==='min'?{maxDimension:1800,variantCount:2,retryLimit:4}
     :profile==='max'?{maxDimension:3000,variantCount:6,retryLimit:24}
     :{maxDimension:2400,variantCount:4,retryLimit:6};
 }

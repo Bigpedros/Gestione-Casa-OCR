@@ -197,6 +197,20 @@ NUMERO OPERATORE 20,00
     expect(draft.total.value).toBe(45.00);
   });
 
+
+  it('M. ORIZZONTE: a degraded "Importo pagato" line cannot beat a clean electronic payment total', () => {
+    const rawOrizzonte = `
+GIARDINO
+SACCHI PATT.70X120 10PZ T RASPARENTE 11 22,00% 2,70
+Importo pagato ronico 2.70
+Pagamento elettronico 20,25
+20,25
+`;
+    const draft = receiptParserService.parseText(rawOrizzonte);
+    expect(draft.total.value).toBe(20.25);
+    expect(draft.total.value).not.toBe(2.70);
+  });
+
   // =========================================================================
   // POSITIVE CONTROLS REALI
   // =========================================================================

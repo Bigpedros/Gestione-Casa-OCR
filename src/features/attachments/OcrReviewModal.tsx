@@ -3,7 +3,6 @@ import { Modal, Button } from '../../components/common';
 import {
   CheckCircle2,
   AlertCircle,
-  AlertTriangle,
   RotateCw,
   ZoomIn,
   ZoomOut,
@@ -19,22 +18,17 @@ import {
   ChevronLeft,
   ChevronRight,
   RefreshCw,
-  Store,
   Calendar,
-  CreditCard,
-  Info,
   Terminal,
   Copy,
   Download,
+  X,
+  Edit3,
   ChevronDown,
   ChevronUp,
-  FileCheck,
-  ExternalLink,
 } from 'lucide-react';
 import { db } from '../../database/db';
 import { buildDiagnosticReport } from '../../utils/diagnosticReport';
-import { formatDate, formatCurrency } from '../../utils/formatters';
-import { ROUTES } from '../../app/routes';
 import {
   documentSessionRepository,
   documentPageSegmentRepository,
@@ -78,7 +72,7 @@ export interface OcrReviewModalProps {
 }
 
 export interface EditableReviewLine {
-  id: string; // database ID or temporary ID
+  id: string;
   ocrProcessId: string;
   originalText: string;
   description: string;
@@ -90,7 +84,6 @@ export interface EditableReviewLine {
   productId: string | null;
   categoryId: string | null;
   subcategoryId: string | null;
-  // Proposal details
   confidenceLevel?: ConfidenceLevel;
   candidateMatches?: CandidateMatch[];
   matchedProduct?: Product | null;
@@ -119,18 +112,7 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
   const [progressText, setProgressText] = useState<string>('Caricamento e analisi dati OCR in corso...');
   const [progressPercentage, setProgressPercentage] = useState<number>(0);
 
-  // Dedicated EXACT DUPLICATE Outcome State
-  const [exactDuplicateInfo, setExactDuplicateInfo] = useState<{
-    matchedExpenseId?: string;
-    supplierName?: string;
-    expenseDate?: string;
-    amount?: number;
-    rawMessage?: string;
-  } | null>(null);
-  const [isDeleteDuplicateConfirmOpen, setIsDeleteDuplicateConfirmOpen] = useState<boolean>(false);
-  const [isDeletingDuplicate, setIsDeletingDuplicate] = useState<boolean>(false);
-
-  // Concurrency, idempotency and lifecycle cancellation guard (Fase CI-R3)
+  // Concurrency and lifecycle guards
   const processingSessionsRef = useRef<Set<string>>(new Set());
   const loadRequestIdRef = useRef<number>(0);
 
@@ -147,10 +129,6 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
   // Mobile layout tab state ('image' vs 'data')
   const [activeMobileTab, setActiveMobileTab] = useState<'image' | 'data'>('data');
 
-  // Review Lines Navigation Filter state
-  type LineFilterMode = 'all' | 'error' | 'unclassified' | 'modified' | 'discounts' | 'returns';
-  const [activeLineFilter, setActiveLineFilter] = useState<LineFilterMode>('all');
-
   // Image Viewer State
   const [activeSegmentIndex, setActiveSegmentIndex] = useState<number>(0);
   const [zoomLevel, setZoomLevel] = useState<number>(1);
@@ -158,7 +136,7 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
 
   // Editable Form State
   const [detectedSupplierName, setDetectedSupplierName] = useState<string>('');
-  const [selectedSupplierId, setSelectedSupplierId] = useState<string>('new'); // 'new' or supplierId
+  const [selectedSupplierId, setSelectedSupplierId] = useState<string>('new');
   const [newSupplierName, setNewSupplierName] = useState<string>('');
   const [expenseDate, setExpenseDate] = useState<string>('');
   const [documentTotal, setDocumentTotal] = useState<number>(0);
@@ -168,8 +146,12 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
   const [isDiscrepancyApproved, setIsDiscrepancyApproved] = useState<boolean>(false);
   const [isDateDetectedFromOcr, setIsDateDetectedFromOcr] = useState<boolean>(false);
 
-  // Diagnostic State for inspecting real Tesseract output
-  const [showDiagnostics, setShowDiagnostics] = useState<boolean>(false);
+  // Inline row edit active ID & expanded product details ID
+  const [editingRowId, setEditingRowId] = useState<string | null>(null);
+  const [expandedDetailsRowId, setExpandedDetailsRowId] = useState<string | null>(null);
+
+  // Diagnostics Modal State
+  const [showDiagnosticsModal, setShowDiagnosticsModal] = useState<boolean>(false);
   const [copySuccess, setCopySuccess] = useState<boolean>(false);
 
   // Load database entities & initialize review draft
@@ -181,11 +163,8 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
     setIsLoading(true);
     setErrorMessage(null);
     setFeedbackMessage(null);
-    setExactDuplicateInfo(null);
-    setIsDeleteDuplicateConfirmOpen(false);
 
     try {
-      // 1. Identify active session and ocrProcess
       let activeSession: DocumentSession | null = null;
       let activeOcrProcess: OCRProcess | null = null;
 
@@ -200,7 +179,6 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
       if (!isCurrent()) return;
 
       if (!activeSession && activeOcrProcess) {
-        // Find session linked to ocrProcess
         const allSessions = await documentSessionRepository.getAll();
         if (!isCurrent()) return;
         activeSession = allSessions.find((s) => s.ocrProcessId === activeOcrProcess?.id) || null;
@@ -220,13 +198,6 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
       }
       if (!isCurrent()) return;
 
-      // 2. Determine if OCR recognition should be started
-      // Conditions:
-      // - Valid session exists
-      // - Process is not already confirmed by user
-      // - Process is missing OR in 'pending' status OR lacks non-empty rawText
-      // - Process is not already completed with non-empty rawText
-      // - Not already executing in local guard ref
       const hasValidCompletedText = Boolean(
         activeOcrProcess &&
         activeOcrProcess.status === 'completed' &&
@@ -234,15 +205,9 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
         activeOcrProcess.rawText.trim().length > 0
       );
 
-      const isReviewedOrConfirmed = Boolean(
-        activeSession?.status === 'reviewed' ||
-        activeSession?.status === 'completed' ||
-        activeOcrProcess?.confirmedByUser
-      );
-
       const needsOcrRecognition = Boolean(
         activeSession &&
-        !isReviewedOrConfirmed &&
+        !activeOcrProcess?.confirmedByUser &&
         !hasValidCompletedText &&
         activeOcrProcess?.status !== 'processing' &&
         !processingSessionsRef.current.has(activeSession.id)
@@ -265,7 +230,7 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
           console.error('[OcrReviewModal] Errore recognize OCR:', ocrErr);
           if (isCurrent()) {
             setErrorMessage(
-              `Riconoscimento OCR non riuscito: ${ocrErr?.message || 'Errore durante la scansione del testo'}. È comunque possibile inserire i dati a mano.`
+              `Riconoscimento OCR non riuscito: ${ocrErr?.message || 'Errore durante la scansione'}. È comunque possibile inserire i dati a mano.`
             );
           }
           if (activeSession.ocrProcessId) {
@@ -278,7 +243,6 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
 
       if (!isCurrent()) return;
 
-      // Fallback process creation if neither existed nor recognize created one
       if (!activeOcrProcess && activeSession) {
         const segs = await documentPageSegmentRepository.getBySessionId(activeSession.id);
         if (!isCurrent()) return;
@@ -300,7 +264,6 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
         throw new Error('Impossibile caricare il processo OCR per la revisione');
       }
 
-      // 3. Ensure rawText parsed & lines extracted
       const hasRawText = Boolean(activeOcrProcess.rawText && activeOcrProcess.rawText.trim().length > 0);
       const existingLines = await ocrReceiptLineRepository.getByOcrProcessId(activeOcrProcess.id);
       if (!isCurrent()) return;
@@ -333,7 +296,6 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
 
       if (!isCurrent()) return;
 
-      // Run classification proposal
       let proposal: ReceiptClassificationProposal | null = null;
       try {
         proposal = await productClassificationService.classifyReceiptLines(activeOcrProcess.id);
@@ -346,10 +308,10 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
       setSession(activeSession);
       setOcrProcess(activeOcrProcess);
 
-      // 3. Load segments & attachments for image viewer
       if (activeSession) {
-        let segs = await documentPageSegmentRepository.getBySessionId(activeSession.id);
+        const segs = await documentPageSegmentRepository.getBySessionId(activeSession.id);
         if (!isCurrent()) return;
+        setSegments(segs);
 
         const atts: Record<string, Attachment> = {};
         for (const seg of segs) {
@@ -359,45 +321,7 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
             if (att) atts[seg.id] = att;
           }
         }
-
-        // Fallback: If no attachments resolved through segments, look for direct attachment
-        if (Object.keys(atts).length === 0) {
-          let directAtt: Attachment | null = null;
-          if (activeOcrProcess?.attachmentId) {
-            directAtt = (await attachmentRepository.getById(activeOcrProcess.attachmentId)) || null;
-          }
-          if (!directAtt) {
-            const directAtts = await attachmentRepository.getByEntity('documentSession', activeSession.id);
-            if (directAtts.length > 0) directAtt = directAtts[0];
-          }
-          if (!directAtt) {
-            const unlinkedAtts = await attachmentRepository.getByEntity('unlinked', activeSession.id);
-            if (unlinkedAtts.length > 0) directAtt = unlinkedAtts[0];
-          }
-          if (directAtt) {
-            const fallbackKey = segs[0]?.id || 'default-seg';
-            atts[fallbackKey] = directAtt;
-            if (segs.length === 0) {
-              segs = [
-                {
-                  id: fallbackKey,
-                  sessionId: activeSession.id,
-                  sequenceIndex: 0,
-                  attachmentId: directAtt.id,
-                  originalFileName: directAtt.fileName,
-                  originalMimeType: directAtt.mimeType,
-                  rotationDegrees: 0,
-                  segmentMode: 'page',
-                  fileHash: directAtt.fileHash || '',
-                  processingStatus: 'processed',
-                  metadata: { createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), version: 1 },
-                },
-              ];
-            }
-          }
-        }
-
-        setSegments(segs);
+        if (!isCurrent()) return;
         setAttachmentsMap(atts);
       } else if (activeOcrProcess.attachmentId) {
         const att = await attachmentRepository.getById(activeOcrProcess.attachmentId);
@@ -409,7 +333,6 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
 
       if (!isCurrent()) return;
 
-      // 4. Load catalog options (Suppliers, Products, Categories)
       const [allSuppliers, allProducts, allCategories] = await Promise.all([
         supplierRepository.getAll(),
         productRepository.getAll(),
@@ -423,7 +346,6 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
       setCategories(allCategories);
       setParentCategories(allCategories.filter((c) => c.level === 1));
 
-      // Check if existing expense is already linked
       let foundExp: Expense | null = null;
       if (activeSession?.expenseId) {
         foundExp = (await db.expenses.get(activeSession.expenseId)) || null;
@@ -450,11 +372,9 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
       if (!isCurrent()) return;
       setExistingExpense(foundExp);
 
-      // 5. Initialize Editable Form Fields
       const detSup = activeOcrProcess.detectedSupplier || proposal?.supplierProposal.detectedName || '';
       setDetectedSupplierName(detSup);
 
-      // Match supplier in catalog
       const matchedSup = proposal?.supplierProposal.matchedSupplier;
       if (matchedSup) {
         setSelectedSupplierId(matchedSup.id);
@@ -483,7 +403,6 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
 
       setDocumentTotal(activeOcrProcess.detectedTotal || 0);
 
-      // Inizializza paymentMethod da OCR o metadati con massima priorità a Contanti/Resto
       const detectedPayMethod = (activeOcrProcess.metadata as Record<string, any>)?.detectedPaymentMethod;
       if (detectedPayMethod === 'contanti' || detectedPayMethod === 'cash') {
         setPaymentMethod('cash');
@@ -496,7 +415,6 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
       } else if (detectedPayMethod === 'digitalWallet') {
         setPaymentMethod('digitalWallet');
       } else {
-        // Controllo diretto sul testo grezzo o normalizzato per indizi inequivocabili di contanti
         const rawUpper = (activeOcrProcess.rawText || '').toUpperCase();
         if (/\b(?:CONTANT[EI]|RESTO\b|RESTO\s*[:=]?\s*\d|CASH)\b/i.test(rawUpper)) {
           setPaymentMethod('cash');
@@ -509,7 +427,6 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
         }
       }
 
-      // 6. Load OCR receipt lines & merge with proposals
       const dbLines = await ocrReceiptLineRepository.getByOcrProcessId(activeOcrProcess.id);
       if (!isCurrent()) return;
 
@@ -536,25 +453,10 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
           ...(Array.isArray((line.metadata as Record<string, any>)?.warnings) ? (line.metadata as Record<string, any>).warnings : []),
         ];
         const uniqueWarnings = Array.from(new Set(lineWarnings));
-        const hasUnsafeWarnings =
-          uniqueWarnings.includes('VAT_PRICE_AMBIGUOUS') ||
-          uniqueWarnings.includes('PRICE_NOT_DETECTED') ||
-          uniqueWarnings.includes('LOW_CONFIDENCE') ||
-          uniqueWarnings.includes('OCR_TEXT_SUSPECT') ||
-          uniqueWarnings.includes('DISCOUNT_VALUE_NOT_DETECTED') ||
-          uniqueWarnings.includes('prezzo_riga_non_rilevato') ||
-          (line.unitPrice === 0 && line.lineTotal === 0 && !line.description.toUpperCase().includes('SCONTO'));
-
-        const isDocUnsafe =
-          hasTotalDiscrepancy ||
-          (typeof ocrProcess?.confidence === 'number' && ocrProcess.confidence < 60) ||
-          hasUnsafeWarnings;
 
         let initialActionMode: 'link_existing' | 'create_new' | 'unlinked' = savedMeta.actionMode || 'unlinked';
         if (!savedMeta.actionMode) {
-          if (isDocUnsafe) {
-            initialActionMode = 'unlinked';
-          } else if (initialProdId) {
+          if (initialProdId) {
             initialActionMode = 'link_existing';
           } else if (prop?.proposedNewProduct) {
             initialActionMode = 'create_new';
@@ -581,7 +483,7 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
           matchedProduct: matchedProd,
           proposedCategoryName: prop?.proposedCategory?.name,
           proposedSubcategoryName: prop?.proposedSubcategory?.name,
-          hasConflict: prop?.hasConflict || hasUnsafeWarnings || false,
+          hasConflict: prop?.hasConflict || false,
           conflictDetails: prop?.conflictDetails,
           warnings: uniqueWarnings,
           isNewRow: false,
@@ -593,7 +495,6 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
       if (!isCurrent()) return;
       setEditableLines(reviewLines);
 
-      // Update session status to ready_for_review
       if (activeSession && activeSession.status !== 'ready_for_review' && activeSession.status !== 'reviewed') {
         await documentSessionRepository.update(activeSession.id, { status: 'ready_for_review' });
       }
@@ -613,12 +514,10 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
       loadReviewData();
     }
     return () => {
-      // Invalida qualsiasi caricamento asincrono pendente al cambio dipendenze o allo smontaggio
       loadRequestIdRef.current++;
     };
   }, [isOpen, loadReviewData]);
 
-  // Calculations & Navigation Filter groups (Punto 14.5)
   const calculatedSumLines = editableLines.reduce(
     (acc, line) => acc + (line.lineTotal > 0 ? line.lineTotal : line.quantity * line.unitPrice),
     0
@@ -637,48 +536,6 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
   const effectiveDiscrepancy = isPaymentProof ? 0 : rawDiscrepancy;
   const hasTotalDiscrepancy = !isPaymentProof && effectiveDiscrepancy > 0.01;
 
-  const linesWithError = editableLines.filter(
-    (l) =>
-      !l.categoryId ||
-      l.categoryId === 'cat-unclassified' ||
-      l.quantity <= 0 ||
-      (l.unitPrice <= 0 && l.lineTotal <= 0 && l.lineTotal >= 0) ||
-      l.hasConflict ||
-      (l.warnings && l.warnings.length > 0)
-  );
-
-  const linesUnclassified = editableLines.filter(
-    (l) => !l.categoryId || l.categoryId === 'cat-unclassified' || l.proposedCategoryName?.toLowerCase().includes('classificare')
-  );
-
-  const linesModified = editableLines.filter((l) => l.reviewStatus === 'modified' || l.isNewRow);
-
-  const linesDiscounts = editableLines.filter(
-    (l) => l.lineTotal < 0 || /SCONTO|PROMO|ABBUONO|COUPON|BUONO/i.test(l.description) || (l.warnings && l.warnings.includes('DISCOUNT_LINE'))
-  );
-
-  const linesReturns = editableLines.filter(
-    (l) => l.lineTotal < 0 || /RESO|STORNO|RESTITUITO/i.test(l.description)
-  );
-
-  const visibleLines = (() => {
-    switch (activeLineFilter) {
-      case 'error':
-        return linesWithError;
-      case 'unclassified':
-        return linesUnclassified;
-      case 'modified':
-        return linesModified;
-      case 'discounts':
-        return linesDiscounts;
-      case 'returns':
-        return linesReturns;
-      default:
-        return editableLines;
-    }
-  })();
-
-  // Handlers for Form Edits
   const handleLineChange = (
     lineId: string,
     field: keyof EditableReviewLine,
@@ -689,14 +546,12 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
         if (line.id !== lineId) return line;
         const updated = { ...line, [field]: value, reviewStatus: 'modified' as OCRLineReviewStatus };
 
-        // Auto-recalculate lineTotal if quantity or unitPrice changes
         if (field === 'quantity' || field === 'unitPrice') {
           const qty = field === 'quantity' ? Number(value) : line.quantity;
           const price = field === 'unitPrice' ? Number(value) : line.unitPrice;
           updated.lineTotal = Math.round(qty * price * 100) / 100;
         }
 
-        // Se viene inserito un prezzo valido > 0, rimuovi i warning di prezzo non rilevato
         if (field === 'unitPrice' || field === 'lineTotal') {
           const valNum = Number(value);
           if (valNum > 0 && Array.isArray(updated.warnings)) {
@@ -711,7 +566,6 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
           }
         }
 
-        // If product selected, auto-set default category if available
         if (field === 'productId' && value) {
           const prod = products.find((p) => p.id === value);
           if (prod) {
@@ -743,26 +597,24 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
       isNewRow: true,
     };
     setEditableLines((prev) => [...prev, newLine]);
+    setEditingRowId(tempId);
   };
 
   const handleDeleteLine = (lineId: string) => {
     setEditableLines((prev) => prev.filter((l) => l.id !== lineId));
   };
 
-  // Save Review Draft (Progressive save without finalization)
   const handleSaveDraft = async () => {
     if (!ocrProcess) return;
     setIsSaving(true);
     setErrorMessage(null);
 
     try {
-      // Determine final supplier name for draft
       const finalSupplierName =
         selectedSupplierId === 'new'
           ? newSupplierName.trim()
           : suppliers.find((s) => s.id === selectedSupplierId)?.name || detectedSupplierName;
 
-      // Update OCRProcess record
       await ocrProcessRepository.update(ocrProcess.id, {
         detectedSupplier: finalSupplierName || null,
         detectedDate: expenseDate || null,
@@ -770,11 +622,9 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
         confirmedByUser: false,
       });
 
-      // Update / Create / Delete lines in database
       const existingDbLines = await ocrReceiptLineRepository.getByOcrProcessId(ocrProcess.id);
       const currentLineIds = new Set(editableLines.map((l) => l.id));
 
-      // Remove lines deleted in review form (batch deletion)
       const idsToDelete = existingDbLines
         .filter((dbLine) => !currentLineIds.has(dbLine.id))
         .map((l) => l.id);
@@ -782,7 +632,6 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
         await db.ocrReceiptLines.bulkDelete(idsToDelete);
       }
 
-      // Upsert current lines with category & subcategory metadata
       for (const line of editableLines) {
         const lineMetadata = {
           categoryId: line.categoryId || null,
@@ -821,7 +670,6 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
         }
       }
 
-      // Update session status
       if (session) {
         await documentSessionRepository.update(session.id, {
           status: 'ready_for_review',
@@ -871,7 +719,6 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
     setProgressText('Riavvio motore OCR...');
     try {
       if (ocrProcess) {
-        // Pulizia atomica delle righe precedenti non confermate per garantire idempotenza
         await ocrReceiptLineRepository.deleteUnconfirmedByOcrProcessId(ocrProcess.id);
         await ocrProcessRepository.update(ocrProcess.id, {
           status: 'pending',
@@ -909,7 +756,6 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
         ? newSupplierName.trim()
         : suppliers.find((s) => s.id === selectedSupplierId)?.name || detectedSupplierName;
 
-    // Identify deleted lines to be removed inside the atomic confirmation transaction
     const existingDbLines = await ocrReceiptLineRepository.getByOcrProcessId(ocrProcess.id);
     const currentLineIds = new Set(editableLines.map((l) => l.id));
     const deletedLineIds: string[] = [];
@@ -920,7 +766,6 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
       }
     }
 
-    // Map line classification decisions
     const decisions: LineClassificationDecision[] = editableLines.map((line) => {
       let action: 'link_existing' | 'create_new' | 'unlinked' = line.actionMode || 'unlinked';
 
@@ -963,7 +808,6 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
       deletedLineIds,
     });
 
-    // Update Session status to 'reviewed'
     if (session) {
       await documentSessionRepository.update(session.id, {
         status: 'reviewed',
@@ -971,11 +815,9 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
     }
   };
 
-  // Punto 14.4: Validazione Finale prima della conferma definitiva
   const getFinalValidationErrors = (): string[] => {
     const errors: string[] = [];
 
-    // 1. Campi obbligatori
     if (!expenseDate || !/^\d{4}-\d{2}-\d{2}$/.test(expenseDate)) {
       errors.push('Data acquisto mancante o non valida (formato AAAA-MM-GG).');
     }
@@ -996,7 +838,6 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
       errors.push('Il documento non contiene alcuna riga articolo.');
     }
 
-    // 2. Quadratura (solo se non è PAYMENT_PROOF ed è presente discrepanza non approvata)
     if (!isPaymentProof && editableLines.length > 0 && hasTotalDiscrepancy && !isDiscrepancyApproved) {
       errors.push(
         `Discrepanza sul totale scontrino non approvata: somma righe (€ ${roundedSumLines.toFixed(
@@ -1007,7 +848,6 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
       );
     }
 
-    // 3. Prodotti non classificati / Categorie mancanti & Importi incoerenti
     editableLines.forEach((line, index) => {
       const lineName = line.description?.trim() || line.originalText?.trim() || `Riga #${index + 1}`;
 
@@ -1051,7 +891,6 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
     return errors;
   };
 
-  // Confirm Review (Mark confirmedByUser: true, learn aliases and create products safely)
   const handleConfirmReview = async () => {
     if (!ocrProcess) return;
     setIsSaving(true);
@@ -1078,12 +917,10 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
     }
   };
 
-  // Punto 10 & 11: Creation of Accounting Registration (Expense) from OCR session
   const handleCreateAccountingRegistration = async () => {
     if (!ocrProcess) return;
     setIsSaving(true);
     setErrorMessage(null);
-    setExactDuplicateInfo(null);
 
     const valErrors = getFinalValidationErrors();
     if (valErrors.length > 0) {
@@ -1092,13 +929,12 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
       return;
     }
 
-    const finalSupplierName =
-      selectedSupplierId === 'new'
-        ? newSupplierName.trim()
-        : suppliers.find((s) => s.id === selectedSupplierId)?.name || detectedSupplierName;
-
     try {
-      // Identify deleted lines to be removed inside the atomic transaction
+      const finalSupplierName =
+        selectedSupplierId === 'new'
+          ? newSupplierName.trim()
+          : suppliers.find((s) => s.id === selectedSupplierId)?.name || detectedSupplierName;
+
       const existingDbLines = await ocrReceiptLineRepository.getByOcrProcessId(ocrProcess.id);
       const currentLineIds = new Set(editableLines.map((l) => l.id));
       const deletedLineIds: string[] = [];
@@ -1109,7 +945,6 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
         }
       }
 
-      // Map line classification decisions
       const decisions: LineClassificationDecision[] = editableLines.map((line) => {
         let action: 'link_existing' | 'create_new' | 'unlinked' = line.actionMode || 'unlinked';
 
@@ -1142,7 +977,6 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
         };
       });
 
-      // Passa sia le opzioni della spesa che le decisioni di classificazione per l'esecuzione in un'UNICA TRANSAZIONE ATOMICA
       const createdExp = await productClassificationService.createAccountingRegistration({
         ocrProcessId: ocrProcess.id,
         sessionId: session?.id,
@@ -1165,68 +999,12 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
         onClose();
       }, 800);
     } catch (err: any) {
-      const msg = err?.message || 'Errore durante la creazione della registrazione contabile';
-      if (msg.includes('[DUPLICATE_RECEIPT_EXACT]')) {
-        const match = msg.match(/nella spesa ([a-zA-Z0-9_-]+)/);
-        const matchedExpenseId = match ? match[1] : undefined;
-
-        let matchedSupplier = finalSupplierName;
-        let matchedDate = expenseDate;
-        let matchedAmount = documentTotal;
-
-        if (matchedExpenseId) {
-          try {
-            const matchedExp = await db.expenses.get(matchedExpenseId);
-            if (matchedExp) {
-              if (matchedExp.supplierId) {
-                const sup = await db.suppliers.get(matchedExp.supplierId);
-                if (sup?.name) matchedSupplier = sup.name;
-              } else if (matchedExp.description) {
-                matchedSupplier = matchedExp.description;
-              }
-              if (matchedExp.expenseDate) matchedDate = matchedExp.expenseDate;
-              if (typeof matchedExp.amount === 'number') matchedAmount = matchedExp.amount;
-            }
-          } catch {
-            // fallback
-          }
-        }
-
-        setExactDuplicateInfo({
-          matchedExpenseId,
-          supplierName: matchedSupplier,
-          expenseDate: matchedDate,
-          amount: matchedAmount,
-          rawMessage: msg,
-        });
-        setErrorMessage(null);
-      } else {
-        setErrorMessage(msg);
-        setExactDuplicateInfo(null);
-      }
+      setErrorMessage(err?.message || 'Errore durante la creazione della registrazione contabile');
     } finally {
       setIsSaving(false);
     }
   };
 
-  // Eliminazione della sola acquisizione duplicata corrente (preserva la spesa storica)
-  const handleDeleteDuplicateAcquisition = async () => {
-    if (!session) return;
-    try {
-      setIsDeletingDuplicate(true);
-      await documentSessionRepository.delete(session.id);
-      setIsDeleteDuplicateConfirmOpen(false);
-      setExactDuplicateInfo(null);
-      onClose();
-    } catch (err: any) {
-      console.error("Errore durante l'eliminazione della sessione duplicata:", err);
-      setErrorMessage(err?.message || "Errore durante l'eliminazione dell'acquisizione duplicata");
-    } finally {
-      setIsDeletingDuplicate(false);
-    }
-  };
-
-  // Funzione per copiare l'intero stato diagnostico OCR grezzo e strutturato (Schema D1)
   const handleCopyDiagnostics = async () => {
     try {
       const finalSupplierName =
@@ -1327,7 +1105,34 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
     }
   };
 
-  // Image Viewer Helpers
+  // Strict & Granular Visual State Helpers (Normal, Yellow, Red, Green)
+  const getLineVisualState = (line: EditableReviewLine): 'normal' | 'yellow' | 'red' | 'green' => {
+    if (line.reviewStatus === 'modified' || line.isNewRow) {
+      return 'green';
+    }
+    if (line.hasConflict || (line.unitPrice <= 0 && line.lineTotal <= 0) || (line.warnings && line.warnings.includes('OCR_TEXT_SUSPECT'))) {
+      return 'red';
+    }
+    // Items with confidence 0.88 and no warnings are normal (NOT red)
+    if (line.confidence < 60 || (line.warnings && line.warnings.length > 0) || !line.categoryId || line.categoryId === 'cat-unclassified') {
+      return 'yellow';
+    }
+    return 'normal';
+  };
+
+  const getFieldHighlightClass = (state: 'normal' | 'yellow' | 'red' | 'green'): string => {
+    switch (state) {
+      case 'green':
+        return 'text-emerald-700 dark:text-emerald-300 font-semibold bg-emerald-50 dark:bg-emerald-950/40 px-1 rounded';
+      case 'red':
+        return 'text-rose-700 dark:text-rose-300 font-semibold bg-rose-50 dark:bg-rose-950/40 px-1 rounded underline decoration-rose-500';
+      case 'yellow':
+        return 'text-amber-700 dark:text-amber-300 font-semibold bg-amber-50 dark:bg-amber-950/40 px-1 rounded';
+      default:
+        return 'text-slate-800 dark:text-slate-200';
+    }
+  };
+
   const activeSegment = segments[activeSegmentIndex];
   const activeAttachment = activeSegment
     ? attachmentsMap[activeSegment.id]
@@ -1342,7 +1147,7 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
       subtitle={
         session?.metadata?.title
           ? `Documento: ${session.metadata.title as string}`
-          : 'Confronta il documento originale con la proposta OCR prima della conferma'
+          : 'Copia Digitale dello Scontrino - Confronta con originale e clicca sui campi per modificare'
       }
       maxWidth="5xl"
     >
@@ -1364,8 +1169,8 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
           </div>
         </div>
       ) : (
-        <div className="space-y-4">
-          {/* Error Banner with Retry */}
+        <div className="space-y-4 relative">
+          {/* Error Banner */}
           {errorMessage && (
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3.5 bg-rose-50 dark:bg-rose-950/50 text-rose-700 dark:text-rose-300 rounded-2xl text-xs font-semibold border border-rose-200 dark:border-rose-900">
               <div className="flex items-center gap-2.5">
@@ -1385,88 +1190,11 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
             </div>
           )}
 
-          {/* Dedicated EXACT DUPLICATE Outcome Box */}
-          {exactDuplicateInfo && (
-            <div className="p-4 bg-amber-50 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-800 rounded-2xl shadow-xs space-y-3 text-amber-950 dark:text-amber-100">
-              <div className="flex items-start gap-3">
-                <div className="w-9 h-9 rounded-xl bg-amber-500 text-white flex items-center justify-center shrink-0 mt-0.5 shadow-xs">
-                  <FileCheck className="w-5 h-5" />
-                </div>
-                <div className="flex-1 min-w-0">
-                  <h4 className="font-bold text-sm text-slate-900 dark:text-white">
-                    Documento già registrato
-                  </h4>
-                  <p className="text-xs text-slate-700 dark:text-slate-300 mt-1 leading-relaxed">
-                    Questo scontrino risulta già contabilizzato.
-                  </p>
-                  <p className="text-xs font-semibold text-amber-900 dark:text-amber-200 mt-1">
-                    Spesa esistente: {exactDuplicateInfo.supplierName} — {formatDate(exactDuplicateInfo.expenseDate || '')} — {formatCurrency(exactDuplicateInfo.amount || 0)}.
-                    {exactDuplicateInfo.matchedExpenseId && (
-                      <span className="ml-1.5 text-[11px] font-normal opacity-80">
-                        (ID: {exactDuplicateInfo.matchedExpenseId})
-                      </span>
-                    )}
-                  </p>
-                </div>
-              </div>
-
-              {/* Actions */}
-              <div className="flex flex-wrap items-center justify-end gap-2 pt-2 border-t border-amber-200/60 dark:border-amber-900/60">
-                {exactDuplicateInfo.matchedExpenseId && (
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => {
-                      window.location.href = ROUTES.EXPENSES;
-                    }}
-                    icon={<ExternalLink className="w-3.5 h-3.5" />}
-                  >
-                    Apri spesa esistente
-                  </Button>
-                )}
-                {session && (
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    className="text-rose-600 hover:text-rose-700 hover:bg-rose-100/50 dark:hover:bg-rose-950/40"
-                    onClick={() => setIsDeleteDuplicateConfirmOpen(true)}
-                    icon={<Trash2 className="w-3.5 h-3.5" />}
-                  >
-                    Elimina questa acquisizione
-                  </Button>
-                )}
-                <Button
-                  type="button"
-                  variant="amber"
-                  size="sm"
-                  onClick={onClose}
-                >
-                  Chiudi
-                </Button>
-              </div>
-            </div>
-          )}
-
           {/* Feedback Banner */}
           {feedbackMessage && (
             <div className="flex items-center gap-2.5 p-3.5 bg-emerald-50 dark:bg-emerald-950/50 text-emerald-800 dark:text-emerald-200 rounded-2xl text-xs font-semibold border border-emerald-200 dark:border-emerald-800">
               <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-600" />
               <span className="flex-1">{feedbackMessage}</span>
-            </div>
-          )}
-
-          {/* Discrepancy Alert */}
-          {hasTotalDiscrepancy && (
-            <div className="flex items-start gap-3 p-3.5 bg-amber-50 dark:bg-amber-950/40 rounded-2xl border border-amber-200 dark:border-amber-900 text-xs text-amber-800 dark:text-amber-200">
-              <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
-              <div>
-                <span className="font-bold block text-slate-900 dark:text-white mb-0.5">
-                  Attenzione: Discrepanza sul Totale Documento
-                </span>
-                La somma delle righe ({roundedSumLines.toFixed(2)} €) non corrisponde al totale dichiarato nel documento ({roundedDocTotal.toFixed(2)} €). Verifica la presenza di sconti o errori di lettura.
-              </div>
             </div>
           )}
 
@@ -1481,7 +1209,7 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
                   : 'text-slate-600 dark:text-slate-400'
               }`}
             >
-              Documento Originale
+              Fotografia Scontrino
             </button>
             <button
               type="button"
@@ -1492,24 +1220,24 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
                   : 'text-slate-600 dark:text-slate-400'
               }`}
             >
-              Dati Estratti & Righe ({editableLines.length})
+              Copia Digitale ({editableLines.length} righe)
             </button>
           </div>
 
           {/* Main 2-Column Split View */}
-          <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-start max-h-[72vh] overflow-hidden">
-            {/* COLUMN 1: Image Viewer (Desktop: 5 cols, Mobile: hidden unless activeMobileTab === 'image') */}
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-start max-h-[70vh] overflow-hidden">
+            
+            {/* COLUMN 1: Fotografia Originale dello Scontrino (Desktop: 5 cols) */}
             <div
-              className={`lg:col-span-5 flex flex-col h-full bg-slate-950 rounded-3xl border border-slate-800 overflow-hidden min-h-[420px] max-h-[68vh] ${
+              className={`lg:col-span-5 flex flex-col h-full bg-slate-950 rounded-3xl border border-slate-800 overflow-hidden min-h-[440px] max-h-[68vh] ${
                 activeMobileTab === 'image' ? 'block' : 'hidden lg:flex'
               }`}
             >
-              {/* Image Controls Header */}
               <div className="flex items-center justify-between p-3 bg-slate-900/90 border-b border-slate-800 text-xs text-slate-300">
                 <div className="flex items-center gap-1.5 font-medium min-w-0">
                   <FileText className="w-4 h-4 text-indigo-400 shrink-0" />
                   <span className="truncate">
-                    {activeSegment ? `Pag. ${activeSegmentIndex + 1}/${segments.length}` : 'Immagine'}
+                    {activeSegment ? `Pag. ${activeSegmentIndex + 1}/${segments.length}` : 'Fotografia Scontrino'}
                   </span>
                 </div>
 
@@ -1553,8 +1281,7 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
                 </div>
               </div>
 
-              {/* Image Container */}
-              <div className="flex-1 overflow-auto p-4 flex items-center justify-center bg-slate-950 relative min-h-[340px]">
+              <div className="flex-1 overflow-auto p-4 flex items-center justify-center bg-slate-950 relative min-h-[360px]">
                 {activeImageUrl ? (
                   activeAttachment?.mimeType?.includes('pdf') ? (
                     <iframe
@@ -1565,7 +1292,7 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
                   ) : (
                     <img
                       src={activeImageUrl}
-                      alt="Documento OCR"
+                      alt="Fotografia Scontrino Originale"
                       className="max-w-full max-h-[58vh] object-contain transition-transform duration-150 rounded-lg shadow-xl"
                       style={{
                         transform: `scale(${zoomLevel}) rotate(${rotationDegrees + (activeSegment?.rotationDegrees || 0)}deg)`,
@@ -1574,12 +1301,11 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
                   )
                 ) : (
                   <div className="text-center text-slate-500 text-xs">
-                    Nessun allegato immagine caricato
+                    Nessun allegato immagine disponibile
                   </div>
                 )}
               </div>
 
-              {/* Page Navigator Footer */}
               {segments.length > 1 && (
                 <div className="flex items-center justify-between p-2.5 bg-slate-900/90 border-t border-slate-800 text-xs text-slate-300">
                   <button
@@ -1607,657 +1333,311 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
               )}
             </div>
 
-            {/* COLUMN 2: Editable Form & Line Items (Desktop: 7 cols, Mobile: hidden unless activeMobileTab === 'data') */}
+            {/* COLUMN 2: Copia Digitale dello Scontrino (Desktop: 7 cols) */}
             <div
-              className={`lg:col-span-7 space-y-4 overflow-y-auto max-h-[68vh] pr-1.5 ${
+              className={`lg:col-span-7 space-y-3 overflow-y-auto max-h-[68vh] pr-1.5 ${
                 activeMobileTab === 'data' ? 'block' : 'hidden lg:block'
               }`}
             >
-              {/* Document Header Metadata Box */}
-              <div className="p-4 bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 space-y-3.5 shadow-xs">
-                <div className="flex items-center justify-between">
-                  <h4 className="font-bold text-xs uppercase tracking-wider text-slate-500 dark:text-slate-400 flex items-center gap-1.5">
-                    <Store className="w-4 h-4 text-indigo-500" />
-                    Intestazione Documento & Fornitore
-                  </h4>
-                  {ocrProcess?.confidence && (
-                    <span className="inline-flex items-center gap-1 text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-900">
-                      <Sparkles className="w-3 h-3 text-indigo-500" />
-                      Confidenza OCR: {ocrProcess.confidence}%
-                    </span>
-                  )}
-                </div>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
-                  {/* Fornitore Select & Input */}
-                  <div className="space-y-1">
-                    <label className="block font-semibold text-slate-700 dark:text-slate-300">
-                      Fornitore (Rilevato: "{detectedSupplierName || 'Non identificato'}")
-                    </label>
+              {/* Receipt Paper Styling Container */}
+              <div className="p-4 bg-amber-50/30 dark:bg-slate-900/90 rounded-2xl border border-slate-200 dark:border-slate-800 font-mono text-xs text-slate-800 dark:text-slate-200 space-y-3 shadow-xs">
+                
+                {/* 1. Header: Intestazione Scontrino */}
+                <div className="text-center space-y-1 pb-3 border-b border-dashed border-slate-300 dark:border-slate-700">
+                  <div className="flex items-center justify-center gap-2">
                     <select
                       value={selectedSupplierId}
                       onChange={(e) => setSelectedSupplierId(e.target.value)}
-                      className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl px-3 py-2 font-medium text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500 cursor-pointer"
+                      className="bg-transparent font-bold text-center text-sm text-slate-900 dark:text-white border-b border-dotted border-slate-400 focus:outline-none cursor-pointer max-w-[280px] truncate"
                     >
-                      <option value="new">
-                        ➕ Crea / Proponi Nuovo Fornitore ({newSupplierName || 'Inserisci nome'})
-                      </option>
-                      {suppliers.map((sup) => (
-                        <option key={sup.id} value={sup.id}>
-                          🏢 {sup.name}
-                        </option>
+                      <option value="new">➕ {newSupplierName || detectedSupplierName || 'Nuovo Fornitore'}</option>
+                      {suppliers.map((s) => (
+                        <option key={s.id} value={s.id}>{s.name}</option>
                       ))}
                     </select>
-
-                    {selectedSupplierId === 'new' && (
-                      <input
-                        type="text"
-                        value={newSupplierName}
-                        onChange={(e) => setNewSupplierName(e.target.value)}
-                        placeholder="Nome del nuovo fornitore"
-                        className="w-full mt-1 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl px-3 py-1.5 font-medium text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                      />
-                    )}
                   </div>
+                  {selectedSupplierId === 'new' && (
+                    <input
+                      type="text"
+                      value={newSupplierName}
+                      onChange={(e) => setNewSupplierName(e.target.value)}
+                      placeholder="Nome fornitore"
+                      className="text-center bg-white dark:bg-slate-800 border border-slate-300 rounded px-2 py-0.5 text-xs w-48 mx-auto block mt-1"
+                    />
+                  )}
+                  <div className="text-[10px] text-slate-500 uppercase tracking-widest">
+                    {documentCategory || 'DOCUMENTO COMMERCIALE'}
+                  </div>
+                </div>
 
-                  {/* Data Documento */}
-                  <div className="space-y-1">
-                    <label className="block font-semibold text-slate-700 dark:text-slate-300 flex items-center gap-1">
-                      <Calendar className="w-3.5 h-3.5 text-indigo-500" /> Data Acquisto
-                    </label>
+                {/* 2. Dati Data / Numero Documento */}
+                <div className="flex items-center justify-between text-[11px] text-slate-600 dark:text-slate-400 pb-2 border-b border-dashed border-slate-200 dark:border-slate-800">
+                  <div className="flex items-center gap-1.5">
+                    <Calendar className="w-3.5 h-3.5 text-indigo-500" />
                     <input
                       type="date"
                       value={expenseDate}
                       onChange={(e) => setExpenseDate(e.target.value)}
-                      className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl px-3 py-2 font-medium text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                    />
-                    {isDateDetectedFromOcr ? (
-                      <p className="text-[11px] text-emerald-600 dark:text-emerald-400 font-medium flex items-center gap-1">
-                        <CheckCircle2 className="w-3 h-3" /> Data rilevata da scontrino ({expenseDate})
-                      </p>
-                    ) : (
-                      <p className="text-[11px] text-amber-600 dark:text-amber-400 font-medium flex items-center gap-1">
-                        <AlertCircle className="w-3 h-3" /> Data presunta: verificare data reale su scontrino
-                      </p>
-                    )}
-                  </div>
-
-                  {/* Totale Documento */}
-                  <div className="space-y-1">
-                    <label className="block font-semibold text-slate-700 dark:text-slate-300">
-                      Totale Scontrino (€)
-                    </label>
-                    <input
-                      type="number"
-                      step="0.01"
-                      value={documentTotal || ''}
-                      onChange={(e) => setDocumentTotal(parseFloat(e.target.value) || 0)}
-                      className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl px-3 py-2 font-bold text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                      className="bg-transparent font-mono text-xs text-slate-800 dark:text-slate-200 focus:outline-none cursor-pointer"
                     />
                   </div>
-
-                  {/* Metodo di Pagamento */}
-                  <div className="space-y-1">
-                    <label className="block font-semibold text-slate-700 dark:text-slate-300 flex items-center gap-1">
-                      <CreditCard className="w-3.5 h-3.5 text-indigo-500" /> Metodo di Pagamento
-                    </label>
-                    <select
-                      value={paymentMethod}
-                      onChange={(e) => setPaymentMethod(e.target.value as PaymentMethod)}
-                      className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl px-3 py-2 font-medium text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500 cursor-pointer"
-                    >
-                      <option value="cash">Contanti</option>
-                      <option value="debitCard">Carta di Debito / Bancomat</option>
-                      <option value="creditCard">Carta di Credito</option>
-                      <option value="bankTransfer">Bonifico Bancario</option>
-                      <option value="digitalWallet">Digital Wallet (Satispay, Apple Pay)</option>
-                      <option value="other">Altro / Da verificare</option>
-                    </select>
+                  <div className="font-mono text-[11px]">
+                    N. DOC: {ocrProcess?.id ? ocrProcess.id.substring(0, 8).toUpperCase() : '001'}
                   </div>
                 </div>
 
-                {/* Discrepancy Alert Box */}
-                {documentTotal > 0 &&
-                  editableLines.length > 0 &&
-                  hasTotalDiscrepancy && (
-                    <div className="p-3 bg-amber-50 dark:bg-amber-950/40 rounded-2xl border border-amber-200 dark:border-amber-800 text-xs text-amber-900 dark:text-amber-200 space-y-2 mt-3">
-                      <div className="flex items-center gap-2 font-bold">
-                        <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
-                        <span>Discrepanza Rilevata negli Importi</span>
-                      </div>
-                      <p className="text-[11px] leading-relaxed">
-                        Il totale dello scontrino (€ {documentTotal.toFixed(2)}) differisce dalla somma delle righe (€ {roundedSumLines.toFixed(2)}).
-                        Differenza: € {effectiveDiscrepancy.toFixed(2)}.
-                      </p>
-                      <label className="flex items-center gap-2 pt-1 font-semibold cursor-pointer text-amber-950 dark:text-amber-100">
+                {/* 3. Elenco Righe Prodotto (Copia Digitale Lineare) */}
+                <div className="space-y-2 py-1">
+                  <div className="flex items-center justify-between text-[10px] uppercase font-bold text-slate-400 pb-1 border-b border-slate-200 dark:border-slate-800">
+                    <span>Articolo / Descrizione</span>
+                    <div className="flex items-center gap-4">
+                      <span>Q.tà</span>
+                      <span>Prezzo (€)</span>
+                    </div>
+                  </div>
+
+                  {editableLines.length === 0 ? (
+                    <div className="text-center py-6 text-slate-400 text-xs">
+                      Nessun articolo. Clicca "+ Aggiungi Riga" in basso.
+                    </div>
+                  ) : (
+                    editableLines.map((line, idx) => {
+                      const visualState = getLineVisualState(line);
+                      const isEditing = editingRowId === line.id;
+                      const isExpanded = expandedDetailsRowId === line.id;
+
+                      return (
+                        <div
+                          key={line.id}
+                          className={`p-2 rounded-xl border transition-all space-y-1.5 ${
+                            isEditing
+                              ? 'bg-white dark:bg-slate-800 border-indigo-500 ring-1 ring-indigo-500 shadow-sm'
+                              : 'bg-transparent border-transparent hover:bg-slate-100/60 dark:hover:bg-slate-800/40'
+                          }`}
+                        >
+                          {/* Line Main Receipt Row */}
+                          <div className="flex items-center justify-between gap-2">
+                            <div className="flex items-center gap-2 min-w-0 flex-1">
+                              <span className="text-[10px] text-slate-400 font-mono shrink-0">#{idx + 1}</span>
+                              {isEditing ? (
+                                <input
+                                  type="text"
+                                  value={line.description}
+                                  onChange={(e) => handleLineChange(line.id, 'description', e.target.value)}
+                                  className="w-full bg-white dark:bg-slate-900 border border-slate-300 rounded px-2 py-0.5 text-xs font-sans font-medium"
+                                  autoFocus
+                                />
+                              ) : (
+                                <span
+                                  onClick={() => setEditingRowId(line.id)}
+                                  className={`truncate font-medium cursor-pointer hover:underline ${getFieldHighlightClass(visualState)}`}
+                                  title="Clicca per modificare"
+                                >
+                                  {line.description}
+                                </span>
+                              )}
+                            </div>
+
+                            <div className="flex items-center gap-3 shrink-0 font-mono text-xs">
+                              {isEditing ? (
+                                <>
+                                  <input
+                                    type="number"
+                                    step="any"
+                                    value={line.quantity}
+                                    onChange={(e) => handleLineChange(line.id, 'quantity', parseFloat(e.target.value) || 0)}
+                                    className="w-12 bg-white dark:bg-slate-900 border border-slate-300 rounded px-1 text-center text-xs"
+                                    title="Quantità"
+                                  />
+                                  <input
+                                    type="number"
+                                    step="0.01"
+                                    value={line.lineTotal}
+                                    onChange={(e) => handleLineChange(line.id, 'lineTotal', parseFloat(e.target.value) || 0)}
+                                    className="w-16 bg-white dark:bg-slate-900 border border-slate-300 rounded px-1 text-right text-xs font-bold"
+                                    title="Totale riga"
+                                  />
+                                  <button
+                                    type="button"
+                                    onClick={() => setEditingRowId(null)}
+                                    className="p-1 bg-indigo-600 text-white rounded hover:bg-indigo-700"
+                                    title="Salva riga"
+                                  >
+                                    <Check className="w-3.5 h-3.5" />
+                                  </button>
+                                </>
+                              ) : (
+                                <>
+                                  <span className="text-slate-500 w-8 text-center">{line.quantity}x</span>
+                                  <span className="font-bold text-slate-900 dark:text-white w-16 text-right">
+                                    € {line.lineTotal.toFixed(2)}
+                                  </span>
+                                  <button
+                                    type="button"
+                                    onClick={() => setEditingRowId(line.id)}
+                                    className="p-1 text-slate-400 hover:text-indigo-600 rounded"
+                                    title="Modifica riga"
+                                  >
+                                    <Edit3 className="w-3.5 h-3.5" />
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => setExpandedDetailsRowId(isExpanded ? null : line.id)}
+                                    className="p-1 text-slate-400 hover:text-indigo-600 rounded"
+                                    title="Associazione Prodotto & Categoria"
+                                  >
+                                    {isExpanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleDeleteLine(line.id)}
+                                    className="p-1 text-slate-400 hover:text-rose-600 rounded"
+                                    title="Elimina riga"
+                                  >
+                                    <Trash2 className="w-3.5 h-3.5" />
+                                  </button>
+                                </>
+                              )}
+                            </div>
+                          </div>
+
+                          {/* Collapsible Product & Category Details */}
+                          {isExpanded && (
+                            <div className="pt-2 mt-1 border-t border-slate-200 dark:border-slate-700 grid grid-cols-1 sm:grid-cols-2 gap-2 text-[11px] font-sans">
+                              <div>
+                                <label className="block text-[10px] text-slate-500 mb-0.5 flex items-center gap-1">
+                                  <Package className="w-3 h-3 text-indigo-500" /> Prodotto Catalogo
+                                </label>
+                                <select
+                                  value={line.productId || (line.actionMode === 'create_new' ? 'CREATE_NEW' : '')}
+                                  onChange={(e) => {
+                                    const val = e.target.value;
+                                    if (val === 'CREATE_NEW') {
+                                      handleLineChange(line.id, 'productId', null);
+                                      handleLineChange(line.id, 'actionMode', 'create_new');
+                                    } else if (val) {
+                                      handleLineChange(line.id, 'productId', val);
+                                      handleLineChange(line.id, 'actionMode', 'link_existing');
+                                    } else {
+                                      handleLineChange(line.id, 'productId', null);
+                                      handleLineChange(line.id, 'actionMode', 'unlinked');
+                                    }
+                                  }}
+                                  className="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg px-2 py-1 text-xs text-slate-900 dark:text-white"
+                                >
+                                  <option value="">Nessun collegamento</option>
+                                  <option value="CREATE_NEW">➕ Crea nuovo prodotto</option>
+                                  {products.map((p) => (
+                                    <option key={p.id} value={p.id}>{p.displayName}</option>
+                                  ))}
+                                </select>
+                              </div>
+
+                              <div>
+                                <label className="block text-[10px] text-slate-500 mb-0.5 flex items-center gap-1">
+                                  <Tag className="w-3 h-3 text-indigo-500" /> Categoria
+                                </label>
+                                <select
+                                  value={line.categoryId || ''}
+                                  onChange={(e) => handleLineChange(line.id, 'categoryId', e.target.value || null)}
+                                  className="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg px-2 py-1 text-xs text-slate-900 dark:text-white"
+                                >
+                                  <option value="">Seleziona Categoria...</option>
+                                  {parentCategories.map((c) => (
+                                    <option key={c.id} value={c.id}>{c.name}</option>
+                                  ))}
+                                </select>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })
+                  )}
+
+                  <div className="pt-2">
+                    <button
+                      type="button"
+                      onClick={handleAddLine}
+                      className="w-full py-1.5 border border-dashed border-slate-300 dark:border-slate-700 rounded-xl text-xs text-indigo-600 dark:text-indigo-400 font-semibold hover:bg-indigo-50/50 flex items-center justify-center gap-1.5"
+                    >
+                      <Plus className="w-3.5 h-3.5" /> Aggiungi Articolo alla Copia Digitale
+                    </button>
+                  </div>
+                </div>
+
+                {/* 4. Riepilogo & Pagamento integrato nello scontrino */}
+                <div className="pt-3 border-t border-dashed border-slate-300 dark:border-slate-700 space-y-1.5 text-xs font-mono">
+                  <div className="flex items-center justify-between font-bold text-slate-900 dark:text-white text-sm pt-1">
+                    <span>TOTALE COMPLESSIVO</span>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="number"
+                        step="0.01"
+                        value={documentTotal || ''}
+                        onChange={(e) => setDocumentTotal(parseFloat(e.target.value) || 0)}
+                        className="w-24 bg-white dark:bg-slate-800 border border-slate-300 rounded px-1.5 py-0.5 text-right font-bold text-sm"
+                      />
+                      <span>€</span>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center justify-between text-slate-500 text-[11px]">
+                    <span>Somma righe rilevate</span>
+                    <span>€ {roundedSumLines.toFixed(2)}</span>
+                  </div>
+
+                  {hasTotalDiscrepancy && (
+                    <div className="p-2 bg-amber-50 dark:bg-amber-950/40 rounded-lg text-amber-800 dark:text-amber-200 text-[11px] space-y-1 mt-1">
+                      <div>Discrepanza: € {effectiveDiscrepancy.toFixed(2)}</div>
+                      <label className="flex items-center gap-1.5 cursor-pointer font-sans font-medium">
                         <input
                           type="checkbox"
                           checked={isDiscrepancyApproved}
                           onChange={(e) => setIsDiscrepancyApproved(e.target.checked)}
-                          className="rounded text-amber-600 focus:ring-amber-500 w-4 h-4"
+                          className="rounded text-amber-600 w-3.5 h-3.5"
                         />
-                        <span>Confermo la discrepanza e approvo il totale dello scontrino</span>
+                        <span>Confermo la discrepanza sul totale</span>
                       </label>
                     </div>
                   )}
-              </div>
 
-              {/* Line Items Table Box */}
-              <div className="p-4 bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 space-y-3 shadow-xs">
-                <div className="flex flex-col space-y-2 pb-2 border-b border-slate-100 dark:border-slate-800">
-                  <div className="flex items-center justify-between">
-                    <h4 className="font-bold text-xs uppercase tracking-wider text-slate-500 dark:text-slate-400">
-                      Righe Scontrino & Classificazione Prodotti ({editableLines.length})
-                    </h4>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      onClick={handleAddLine}
-                      icon={<Plus className="w-3.5 h-3.5" />}
+                  <div className="flex items-center justify-between pt-2 border-t border-slate-200 dark:border-slate-800">
+                    <span className="uppercase font-semibold">METODO DI PAGAMENTO</span>
+                    <select
+                      value={paymentMethod}
+                      onChange={(e) => setPaymentMethod(e.target.value as PaymentMethod)}
+                      className="bg-white dark:bg-slate-800 border border-slate-300 rounded px-2 py-1 text-xs font-sans cursor-pointer"
                     >
-                      Aggiungi Riga
-                    </Button>
+                      <option value="cash">Contanti</option>
+                      <option value="debitCard">BANCOMAT / Carta Debito</option>
+                      <option value="creditCard">Carta di Credito</option>
+                      <option value="bankTransfer">Bonifico Bancario</option>
+                      <option value="digitalWallet">Digital Wallet</option>
+                      <option value="other">Altro</option>
+                    </select>
                   </div>
 
-                  {/* Navigation Filter Bar (Punto 14.5) */}
-                  <div className="flex flex-wrap items-center gap-1.5 pt-1 text-xs">
-                    <button
-                      type="button"
-                      onClick={() => setActiveLineFilter('all')}
-                      className={`px-2.5 py-1 rounded-lg font-semibold transition-colors ${
-                        activeLineFilter === 'all'
-                          ? 'bg-indigo-600 text-white'
-                          : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-700'
-                      }`}
-                    >
-                      Tutte ({editableLines.length})
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setActiveLineFilter('error')}
-                      className={`px-2.5 py-1 rounded-lg font-semibold transition-colors flex items-center gap-1 ${
-                        activeLineFilter === 'error'
-                          ? 'bg-rose-600 text-white'
-                          : 'bg-rose-50 dark:bg-rose-950/40 text-rose-700 dark:text-rose-300 hover:bg-rose-100'
-                      }`}
-                    >
-                      <span>Errore / Sospette</span>
-                      <span className="px-1.5 py-0.2 text-[10px] bg-rose-200 dark:bg-rose-900 rounded-full font-bold">{linesWithError.length}</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setActiveLineFilter('unclassified')}
-                      className={`px-2.5 py-1 rounded-lg font-semibold transition-colors flex items-center gap-1 ${
-                        activeLineFilter === 'unclassified'
-                          ? 'bg-amber-600 text-white'
-                          : 'bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-300 hover:bg-amber-100'
-                      }`}
-                    >
-                      <span>Non Classificate</span>
-                      <span className="px-1.5 py-0.2 text-[10px] bg-amber-200 dark:bg-amber-900 rounded-full font-bold">{linesUnclassified.length}</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setActiveLineFilter('modified')}
-                      className={`px-2.5 py-1 rounded-lg font-semibold transition-colors flex items-center gap-1 ${
-                        activeLineFilter === 'modified'
-                          ? 'bg-purple-600 text-white'
-                          : 'bg-purple-50 dark:bg-purple-950/40 text-purple-700 dark:text-purple-300 hover:bg-purple-100'
-                      }`}
-                    >
-                      <span>Modificate</span>
-                      <span className="px-1.5 py-0.2 text-[10px] bg-purple-200 dark:bg-purple-900 rounded-full font-bold">{linesModified.length}</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setActiveLineFilter('discounts')}
-                      className={`px-2.5 py-1 rounded-lg font-semibold transition-colors flex items-center gap-1 ${
-                        activeLineFilter === 'discounts'
-                          ? 'bg-teal-600 text-white'
-                          : 'bg-teal-50 dark:bg-teal-950/40 text-teal-700 dark:text-teal-300 hover:bg-teal-100'
-                      }`}
-                    >
-                      <span>Sconti</span>
-                      <span className="px-1.5 py-0.2 text-[10px] bg-teal-200 dark:bg-teal-900 rounded-full font-bold">{linesDiscounts.length}</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setActiveLineFilter('returns')}
-                      className={`px-2.5 py-1 rounded-lg font-semibold transition-colors flex items-center gap-1 ${
-                        activeLineFilter === 'returns'
-                          ? 'bg-sky-600 text-white'
-                          : 'bg-sky-50 dark:bg-sky-950/40 text-sky-700 dark:text-sky-300 hover:bg-sky-100'
-                      }`}
-                    >
-                      <span>Resi</span>
-                      <span className="px-1.5 py-0.2 text-[10px] bg-sky-200 dark:bg-sky-900 rounded-full font-bold">{linesReturns.length}</span>
-                    </button>
+                  <div className="flex items-center justify-between text-[11px] text-slate-500">
+                    <span>IMPORTO PAGATO</span>
+                    <span>€ {documentTotal.toFixed(2)}</span>
                   </div>
                 </div>
 
-                {editableLines.length === 0 ? (
-                  <div className="py-8 text-center text-xs text-slate-400">
-                    Nessuna riga rilevata. Clicca "+ Aggiungi Riga" per inserire manualmente un articolo.
-                  </div>
-                ) : visibleLines.length === 0 ? (
-                  <div className="py-8 text-center text-xs text-slate-400">
-                    Nessuna riga trovata per il filtro selezionato ({activeLineFilter}).
-                  </div>
-                ) : (
-                  <div className="space-y-3">
-                    {visibleLines.map((line, idx) => {
-                      return (
-                        <div
-                          key={line.id}
-                          className={`p-3.5 rounded-2xl border transition-all text-xs space-y-2.5 ${
-                            line.hasConflict
-                              ? 'bg-amber-50/40 dark:bg-amber-950/20 border-amber-300 dark:border-amber-900'
-                              : 'bg-slate-50/70 dark:bg-slate-800/40 border-slate-200 dark:border-slate-800'
-                          }`}
-                        >
-                          {/* Top Row: Line Index & Original OCR Text */}
-                          <div className="flex items-center justify-between text-[11px] text-slate-500 dark:text-slate-400 border-b border-slate-200/50 dark:border-slate-700/50 pb-1.5">
-                            <span className="font-bold text-indigo-600 dark:text-indigo-400">
-                              # {idx + 1} • Testo OCR: "{line.originalText}"
-                            </span>
-
-                            <div className="flex items-center gap-2 flex-wrap">
-                              {/* Suspicious Line Badge */}
-                              {(line.unitPrice === 0 || (line.warnings && line.warnings.includes('prezzo_riga_non_rilevato'))) && (
-                                <span className="inline-flex items-center gap-1 text-[10px] font-bold text-amber-800 dark:text-amber-200 bg-amber-100 dark:bg-amber-900/60 px-2 py-0.5 rounded-md border border-amber-300 dark:border-amber-700">
-                                  <AlertTriangle className="w-3 h-3 text-amber-600" />
-                                  Riga Sospetta (Prezzo Mancante)
-                                </span>
-                              )}
-
-                              {/* Discount / Promo Badge */}
-                              {(line.lineTotal < 0 || /SCONTO|PROMO|ABBUONO|COUPON|BUONO/i.test(line.description) || (line.warnings && line.warnings.includes('DISCOUNT_LINE'))) && (
-                                <span className="inline-flex items-center gap-1 text-[10px] font-bold text-teal-800 dark:text-teal-200 bg-teal-50 dark:bg-teal-950/60 px-2 py-0.5 rounded-md border border-teal-200 dark:border-teal-800">
-                                  Sconto / Promozione
-                                </span>
-                              )}
-
-                              {/* Negative Amount / Return Badge */}
-                              {(line.lineTotal < 0 || /RESO|STORNO|RESTITUITO/i.test(line.description)) && (
-                                <span className="inline-flex items-center gap-1 text-[10px] font-bold text-rose-800 dark:text-rose-200 bg-rose-50 dark:bg-rose-950/60 px-2 py-0.5 rounded-md border border-rose-200 dark:border-rose-800">
-                                  Reso / Storno (Importo Negativo)
-                                </span>
-                              )}
-
-                              {/* Unclassified Badge */}
-                              {(!line.categoryId || line.categoryId === 'cat-unclassified' || line.proposedCategoryName?.toLowerCase().includes('classificare')) && (
-                                <span className="inline-flex items-center gap-1 text-[10px] font-bold text-slate-700 dark:text-slate-300 bg-slate-100 dark:bg-slate-800 px-2 py-0.5 rounded-md border border-slate-300 dark:border-slate-700">
-                                  Da Classificare
-                                </span>
-                              )}
-
-                              {/* Confidence Level Badge */}
-                              {line.confidenceLevel === 'exact' && (
-                                <span className="inline-flex items-center gap-1 text-[10px] font-bold text-emerald-700 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950/50 px-2 py-0.5 rounded-md border border-emerald-200 dark:border-emerald-800">
-                                  <Package className="w-3 h-3 text-emerald-500" />
-                                  Match Esatto (100%)
-                                </span>
-                              )}
-                              {line.confidenceLevel === 'high_confidence' && (
-                                <span className="inline-flex items-center gap-1 text-[10px] font-bold text-indigo-700 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-950/50 px-2 py-0.5 rounded-md border border-indigo-200 dark:border-indigo-800">
-                                  <Package className="w-3 h-3 text-indigo-500" />
-                                  Alta Confidenza ({line.confidence}%)
-                                </span>
-                              )}
-                              {line.confidenceLevel === 'possible' && (
-                                <span className="inline-flex items-center gap-1 text-[10px] font-bold text-sky-700 dark:text-sky-300 bg-sky-50 dark:bg-sky-950/50 px-2 py-0.5 rounded-md border border-sky-200 dark:border-sky-800">
-                                  <Package className="w-3 h-3 text-sky-500" />
-                                  Possibile Match ({line.confidence}%)
-                                </span>
-                              )}
-                              {line.confidenceLevel === 'new_product' && (
-                                <span className="inline-flex items-center gap-1 text-[10px] font-bold text-purple-700 dark:text-purple-300 bg-purple-50 dark:bg-purple-950/50 px-2 py-0.5 rounded-md border border-purple-200 dark:border-purple-800">
-                                  <Plus className="w-3 h-3 text-purple-500" />
-                                  Proposto come Nuovo Prodotto
-                                </span>
-                              )}
-                              {line.confidenceLevel === 'unresolved' && (
-                                <span className="inline-flex items-center gap-1 text-[10px] font-bold text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-950/50 px-2 py-0.5 rounded-md border border-amber-200 dark:border-amber-800">
-                                  <AlertTriangle className="w-3 h-3 text-amber-500" />
-                                  Da Verificare
-                                </span>
-                              )}
-
-                              {line.hasConflict && (
-                                <span
-                                  className="inline-flex items-center gap-1 text-[10px] font-bold text-amber-700 dark:text-amber-300 bg-amber-100 dark:bg-amber-950 px-2 py-0.5 rounded-md"
-                                  title={line.conflictDetails}
-                                >
-                                  <AlertTriangle className="w-3 h-3" /> Ambiguità / Conflitto
-                                </span>
-                              )}
-
-                              <button
-                                type="button"
-                                onClick={() => handleDeleteLine(line.id)}
-                                className="p-1 text-slate-400 hover:text-rose-600 dark:hover:text-rose-400 rounded-md ml-auto"
-                                title="Elimina riga"
-                              >
-                                <Trash2 className="w-3.5 h-3.5" />
-                              </button>
-                            </div>
-                          </div>
-
-                          {/* Editable Fields Grid */}
-                          <div className="grid grid-cols-1 sm:grid-cols-12 gap-2.5">
-                            {/* Descrizione (5 cols) */}
-                            <div className="sm:col-span-5">
-                              <label className="block text-[10px] font-semibold text-slate-500 mb-0.5">
-                                Descrizione Articolo (da scontrino)
-                              </label>
-                              <input
-                                type="text"
-                                value={line.description}
-                                onChange={(e) => handleLineChange(line.id, 'description', e.target.value)}
-                                className="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl px-2.5 py-1.5 font-semibold text-slate-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-indigo-500"
-                              />
-                            </div>
-
-                            {/* Quantità (2 cols) */}
-                            <div className="sm:col-span-2">
-                              <label className="block text-[10px] font-semibold text-slate-500 mb-0.5">
-                                Quantità
-                              </label>
-                              <input
-                                type="number"
-                                min="0.01"
-                                step="any"
-                                value={line.quantity || ''}
-                                onChange={(e) => handleLineChange(line.id, 'quantity', parseFloat(e.target.value) || 0)}
-                                className="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl px-2 py-1.5 font-semibold text-slate-900 dark:text-white text-center focus:outline-none focus:ring-1 focus:ring-indigo-500"
-                              />
-                            </div>
-
-                            {/* Prezzo Unitario (2.5 cols) */}
-                            <div className="sm:col-span-2">
-                              <label className="block text-[10px] font-semibold text-slate-500 mb-0.5">
-                                Prezzo Unit. (€)
-                              </label>
-                              <input
-                                type="number"
-                                step="0.01"
-                                value={line.unitPrice || ''}
-                                onChange={(e) => handleLineChange(line.id, 'unitPrice', parseFloat(e.target.value) || 0)}
-                                className="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl px-2 py-1.5 font-semibold text-slate-900 dark:text-white text-right focus:outline-none focus:ring-1 focus:ring-indigo-500"
-                              />
-                            </div>
-
-                            {/* Totale Riga (2.5 cols) */}
-                            <div className="sm:col-span-3">
-                              <label className="block text-[10px] font-semibold text-slate-500 mb-0.5">
-                                Totale Riga (€)
-                              </label>
-                              <input
-                                type="number"
-                                step="0.01"
-                                value={line.lineTotal || ''}
-                                onChange={(e) => handleLineChange(line.id, 'lineTotal', parseFloat(e.target.value) || 0)}
-                                className="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl px-2 py-1.5 font-bold text-slate-900 dark:text-white text-right focus:outline-none focus:ring-1 focus:ring-indigo-500"
-                              />
-                            </div>
-                          </div>
-
-                          {/* Classification Selection: Product & Category */}
-                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-1 border-t border-slate-200/60 dark:border-slate-700/60">
-                            {/* Product Selector */}
-                            <div>
-                              <label className="block text-[10px] font-semibold text-slate-500 mb-0.5 flex items-center gap-1">
-                                <Package className="w-3 h-3 text-indigo-500" /> Prodotto Associato
-                              </label>
-                              <select
-                                value={line.productId || (line.actionMode === 'create_new' ? 'CREATE_NEW' : '')}
-                                onChange={(e) => {
-                                  const val = e.target.value;
-                                  if (val === 'CREATE_NEW') {
-                                    handleLineChange(line.id, 'productId', null);
-                                    handleLineChange(line.id, 'actionMode', 'create_new');
-                                  } else if (val) {
-                                    handleLineChange(line.id, 'productId', val);
-                                    handleLineChange(line.id, 'actionMode', 'link_existing');
-                                  } else {
-                                    handleLineChange(line.id, 'productId', null);
-                                    handleLineChange(line.id, 'actionMode', 'unlinked');
-                                  }
-                                }}
-                                className="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl px-2.5 py-1.5 font-medium text-slate-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-indigo-500"
-                              >
-                                <option value="">Nessun prodotto (Incollegato / Provvisorio)</option>
-                                <option value="CREATE_NEW">➕ Crea nuovo prodotto nel catalogo</option>
-                                {line.candidateMatches && line.candidateMatches.length > 0 && (
-                                  <optgroup label="Candidati consigliati dall'algoritmo">
-                                    {line.candidateMatches.map((c) => (
-                                      <option key={c.product.id} value={c.product.id}>
-                                        {c.product.displayName} ({c.score}% match)
-                                      </option>
-                                    ))}
-                                  </optgroup>
-                                )}
-                                <optgroup label="Tutti i prodotti in catalogo">
-                                  {products.map((p) => (
-                                    <option key={p.id} value={p.id}>
-                                      {p.displayName} {p.brand ? `(${p.brand})` : ''}
-                                    </option>
-                                  ))}
-                                </optgroup>
-                              </select>
-
-                              {line.actionMode === 'create_new' && (
-                                <div className="mt-2 p-2 bg-purple-50/70 dark:bg-purple-950/30 border border-purple-200 dark:border-purple-800 rounded-xl space-y-1">
-                                  <label className="block text-[10px] font-bold text-purple-800 dark:text-purple-300">
-                                    Nome da salvare in catalogo:
-                                  </label>
-                                  <input
-                                    type="text"
-                                    value={line.newProductDisplayName || line.description}
-                                    onChange={(e) => handleLineChange(line.id, 'newProductDisplayName', e.target.value)}
-                                    className="w-full bg-white dark:bg-slate-900 border border-purple-300 dark:border-purple-700 rounded-lg px-2 py-1 text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-purple-500 font-semibold"
-                                  />
-                                  <span className="block text-[10px] text-purple-600 dark:text-purple-400 italic">
-                                    Verrà creato nel catalogo solo alla conferma, evitando duplicati.
-                                  </span>
-                                </div>
-                              )}
-                            </div>
-
-                            {/* Category Selector */}
-                            <div>
-                              <label className="block text-[10px] font-semibold text-slate-500 mb-0.5 flex items-center gap-1">
-                                <Tag className="w-3 h-3 text-indigo-500" /> Categoria Proposta
-                              </label>
-                              <select
-                                value={line.categoryId || ''}
-                                onChange={(e) => handleLineChange(line.id, 'categoryId', e.target.value || null)}
-                                className="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-xl px-2.5 py-1.5 font-medium text-slate-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-indigo-500"
-                              >
-                                <option value="">Seleziona Categoria...</option>
-                                {parentCategories.map((c) => (
-                                  <option key={c.id} value={c.id}>
-                                    {c.name}
-                                  </option>
-                                ))}
-                              </select>
-                            </div>
-                          </div>
-                        </div>
-                      );
-                    })}
+                {existingExpense && (
+                  <div className="p-2.5 bg-emerald-50 dark:bg-emerald-950/40 rounded-xl text-xs text-emerald-800 dark:text-emerald-300 flex items-center gap-2">
+                    <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                    <span>Registrazione contabile già effettuata il {existingExpense.expenseDate}</span>
                   </div>
                 )}
               </div>
-
-              {/* Existing Expense Notice */}
-              {existingExpense ? (
-                <div className="p-3 bg-emerald-50 dark:bg-emerald-950/40 rounded-2xl border border-emerald-200 dark:border-emerald-800 text-xs text-emerald-800 dark:text-emerald-300 flex items-center gap-2.5">
-                  <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
-                  <div>
-                    <span className="font-bold block">
-                      Registrazione contabile già effettuata
-                    </span>
-                    Spesa registrata il {existingExpense.expenseDate} per l'importo di {existingExpense.amount} €.
-                  </div>
-                </div>
-              ) : (
-                /* Offline Protection Notice */
-                <div className="p-3 bg-slate-50 dark:bg-slate-800/50 rounded-2xl border border-slate-200 dark:border-slate-800 text-xs text-slate-600 dark:text-slate-400 flex items-start gap-2.5">
-                  <Info className="w-4 h-4 text-indigo-500 shrink-0 mt-0.5" />
-                  <div>
-                    <span className="font-bold text-slate-800 dark:text-slate-200 block mb-0.5">
-                      Modalità Revisione & Registrazione Contabile
-                    </span>
-                    La <strong>Conferma revisione dati</strong> convalida i dati estratti dall'OCR. Utilizza <strong>Crea Registrazione Contabile</strong> per generare direttamente la Spesa reale a bilancio.
-                  </div>
-                </div>
-              )}
             </div>
           </div>
 
-          {/* Strumento di Diagnostica OCR (Non-invasivo per debug e verifica input reale Tesseract) */}
-          <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-900/50 overflow-hidden text-xs">
-            <button
-              type="button"
-              onClick={() => setShowDiagnostics(!showDiagnostics)}
-              className="w-full flex items-center justify-between p-3.5 hover:bg-slate-100/70 dark:hover:bg-slate-800/50 transition-colors text-left cursor-pointer"
-            >
-              <div className="flex items-center gap-2 font-bold text-slate-700 dark:text-slate-300">
-                <Terminal className="w-4 h-4 text-indigo-500" />
-                <span>Mostra diagnostica OCR (Raw Tesseract & Parser State)</span>
-                {ocrProcess && (
-                  <span className="text-[11px] font-normal text-slate-500 dark:text-slate-400">
-                    ({ocrProcess.rawText ? `${ocrProcess.rawText.length} car.` : '0 car.'} • {editableLines.length} righe)
-                  </span>
-                )}
-              </div>
-              <div className="flex items-center gap-1 text-slate-500">
-                <span className="text-[11px] font-semibold">{showDiagnostics ? 'Comprimi' : 'Espandi'}</span>
-                {showDiagnostics ? (
-                  <ChevronUp className="w-4 h-4" />
-                ) : (
-                  <ChevronDown className="w-4 h-4" />
-                )}
-              </div>
-            </button>
-
-            {showDiagnostics && (
-              <div className="p-4 border-t border-slate-200 dark:border-slate-800 space-y-3 bg-white dark:bg-slate-950">
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-2 border-b border-slate-100 dark:border-slate-800">
-                  <p className="text-[11px] text-slate-500 dark:text-slate-400">
-                    Visualizza il testo grezzo ricevuto direttamente da Tesseract nel browser e le righe analizzate. Questa sezione è dedicata al debug e non compare nella registrazione contabile.
-                  </p>
-                  <div className="flex items-center gap-2 self-start sm:self-auto shrink-0">
-                    <button
-                      type="button"
-                      onClick={handleCopyDiagnostics}
-                      className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold transition-all cursor-pointer shadow-xs"
-                    >
-                      {copySuccess ? (
-                        <>
-                          <Check className="w-3.5 h-3.5" />
-                          <span>Diagnostica copiata!</span>
-                        </>
-                      ) : (
-                        <>
-                          <Copy className="w-3.5 h-3.5" />
-                          <span>Copia diagnostica (D1)</span>
-                        </>
-                      )}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={handleDownloadDiagnostics}
-                      className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-white rounded-xl text-xs font-bold transition-all cursor-pointer shadow-xs border border-slate-700"
-                    >
-                      <Download className="w-3.5 h-3.5 text-indigo-400" />
-                      <span>Scarica JSON</span>
-                    </button>
-                  </div>
-                </div>
-
-                {/* Metadata & Variant Selection Details */}
-                {ocrProcess && (
-                  <div className="p-3 bg-slate-900 border border-slate-800 rounded-xl text-slate-300 font-mono text-[11px] space-y-2">
-                    <div className="text-amber-400 font-bold flex items-center justify-between">
-                      <span>Variante Selezionata: {(ocrProcess.metadata as Record<string, any>)?.selectedVariant || 'original'}</span>
-                      <span>Confidenza complessiva: {ocrProcess.confidence || 0}%</span>
-                    </div>
-                    {Array.isArray((ocrProcess.metadata as Record<string, any>)?.variantScores) &&
-                      (ocrProcess.metadata as Record<string, any>).variantScores.length > 0 && (
-                        <div className="space-y-1 pt-1 border-t border-slate-800">
-                          <div className="text-[10px] text-slate-400 font-semibold uppercase tracking-wider">
-                            Punteggi Varianti Pre-Processing:
-                          </div>
-                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
-                            {(ocrProcess.metadata as Record<string, any>).variantScores.map((v: any, idx: number) => (
-                              <div
-                                key={idx}
-                                className={`p-1.5 rounded-lg border text-[10px] ${
-                                  v.variant === (ocrProcess.metadata as Record<string, any>)?.selectedVariant
-                                    ? 'bg-amber-950/40 border-amber-800/80 text-amber-200'
-                                    : 'bg-slate-950 border-slate-800 text-slate-400'
-                                }`}
-                              >
-                                <div className="font-bold flex items-center justify-between">
-                                  <span>{v.label || v.variant}</span>
-                                  <span>Score: {v.overallScore} (Conf: {v.confidence}%)</span>
-                                </div>
-                                {Array.isArray(v.reasons) && v.reasons.length > 0 && (
-                                  <div className="text-[9px] text-slate-400 truncate mt-0.5">
-                                    {v.reasons.join(', ')}
-                                  </div>
-                                )}
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      )}
-                  </div>
-                )}
-
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                  <div>
-                    <label className="block text-[11px] font-bold text-slate-700 dark:text-slate-300 mb-1 flex items-center justify-between">
-                      <span>1. Testo Grezzo OCR (rawText):</span>
-                      <span className="font-mono text-[10px] text-slate-400 font-normal">
-                        {ocrProcess?.rawText ? `${ocrProcess.rawText.split('\n').length} righe` : '0'}
-                      </span>
-                    </label>
-                    <pre className="p-3 bg-slate-950 text-emerald-400 font-mono text-[11px] rounded-xl overflow-auto max-h-56 whitespace-pre-wrap select-all border border-slate-800 leading-relaxed">
-                      {ocrProcess?.rawText || '(Nessun testo grezzo salvato nel processo OCR)'}
-                    </pre>
-                  </div>
-
-                  <div>
-                    <label className="block text-[11px] font-bold text-slate-700 dark:text-slate-300 mb-1 flex items-center justify-between">
-                      <span>2. Righe Normalizzate & Riconosciute:</span>
-                      <span className="font-mono text-[10px] text-slate-400 font-normal">
-                        {editableLines.length} elementi
-                      </span>
-                    </label>
-                    <pre className="p-3 bg-slate-950 text-cyan-300 font-mono text-[11px] rounded-xl overflow-auto max-h-56 whitespace-pre-wrap select-all border border-slate-800 leading-relaxed">
-                      {((ocrProcess?.metadata as Record<string, any>)?.normalizedLines || []).join('\n') ||
-                        editableLines
-                          .map(
-                            (l, idx) =>
-                              `#${idx + 1} | [${l.description}] ${l.quantity} x € ${l.unitPrice.toFixed(
-                                2
-                              )} = € ${l.lineTotal.toFixed(2)}${l.warnings?.length ? ` (${l.warnings.join(', ')})` : ''}`
-                          )
-                          .join('\n') ||
-                        '(Nessuna riga)'}
-                    </pre>
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
-
-          {/* Modal Actions Footer */}
-          <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-3 border-t border-slate-200 dark:border-slate-800">
+          {/* ============================================================ */}
+          {/* BOTTOM ACTIONS & DIAGNOSTICA BUTTON                          */}
+          {/* ============================================================ */}
+          <div className="flex items-center justify-between pt-3 border-t border-slate-200 dark:border-slate-800">
             <div className="flex items-center gap-2">
               <Button
                 type="button"
@@ -2275,84 +1655,58 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
                   onClick={handleDeleteSession}
                   disabled={isSaving}
                   icon={<Trash2 className="w-4 h-4 text-rose-500" />}
-                  className="text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/30"
+                  className="text-rose-600 dark:text-rose-400 hover:bg-rose-50"
                 >
                   Elimina scansione
                 </Button>
               )}
             </div>
 
-            <div className="flex flex-wrap items-center gap-3 w-full sm:w-auto justify-end">
-              {!existingExpense && session && !exactDuplicateInfo && (
-                <Button
-                  type="button"
-                  variant="ghost"
-                  onClick={handleRerunOcr}
-                  disabled={isSaving}
-                  icon={<RefreshCw className="w-4 h-4 text-indigo-500" />}
-                >
-                  Riprova OCR
-                </Button>
-              )}
+            {/* Pulsante Diagnostica in basso a destra */}
+            <div className="flex items-center gap-3">
+              <button
+                type="button"
+                onClick={() => setShowDiagnosticsModal(true)}
+                className="inline-flex items-center gap-2 px-4 py-2 bg-slate-800 hover:bg-slate-700 dark:bg-slate-800 dark:hover:bg-slate-700 text-white rounded-2xl text-xs font-bold transition-all shadow-md cursor-pointer border border-slate-700"
+                title="Apri pannello di diagnostica tecnica OCR"
+              >
+                <Terminal className="w-4 h-4 text-indigo-400" />
+                <span>Diagnostica</span>
+                {ocrProcess && (
+                  <span className="px-1.5 py-0.5 bg-slate-900 rounded-lg text-[10px] font-mono text-indigo-300">
+                    {ocrProcess.rawText ? `${ocrProcess.rawText.length}c` : '0c'}
+                  </span>
+                )}
+              </button>
 
-              {!existingExpense && (
-                <Button
-                  type="button"
-                  variant="ghost"
-                  onClick={handleSaveDraft}
-                  disabled={isSaving}
-                  icon={<Save className="w-4 h-4 text-slate-600 dark:text-slate-300" />}
-                >
-                  Salva bozza
-                </Button>
-              )}
-
-              {(() => {
-                const valErrors = getFinalValidationErrors();
-                const isConfirmBlocked =
-                  isSaving ||
-                  (hasTotalDiscrepancy && !isDiscrepancyApproved) ||
-                  valErrors.length > 0;
-
-                return (
+              <div className="flex items-center gap-2">
+                {!existingExpense && session && (
                   <Button
                     type="button"
-                    variant="secondary"
-                    onClick={handleConfirmReview}
-                    disabled={isConfirmBlocked}
-                    title={
-                      hasTotalDiscrepancy && !isDiscrepancyApproved
-                        ? 'Discrepanza non approvata: spunta la casella di conferma per abilitare il pulsante'
-                        : valErrors.length > 0
-                        ? `Impossibile confermare: ${valErrors[0]}`
-                        : 'Conferma revisione dati'
-                    }
-                    icon={
-                      isSaving ? (
-                        <RefreshCw className="w-4 h-4 animate-spin" />
-                      ) : (
-                        <Check className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
-                      )
-                    }
+                    variant="ghost"
+                    onClick={handleRerunOcr}
+                    disabled={isSaving}
+                    icon={<RefreshCw className="w-4 h-4 text-indigo-500" />}
                   >
-                    Conferma revisione dati
+                    Riprova OCR
                   </Button>
-                );
-              })()}
+                )}
 
-              {existingExpense ? (
-                <Button
-                  type="button"
-                  variant="secondary"
-                  disabled={true}
-                  icon={<CheckCircle2 className="w-4 h-4 text-emerald-500" />}
-                >
-                  Registrazione già creata
-                </Button>
-              ) : (
-                (() => {
+                {!existingExpense && (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    onClick={handleSaveDraft}
+                    disabled={isSaving}
+                    icon={<Save className="w-4 h-4 text-slate-600 dark:text-slate-300" />}
+                  >
+                    Salva bozza
+                  </Button>
+                )}
+
+                {(() => {
                   const valErrors = getFinalValidationErrors();
-                  const isBlocked =
+                  const isConfirmBlocked =
                     isSaving ||
                     (hasTotalDiscrepancy && !isDiscrepancyApproved) ||
                     valErrors.length > 0;
@@ -2360,71 +1714,208 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
                   return (
                     <Button
                       type="button"
-                      variant={isBlocked ? 'secondary' : 'emerald'}
-                      onClick={handleCreateAccountingRegistration}
-                      disabled={isBlocked}
-                      title={
-                        hasTotalDiscrepancy && !isDiscrepancyApproved
-                          ? 'Discrepanza non approvata: spunta la casella di conferma per abilitare la registrazione'
-                          : valErrors.length > 0
-                          ? `Impossibile registrare: ${valErrors[0]}`
-                          : 'Crea Spesa a bilancio'
-                      }
+                      variant="secondary"
+                      onClick={handleConfirmReview}
+                      disabled={isConfirmBlocked}
                       icon={
                         isSaving ? (
                           <RefreshCw className="w-4 h-4 animate-spin" />
                         ) : (
-                          <Sparkles className="w-4 h-4" />
+                          <Check className="w-4 h-4 text-emerald-600" />
                         )
                       }
                     >
-                      <span>{isSaving ? 'Registrazione in corso...' : 'Crea Registrazione Contabile'}</span>
+                      Conferma revisione
                     </Button>
                   );
-                })()
-              )}
+                })()}
+
+                {existingExpense ? (
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    disabled={true}
+                    icon={<CheckCircle2 className="w-4 h-4 text-emerald-500" />}
+                  >
+                    Registrata
+                  </Button>
+                ) : (
+                  (() => {
+                    const valErrors = getFinalValidationErrors();
+                    const isBlocked =
+                      isSaving ||
+                      (hasTotalDiscrepancy && !isDiscrepancyApproved) ||
+                      valErrors.length > 0;
+
+                    return (
+                      <Button
+                        type="button"
+                        variant={isBlocked ? 'secondary' : 'emerald'}
+                        onClick={handleCreateAccountingRegistration}
+                        disabled={isBlocked}
+                        icon={
+                          isSaving ? (
+                            <RefreshCw className="w-4 h-4 animate-spin" />
+                          ) : (
+                            <Sparkles className="w-4 h-4" />
+                          )
+                        }
+                      >
+                        <span>{isSaving ? 'Registrazione...' : 'Crea Registrazione'}</span>
+                      </Button>
+                    );
+                  })()
+                )}
+              </div>
             </div>
           </div>
+
+          {/* ============================================================ */}
+          {/* DIAGNOSTICS MODAL (Drawer / Overlay)                         */}
+          {/* ============================================================ */}
+          {showDiagnosticsModal && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/70 backdrop-blur-xs p-4">
+              <div className="bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-3xl shadow-2xl w-full max-w-4xl max-h-[85vh] flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+                
+                <div className="flex items-center justify-between p-4 bg-slate-50 dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800">
+                  <div className="flex items-center gap-2">
+                    <Terminal className="w-5 h-5 text-indigo-500" />
+                    <div>
+                      <h3 className="font-bold text-sm text-slate-900 dark:text-white">
+                        Diagnostica Tecnica OCR (Schema D1 & Decision Engine)
+                      </h3>
+                      <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                        Raw Tesseract, OCRS/RTen, Decision Summary e Telemetria completa
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={handleCopyDiagnostics}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold transition-all cursor-pointer shadow-xs"
+                    >
+                      {copySuccess ? (
+                        <>
+                          <Check className="w-3.5 h-3.5" />
+                          <span>Copiato!</span>
+                        </>
+                      ) : (
+                        <>
+                          <Copy className="w-3.5 h-3.5" />
+                          <span>Copia D1 JSON</span>
+                        </>
+                      )}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleDownloadDiagnostics}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-white rounded-xl text-xs font-bold transition-all cursor-pointer shadow-xs border border-slate-700"
+                    >
+                      <Download className="w-3.5 h-3.5 text-indigo-400" />
+                      <span>Scarica JSON</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setShowDiagnosticsModal(false)}
+                      className="p-1.5 hover:bg-slate-200 dark:hover:bg-slate-800 rounded-xl text-slate-500 hover:text-slate-700 dark:hover:text-slate-200"
+                    >
+                      <X className="w-5 h-5" />
+                    </button>
+                  </div>
+                </div>
+
+                <div className="flex-1 overflow-y-auto p-5 space-y-4 text-xs">
+                  {ocrProcess && (
+                    <div className="p-3 bg-slate-900 border border-slate-800 rounded-2xl text-slate-300 font-mono text-[11px] space-y-2">
+                      <div className="text-amber-400 font-bold flex items-center justify-between">
+                        <span>Variante Selezionata: {(ocrProcess.metadata as Record<string, any>)?.selectedVariant || 'original'}</span>
+                        <span>Confidenza complessiva: {ocrProcess.confidence || 0}%</span>
+                      </div>
+                      {Array.isArray((ocrProcess.metadata as Record<string, any>)?.variantScores) &&
+                        (ocrProcess.metadata as Record<string, any>).variantScores.length > 0 && (
+                          <div className="space-y-1 pt-1 border-t border-slate-800">
+                            <div className="text-[10px] text-slate-400 font-semibold uppercase tracking-wider">
+                              Punteggi Varianti Pre-Processing:
+                            </div>
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+                              {(ocrProcess.metadata as Record<string, any>).variantScores.map((v: any, idx: number) => (
+                                <div
+                                  key={idx}
+                                  className={`p-1.5 rounded-lg border text-[10px] ${
+                                    v.variant === (ocrProcess.metadata as Record<string, any>)?.selectedVariant
+                                      ? 'bg-amber-950/40 border-amber-800/80 text-amber-200'
+                                      : 'bg-slate-950 border-slate-800 text-slate-400'
+                                  }`}
+                                >
+                                  <div className="font-bold flex items-center justify-between">
+                                    <span>{v.label || v.variant}</span>
+                                    <span>Score: {v.overallScore} (Conf: {v.confidence}%)</span>
+                                  </div>
+                                  {Array.isArray(v.reasons) && v.reasons.length > 0 && (
+                                    <div className="text-[9px] text-slate-400 truncate mt-0.5">
+                                      {v.reasons.join(', ')}
+                                    </div>
+                                  )}
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                    </div>
+                  )}
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-[11px] font-bold text-slate-700 dark:text-slate-300 mb-1 flex items-center justify-between">
+                        <span>1. Testo Grezzo OCR (rawText):</span>
+                        <span className="font-mono text-[10px] text-slate-400 font-normal">
+                          {ocrProcess?.rawText ? `${ocrProcess.rawText.split('\n').length} righe` : '0'}
+                        </span>
+                      </label>
+                      <pre className="p-3 bg-slate-950 text-emerald-400 font-mono text-[11px] rounded-xl overflow-auto max-h-64 whitespace-pre-wrap select-all border border-slate-800 leading-relaxed">
+                        {ocrProcess?.rawText || '(Nessun testo grezzo salvato)'}
+                      </pre>
+                    </div>
+
+                    <div>
+                      <label className="block text-[11px] font-bold text-slate-700 dark:text-slate-300 mb-1 flex items-center justify-between">
+                        <span>2. Righe Normalizzate & Riconosciute:</span>
+                        <span className="font-mono text-[10px] text-slate-400 font-normal">
+                          {editableLines.length} elements
+                        </span>
+                      </label>
+                      <pre className="p-3 bg-slate-950 text-cyan-300 font-mono text-[11px] rounded-xl overflow-auto max-h-64 whitespace-pre-wrap select-all border border-slate-800 leading-relaxed">
+                        {((ocrProcess?.metadata as Record<string, any>)?.normalizedLines || []).join('\n') ||
+                          editableLines
+                            .map(
+                              (l, idx) =>
+                                `#${idx + 1} | [${l.description}] ${l.quantity} x € ${l.unitPrice.toFixed(
+                                  2
+                                )} = € ${l.lineTotal.toFixed(2)}`
+                            )
+                            .join('\n') ||
+                          '(Nessuna riga)'}
+                      </pre>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-end p-3 bg-slate-50 dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800">
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    onClick={() => setShowDiagnosticsModal(false)}
+                  >
+                    Chiudi Diagnostica
+                  </Button>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       )}
-      {/* Modal di Conferma Eliminazione Acquisizione Duplicata */}
-      <Modal
-        isOpen={isDeleteDuplicateConfirmOpen}
-        onClose={() => {
-          if (!isDeletingDuplicate) {
-            setIsDeleteDuplicateConfirmOpen(false);
-          }
-        }}
-        title="Eliminare questa acquisizione?"
-      >
-        <div className="space-y-4">
-          <p className="text-sm text-slate-600 dark:text-slate-300 leading-relaxed">
-            Verrà eliminata soltanto questa nuova acquisizione duplicata.
-          </p>
-          <p className="text-xs text-slate-500 dark:text-slate-400">
-            La spesa già registrata non verrà modificata.
-          </p>
-
-          <div className="flex items-center justify-end gap-3 pt-2">
-            <Button
-              type="button"
-              variant="ghost"
-              disabled={isDeletingDuplicate}
-              onClick={() => setIsDeleteDuplicateConfirmOpen(false)}
-            >
-              Annulla
-            </Button>
-            <Button
-              type="button"
-              variant="danger"
-              disabled={isDeletingDuplicate}
-              onClick={handleDeleteDuplicateAcquisition}
-            >
-              {isDeletingDuplicate ? 'Eliminazione...' : 'Elimina acquisizione'}
-            </Button>
-          </div>
-        </div>
-      </Modal>
     </Modal>
   );
 };

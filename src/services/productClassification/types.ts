@@ -158,24 +158,4 @@ export interface CreateAccountingRegistrationParams {
   decisions?: LineClassificationDecision[];
   deletedLineIds?: EntityId[];
   allowDiscrepancy?: boolean;
-  allowProbableDuplicate?: boolean;
 }
-
-export interface UpdateAccountingRegistrationParams {
-  expenseId: EntityId;
-  ocrProcessId: EntityId;
-  sessionId?: EntityId | null;
-  paymentMethod?: PaymentMethod;
-  categoryId?: EntityId | null;
-  subcategoryId?: EntityId | null;
-  notes?: string;
-  supplierId?: EntityId | null;
-  supplierName?: string | null;
-  expenseDate?: string | null;
-  documentTotal?: number | null;
-  decisions?: LineClassificationDecision[];
-  deletedLineIds?: EntityId[];
-  allowDiscrepancy?: boolean;
-  allowProbableDuplicate?: boolean;
-}
-

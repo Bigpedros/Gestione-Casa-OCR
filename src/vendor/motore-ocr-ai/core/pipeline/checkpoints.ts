@@ -1,4 +1,4 @@
-import type {Box,FieldCandidate,OcrPage,OcrToken,StructuralAnalysis,StructuralRegion} from '../../contracts.js';
+import type {FieldCandidate,OcrPage,OcrToken,StructuralAnalysis,StructuralRegion} from '../../contracts.js';
 
 export type OcrEvidenceSource='raw'|'variant'|'recognizer-b'|'recognizer-b-region'|'receipt-line'|'receipt-amount'|'targeted-reocr'|'critical-reocr'|'receipt-finalizer'|'local-consensus';
 
@@ -58,6 +58,40 @@ export interface OcrDecision{
   reason:string;
   confidence:number|null;
   changed:boolean;
+  primaryText?:string;
+  secondaryText?:string;
+  primaryConfidence?:number|null;
+  secondaryConfidence?:number|null;
+  decision?:string;
+  tokenType?:string;
+  geometryMatch?:number;
+}
+
+export interface DecisionSummary{
+  total:number;
+  keepPrimary:number;
+  secondaryWins:number;
+  consensus:number;
+  unresolved:number;
+  regionalRetrySuggested:number;
+  changed:number;
+}
+
+export interface TokenMatchingDiagnostic{
+  primaryTokenId:string;
+  primaryText:string;
+  primaryConfidence:number|null;
+  secondaryCandidates:Array<{
+    source:string;
+    text:string;
+    confidence:number|null;
+    box:any;
+    iou:number;
+    verticalOverlap:number;
+    horizontalDistance:number;
+    acceptedAsMatch:boolean;
+    rejectionReason:string;
+  }>;
 }
 
 export interface StabilizedOcrCheckpoint{
@@ -65,6 +99,11 @@ export interface StabilizedOcrCheckpoint{
   decisions:OcrDecision[];
   evidenceCount:number;
   observationCount:number;
+  decisionSummary?:DecisionSummary;
+  matchingDiagnostics?:TokenMatchingDiagnostic[];
+  primaryReaderInfo?:{name:string;tokenCount:number;text:string;tokens:OcrToken[]};
+  secondaryReaderInfo?:{name:string;tokenCount:number;text:string;tokens:OcrToken[]};
+  variantReaderInfo?:{name:string;tokenCount:number;text:string;tokens:OcrToken[]};
 }
 
 export interface StructuredLineSnapshot{
@@ -231,9 +270,4 @@ export function fingerprintOcrTokens(tokens:ReadonlyArray<Readonly<OcrToken>>):s
   for(let index=0;index<input.length;index++){hash^=input.charCodeAt(index);hash=Math.imul(hash,16777619);}
   return(hash>>>0).toString(16).padStart(8,'0');
 }
-function overlap(a:Box,b:Box):number{
-  const left=Math.max(a.x,b.x),top=Math.max(a.y,b.y),right=Math.min(a.x+a.width,b.x+b.width),bottom=Math.min(a.y+a.height,b.y+b.height);
-  if(right<=left||bottom<=top)return 0;
-  return((right-left)*(bottom-top))/Math.max(1,Math.min(a.width*a.height,b.width*b.height));
-}
-function normalize(value:string){return value.normalize('NFKC').toUpperCase().replace(/\s+/g,'').trim();}
+

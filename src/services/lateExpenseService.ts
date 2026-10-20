@@ -64,16 +64,11 @@ export const lateExpenseService = {
       throw new Error('Importo della spesa non valido');
     }
 
-    // 1. Controllo di Idempotenza (Prevenzione doppio salvataggio via ocrProcessId o attachmentId)
-    if (ocrProcessId || attachmentId) {
+    // 1. Controllo di Idempotenza (Prevenzione doppio salvataggio)
+    if (ocrProcessId) {
       const existingExpenses = await expenseRepository.getAll();
       const duplicate = existingExpenses.find(
-        (e) => {
-          const m = e.metadata as Record<string, any> | undefined;
-          const matchProcess = ocrProcessId && (m?.ocrProcessId === ocrProcessId || e.notes?.includes(`[OCR:${ocrProcessId}]`));
-          const matchAttachment = attachmentId && m?.attachmentId === attachmentId;
-          return Boolean(matchProcess || matchAttachment);
-        }
+        (e) => (e.metadata as any)?.ocrProcessId === ocrProcessId || e.notes?.includes(`[OCR:${ocrProcessId}]`)
       );
 
       if (duplicate) {

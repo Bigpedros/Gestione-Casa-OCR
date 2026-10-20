@@ -2,7 +2,7 @@ import type { OcrPage, OcrToken } from '../vendor/motore-ocr-ai/contracts.js';
 import { TesseractLocalProvider } from '../vendor/motore-ocr-ai/core/ocr/tesseractLocalProvider.js';
 import { DualRecognizerOcrProvider, OcrsWasmRecognizerB } from '../vendor/motore-ocr-ai/core/ocr/recognizerB.js';
 import { addEvidenceTokens, createEvidenceSet, createRawOcrSnapshot } from '../vendor/motore-ocr-ai/core/pipeline/checkpoints.js';
-import { stabilizeOcrPage } from '../vendor/motore-ocr-ai/core/pipeline/decisionEngine.js';
+import { stabilizeOcrPage, DECISION_ENGINE_VERSION } from '../vendor/motore-ocr-ai/core/pipeline/decisionEngine.js';
 import type { OcrWordGeometry } from './ocrParser/types';
 
 export const MOTORE_OCR_AI_SOURCE_COMMIT = 'be0005803ed60eadd4eb4030b7d2a2bad79a5c29';
@@ -23,6 +23,13 @@ export interface MotoreOcrAiPageResult {
   recognizerBUsed: boolean;
   recognizerBTokens: number;
   engineSourceCommit: string;
+  decisionEngineVersion: string;
+  decisionSummary?: any;
+  primaryReader?: any;
+  secondaryReader?: any;
+  variantReader?: any;
+  matchingDiagnostics?: any[];
+  decisions?: any[];
 }
 
 let provider: DualRecognizerOcrProvider | null = null;
@@ -90,6 +97,7 @@ export async function recognizeReceiptPageWithMotoreOcrAi(
     warnings: [...page.warnings],
     diagnostics: [
       `provider:${engine.id}`,
+      `decisionEngineVersion:${DECISION_ENGINE_VERSION}`,
       `rawTokens:${rawSnapshot.tokens.length}`,
       `evidence:${stabilized.evidenceCount}`,
       `decisions:${stabilized.decisions.length}`,
@@ -107,6 +115,13 @@ export async function recognizeReceiptPageWithMotoreOcrAi(
     recognizerBUsed: recognizerB.length > 0,
     recognizerBTokens,
     engineSourceCommit: MOTORE_OCR_AI_SOURCE_COMMIT,
+    decisionEngineVersion: DECISION_ENGINE_VERSION,
+    decisionSummary: stabilized.decisionSummary,
+    primaryReader: stabilized.primaryReaderInfo,
+    secondaryReader: stabilized.secondaryReaderInfo,
+    variantReader: stabilized.variantReaderInfo,
+    matchingDiagnostics: stabilized.matchingDiagnostics,
+    decisions: stabilized.decisions,
   };
 }
 

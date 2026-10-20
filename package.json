@@ -38,7 +38,6 @@
     "jspdf": "^3.0.0",
     "lucide-react": "^0.546.0",
     "motion": "^12.23.24",
-    "pdfjs-dist": "^6.3.289",
     "react": "^19.0.1",
     "react-dom": "^19.0.1",
     "react-hook-form": "^7.54.2",

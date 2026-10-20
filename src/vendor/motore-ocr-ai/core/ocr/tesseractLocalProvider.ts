@@ -365,7 +365,7 @@ export class TesseractLocalProvider implements OcrProvider {
         await worker.setParameters({tessedit_pageseg_mode:region.psm,preserve_interword_spaces:'1',user_defined_dpi:String(this.options.dpi??300),tessedit_char_whitelist:''});
         const result=await worker.recognize(crop as never,{}, {text:true,blocks:true});
         for(const block of result.data.blocks??[])for(const paragraph of block.paragraphs??[])for(const line of paragraph.lines??[])for(const word of line.words??[]){
-          const clean=word.text.trim().replace(/^[€"'\[({\s]+|[€"'\])}\s]+$/g,'');
+          const clean=word.text.trim().replace(/^[€"'[{(\s]+|[€"'\])}\s]+$/g,'');
           if(!/^[-−]?\d{1,4}[.,]\d{2}$/.test(clean)||(word.confidence??0)<70)continue;
           const {x0,y0,x1,y1}=word.bbox;
           const box={x:(x0+left)*scaleX,y:(y0+top)*scaleY,width:(x1-x0)*scaleX,height:(y1-y0)*scaleY};
@@ -385,7 +385,7 @@ export class TesseractLocalProvider implements OcrProvider {
 }
 
 function chooseSegmentation(width:number,height:number,fallback:PSM):PSM{const ratio=width/Math.max(1,height);return ratio<.72&&height>width*1.35?PSM.SINGLE_COLUMN:fallback;}
-function pageFromResult(input:OcrPageInput,blocks:any[],text:string):OcrPage{
+function pageFromResult(input:OcrPageInput,blocks:any[],_text:string):OcrPage{
   const tokens:OcrToken[]=[];let lineIndex=0,repairedCount=0,filteredCount=0;
   for(const block of blocks)for(const paragraph of block.paragraphs??[])for(const line of paragraph.lines??[]){
     const lineId=`p${input.pageNumber}-l${lineIndex++}`;
@@ -484,7 +484,7 @@ function unionBoxes(boxes:Array<{x:number;y:number;width:number;height:number}>)
 }
 function isSemanticallySuspiciousToken(text:string){
   if(/^[^\p{L}\p{N}]+$/u.test(text))return true;
-  if(/[{}\[\]\\|]/.test(text))return true;
+  if(/[{}[\]\\|]/.test(text))return true;
   if(/\p{Ll}\p{Lu}/u.test(text)&&text.length<=4)return true;
   const alnum=(text.match(/[\p{L}\p{N}]/gu)??[]).length;
   return alnum/Math.max(1,[...text].length)<.6;

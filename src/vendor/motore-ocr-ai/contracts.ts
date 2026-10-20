@@ -109,8 +109,8 @@ export interface EnginePageResult {
 export interface EngineDocumentResult {
   schemaVersion:'3.0'; engineVersion:string; pages:EnginePageResult[];
   diagnostics:Diagnostic[];
-  aiSuggestions:import('./ai/types.js').AiSuggestion[];
-  reconstruction?:import('./core/reconstruction/digitalReconstruction.js').DigitalReconstruction;
+  aiSuggestions:any[];
+  reconstruction?:any;
   audit?:{documentHash:string;pages:Array<{pageNumber:number;stages:AuditStage[]}>};
-  diagnosticBundle?:import('./core/audit/diagnosticBundle.js').PageDiagnosticBundle[];
+  diagnosticBundle?:any[];
 }

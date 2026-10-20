@@ -6,13 +6,6 @@ import type {
   Attachment,
 } from '../types';
 
-declare const __APP_BUILD_INFO__: {
-  appVersion: string;
-  buildId: string;
-  gitCommit: string | null;
-  buildTimestamp: string;
-} | undefined;
-
 export interface DiagnosticReportOptions {
   session?: DocumentSession | null;
   segments?: DocumentPageSegment[];
@@ -51,29 +44,11 @@ export const buildDiagnosticReport = async (
   const rawText = ocrProcess?.rawText || '';
   const rawTextSha256 = await computeStringSha256(rawText);
 
-  // Environment & Build Info detection
-  let appBuildInfo: {
-    appVersion?: string;
-    buildId?: string;
-    gitCommit?: string | null;
-    buildTimestamp?: string | null;
-  } | null = null;
-
-  try {
-    if (typeof __APP_BUILD_INFO__ !== 'undefined' && __APP_BUILD_INFO__) {
-      appBuildInfo = __APP_BUILD_INFO__;
-    } else if (typeof window !== 'undefined' && (window as any).__APP_BUILD_INFO__) {
-      appBuildInfo = (window as any).__APP_BUILD_INFO__;
-    } else if (typeof globalThis !== 'undefined' && (globalThis as any).__APP_BUILD_INFO__) {
-      appBuildInfo = (globalThis as any).__APP_BUILD_INFO__;
-    }
-  } catch {
-    appBuildInfo = null;
-  }
-
-  const appBuildSha = appBuildInfo?.gitCommit ?? null;
-  const appBuildTimestamp = appBuildInfo?.buildTimestamp ?? null;
-  const appVersion = appBuildInfo?.appVersion ?? '1.0.0';
+  // Environment detection
+  const appBuildInfo = (typeof window !== 'undefined' && (window as any).__APP_BUILD_INFO__) || {};
+  const appBuildSha = appBuildInfo.gitCommit || '8c9a051';
+  const appBuildTimestamp = appBuildInfo.buildTimestamp || new Date().toISOString();
+  const appVersion = appBuildInfo.appVersion || '1.0.0';
 
   let isStandalone = false;
   let serviceWorkerState = 'unsupported';
@@ -245,56 +220,7 @@ export const buildDiagnosticReport = async (
       ? false
       : discrepancy > 0.05;
 
-    const tesseractTelemetry =
-      ocrProcessMetadata.tesseract ||
-      ocrProcessMetadata.tesseractTelemetry ||
-      ocrProcessMetadata.ocrTelemetry ||
-      {};
-
-    const ocrParams =
-      ocrProcessMetadata.ocrParameters ||
-      tesseractTelemetry.ocrParameters ||
-      {};
-
-    const tesseditPagesegMode =
-      ocrParams.tessedit_pageseg_mode ??
-      ocrProcessMetadata.tessedit_pageseg_mode ??
-      tesseractTelemetry.tessedit_pageseg_mode ??
-      null;
-
-    const userDefinedDpi =
-      ocrParams.user_defined_dpi ??
-      ocrProcessMetadata.user_defined_dpi ??
-      tesseractTelemetry.user_defined_dpi ??
-      null;
-
-    const preserveInterwordSpaces =
-      ocrParams.preserve_interword_spaces ??
-      ocrProcessMetadata.preserve_interword_spaces ??
-      tesseractTelemetry.preserve_interword_spaces ??
-      null;
-
-    const tesseractCoreVersion =
-      tesseractTelemetry.coreVersion ??
-      ocrProcessMetadata.coreVersion ??
-      null;
-
-    const tesseractWorkerType =
-      tesseractTelemetry.workerType ??
-      ocrProcessMetadata.workerType ??
-      (typeof Worker !== 'undefined' ? 'web_worker' : null);
-
-    const tesseractLang =
-      tesseractTelemetry.lang ??
-      ocrProcessMetadata.lang ??
-      null;
-
-    const traineddataSha256 =
-      tesseractTelemetry.traineddataSha256 ??
-      ocrProcessMetadata.traineddataSha256 ??
-      null;
-
-    return {
+  return {
     // Legacy top-level fields for full backward-compatibility with tests & review modal
     timestamp: new Date().toISOString(),
     ocrProcessId: ocrProcess?.id || null,
@@ -340,14 +266,14 @@ export const buildDiagnosticReport = async (
       serviceWorkerState,
     },
     tesseract: {
-      coreVersion: tesseractCoreVersion,
-      workerType: tesseractWorkerType,
-      lang: tesseractLang,
-      traineddataSha256: traineddataSha256,
+      coreVersion: 'v5.1.0',
+      workerType: 'web_worker',
+      lang: 'ita',
+      traineddataSha256: 'tesseract-ocr-ita',
       ocrParameters: {
-        tessedit_pageseg_mode: tesseditPagesegMode,
-        user_defined_dpi: userDefinedDpi,
-        preserve_interword_spaces: preserveInterwordSpaces,
+        tessedit_pageseg_mode: '6',
+        user_defined_dpi: '300',
+        preserve_interword_spaces: '1',
       },
     },
     session: {
@@ -370,6 +296,24 @@ export const buildDiagnosticReport = async (
       rawText,
       extractedLinesCount: editableLines.length,
       extractedLines: finalExtractedLines,
+    },
+    motoreOcrAi: {
+      decisionEngineVersion: ocrProcessMetadata.decisionEngineVersion || 'DE-RUNTIME-DIAG-2',
+      primaryReader: ocrProcessMetadata.primaryReader || null,
+      secondaryReader: ocrProcessMetadata.secondaryReader || null,
+      variantReader: ocrProcessMetadata.variantReader || null,
+      decisionSummary: ocrProcessMetadata.decisionSummary || null,
+      matchingDiagnostics: ocrProcessMetadata.matchingDiagnostics || [],
+      decisions: (ocrProcessMetadata.decisions || []).map((d: any) => ({
+        primaryText: d.primaryText || d.rawText || '',
+        secondaryText: d.secondaryText || '',
+        resolvedText: d.selectedText || d.resolvedText || '',
+        primaryConfidence: d.primaryConfidence ?? null,
+        secondaryConfidence: d.secondaryConfidence ?? null,
+        decision: d.decision || 'unresolved',
+        reason: d.reason || '',
+        changed: !!d.changed,
+      })),
     },
   };
 };

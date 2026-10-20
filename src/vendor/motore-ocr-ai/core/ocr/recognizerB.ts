@@ -206,7 +206,7 @@ function wordsToTokens(words:OcrsWordJson[],pageNumber:number,offsetX:number,off
 function heuristicConfidence(text:string):number{
   const value=text.trim();if(!value)return 0;
   const plausibility=textPlausibility(value);
-  const structured=/^(?:€\s*)?\d{1,6}[.,]\d{2}%?$/.test(value)||/^\d{1,2}[:/.\-]\d{1,4}/.test(value);
+  const structured=/^(?:€\s*)?\d{1,6}[.,]\d{2}%?$/.test(value)||/^\d{1,2}[:/.-]\d{1,4}/.test(value);
   return Math.round(Math.max(72,Math.min(88,78+plausibility*7+(structured?3:0))));
 }
 function scoreTokens(tokens:OcrToken[]):number{
@@ -223,7 +223,7 @@ function textPlausibility(value:string):number{
   const text=value.trim();if(!text)return 0;
   const alnum=(text.match(/[\p{L}\p{N}]/gu)??[]).length;
   let score=.35+.55*(alnum/Math.max(1,[...text].length));
-  if(/[{}\[\]\\|]{2,}/.test(text))score-=.35;
+  if(/[{}[\]\\|]{2,}/.test(text))score-=.35;
   if(/^[^\p{L}\p{N}]{2,}$/u.test(text))score-=.25;
   return Math.max(0,Math.min(1,score));
 }

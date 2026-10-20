@@ -95,7 +95,7 @@ export function scoreOcrVariant(page:OcrPage):number{
 function isPlausibleOcrToken(value:string):boolean{
   const text=value.trim();
   if(!text)return false;
-  if(/[{}\[\]\\|]{2,}/.test(text))return false;
+  if(/[{}[\]\\|]{2,}/.test(text))return false;
   const useful=(text.match(/[\p{L}\p{N}]/gu)??[]).length;
   return useful/Math.max(1,[...text].length)>=.6;
 }
@@ -109,10 +109,10 @@ function isWordLike(value:string):boolean{
 function isGarbageToken(value:string):boolean{
   const text=value.trim();
   if(!text)return true;
-  const symbols=(text.match(/[^\p{L}\p{N}.,:/%€+\-()]/gu)??[]).length;
+  const symbols=(text.match(/[^\p{L}\p{N}.,:/%€+()-]/gu)??[]).length;
   const alnum=(text.match(/[\p{L}\p{N}]/gu)??[]).length;
   if(symbols>Math.max(2,alnum))return true;
-  if(/[{}\[\]\\|]{2,}/.test(text))return true;
+  if(/[{}[\]\\|]{2,}/.test(text))return true;
   return text.length>=6&&alnum/text.length<.45;
 }
 function genericDocumentWordHits(text:string):number{
@@ -411,11 +411,11 @@ function findCompatibleToken(tokens:OcrToken[],anchor:OcrToken):OcrToken|undefin
 function tokenTextPlausibility(value:string):number{
   const text=value.trim();
   if(!text)return 0;
-  if(/[{}\[\]\\|]{2,}/.test(text))return .15;
+  if(/[{}[\]\\|]{2,}/.test(text))return .15;
   const alnum=(text.match(/[\p{L}\p{N}]/gu)??[]).length;
   const ratio=alnum/Math.max(1,[...text].length);
   let score=.45+ratio*.45;
-  if(/^[A-Za-zÀ-ÿ]{1,3}\-?\d+[A-Za-zÀ-ÿ]+$/.test(text))score-=.28;
+  if(/^[A-Za-zÀ-ÿ]{1,3}-?\d+[A-Za-zÀ-ÿ]+$/.test(text))score-=.28;
   if(text.length<=4&&/[a-zà-ÿ]/.test(text)&&/[A-ZÀ-Ý]/.test(text))score-=.22;
   if(/^[^\p{L}\p{N}]+$/u.test(text))score-=.25;
   if(/^[\p{L}]+$/u.test(text)&&text.length>=4&&!/[AEIOUÀÈÉÌÒÓÙ]/iu.test(text))score-=.12;

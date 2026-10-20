@@ -51,7 +51,7 @@ export class NativeFirstOcrProvider implements OcrProvider {
 function nativeLayerCoherent(tokens:OcrToken[],width:number,height:number):boolean{
   if(!tokens.length)return false;
   const invalid=tokens.filter(t=>!Number.isFinite(t.box.x)||!Number.isFinite(t.box.y)||t.box.width<=0||t.box.height<=0||t.box.x<-5||t.box.y<-5||t.box.x>width+5||t.box.y>height+5).length;
-  const chars=tokens.map(t=>t.text).join('');const weird=(chars.match(/[\uFFFD\x00-\x08\x0B\x0C\x0E-\x1F]/g)||[]).length;
+  const chars=tokens.map(t=>t.text).join('');const weird=[...chars].filter(c=>{const code=c.charCodeAt(0);return code===0xFFFD||(code>=0&&code<=8)||code===11||code===12||(code>=14&&code<=31);}).length;
   const useful=tokens.filter(t=>/[\p{L}\p{N}]/u.test(t.text)).length;
   return invalid/tokens.length<.08&&weird/Math.max(1,chars.length)<.02&&useful/tokens.length>.45;
 }

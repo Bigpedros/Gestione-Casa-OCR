@@ -1,8 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { db } from '../../database/db';
-import { attachmentRepository, expenseRepository, supplierRepository, documentSessionRepository, ocrProcessRepository } from '../../repositories';
+import { attachmentRepository, expenseRepository, supplierRepository } from '../../repositories';
 import { repairOcrAttachmentExpenseLinks } from '../../services/productClassification/ProductClassificationService';
 import { formatDate, formatCurrency, formatFileSize } from '../../utils/formatters';
 import {
@@ -28,7 +27,7 @@ import {
   ScanLine,
   ArrowLeft,
 } from 'lucide-react';
-import type { Attachment, Expense, DocumentSession, OCRProcess, DocumentPageSegment } from '../../types';
+import type { Attachment, Expense } from '../../types';
 import { ScanReceiptModal } from './ScanReceiptModal';
 import { OcrReviewModal } from './OcrReviewModal';
 import { PendingOcrReviewBanner } from './PendingOcrReviewBanner';
@@ -38,9 +37,6 @@ export const AttachmentsPage: React.FC = () => {
   const attachments = useLiveQuery(() => attachmentRepository.getAll(), []);
   const expenses = useLiveQuery(() => expenseRepository.getAll(), []);
   const suppliers = useLiveQuery(() => supplierRepository.getAll(), []);
-  const documentSessions = useLiveQuery(() => documentSessionRepository.getAll(), []);
-  const ocrProcesses = useLiveQuery(() => ocrProcessRepository.getAll(), []);
-  const pageSegments = useLiveQuery<DocumentPageSegment[]>(() => db.documentPageSegments.toArray(), []);
   const [activeFilterTab, setActiveFilterTab] = useState<'all' | 'receipts' | 'documents' | 'unlinked'>('all');
 
   // Menu dropdown state for "+ Nuovo Allegato"
@@ -240,55 +236,6 @@ export const AttachmentsPage: React.FC = () => {
     }
     if (attOrId === 'unlinked') return undefined;
     return expenses?.find((e) => e.id === attOrId);
-  };
-
-  const findSessionForAttachment = (att: Attachment): { session: DocumentSession; ocrProcess?: OCRProcess } | undefined => {
-    if (!documentSessions || documentSessions.length === 0) return undefined;
-
-    // 1. Direct match by entityId
-    let matchedSession = documentSessions.find((s) => s.id === att.entityId);
-
-    // 2. Match via DocumentPageSegments
-    if (!matchedSession && pageSegments) {
-      const seg = pageSegments.find((s) => s.attachmentId === att.id);
-      if (seg) {
-        matchedSession = documentSessions.find((s) => s.id === seg.sessionId);
-      }
-    }
-
-    // 3. Match via OCRProcess
-    if (!matchedSession && ocrProcesses) {
-      const proc = ocrProcesses.find((p) => p.attachmentId === att.id);
-      if (proc) {
-        matchedSession = documentSessions.find((s) => s.ocrProcessId === proc.id);
-      }
-    }
-
-    // 4. Match via metadata
-    if (!matchedSession) {
-      matchedSession = documentSessions.find(
-        (s) => (s as any).metadata?.attachmentId === att.id || (att as any).metadata?.sessionId === s.id
-      );
-    }
-
-    if (!matchedSession) return undefined;
-
-    const proc = matchedSession.ocrProcessId && ocrProcesses
-      ? ocrProcesses.find((p) => p.id === matchedSession?.ocrProcessId)
-      : undefined;
-
-    return { session: matchedSession, ocrProcess: proc };
-  };
-
-  const isReviewedUnaccounted = (info?: { session: DocumentSession; ocrProcess?: OCRProcess }): boolean => {
-    if (!info) return false;
-    const { session, ocrProcess } = info;
-    return (
-      session.status === 'reviewed' &&
-      !session.expenseId &&
-      Boolean(ocrProcess?.confirmedByUser || ocrProcess?.status === 'completed') &&
-      !ocrProcess?.expenseId
-    );
   };
 
   return (
@@ -555,27 +502,19 @@ export const AttachmentsPage: React.FC = () => {
                     ? suppliers?.find((s) => s.id === linkedExpense.supplierId)
                     : undefined;
 
-                  const sessionInfo = findSessionForAttachment(att);
-                  const isReviewed = !linkedExpense && isReviewedUnaccounted(sessionInfo);
-
                   const supplierName =
                     supplier?.name ||
                     linkedExpense?.description ||
-                    (isReviewed && sessionInfo?.ocrProcess?.detectedSupplier) ||
                     att.description ||
                     att.fileName;
 
                   const purchaseDate = linkedExpense?.expenseDate
                     ? formatDate(linkedExpense.expenseDate)
-                    : isReviewed && sessionInfo?.ocrProcess?.detectedDate
-                    ? formatDate(sessionInfo.ocrProcess.detectedDate)
                     : formatDate(att.createdAt.substring(0, 10));
 
                   const purchaseAmount =
                     linkedExpense?.amount !== undefined
                       ? formatCurrency(linkedExpense.amount)
-                      : isReviewed && sessionInfo?.ocrProcess?.detectedTotal !== undefined && sessionInfo?.ocrProcess?.detectedTotal !== null
-                      ? formatCurrency(sessionInfo.ocrProcess.detectedTotal)
                       : '—';
 
                   const isPdf = att.mimeType?.includes('pdf') || att.fileName.toLowerCase().endsWith('.pdf');
@@ -603,16 +542,9 @@ export const AttachmentsPage: React.FC = () => {
                             )}
                           </div>
                           <div className="min-w-0">
-                            <div className="flex items-center gap-2">
-                              <span className="block truncate font-semibold text-slate-900 dark:text-white">
-                                {supplierName}
-                              </span>
-                              {isReviewed && (
-                                <span className="inline-flex items-center px-1.5 py-0.5 rounded-md text-[10px] font-semibold bg-emerald-50 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300 border border-emerald-200/60 dark:border-emerald-800/60">
-                                  Revisionato
-                                </span>
-                              )}
-                            </div>
+                            <span className="block truncate font-semibold text-slate-900 dark:text-white">
+                              {supplierName}
+                            </span>
                             <span className="block text-xs font-normal text-slate-400 dark:text-slate-500 truncate">
                               {att.fileName} • {formatFileSize(att.sizeBytes)}
                             </span>
@@ -629,25 +561,6 @@ export const AttachmentsPage: React.FC = () => {
                       <td className="px-6 py-4 text-right font-bold text-slate-900 dark:text-white whitespace-nowrap">
                         <div className="flex items-center justify-end gap-3">
                           <span>{purchaseAmount}</span>
-
-                          {isReviewed && sessionInfo && (
-                            <Button
-                              type="button"
-                              size="sm"
-                              variant="emerald"
-                              onClick={() => {
-                                setReviewSessionId(sessionInfo.session.id);
-                                setReviewOcrProcessId(sessionInfo.session.ocrProcessId || sessionInfo.ocrProcess?.id || null);
-                                setIsReviewModalOpen(true);
-                              }}
-                              className="py-1 px-2.5 text-xs flex items-center gap-1 font-semibold"
-                              title="Completa la registrazione contabile dello scontrino"
-                            >
-                              <CheckCircle2 className="w-3.5 h-3.5" />
-                              <span>Completa registrazione</span>
-                            </Button>
-                          )}
-
                           <div className="flex items-center gap-0.5 opacity-80 group-hover:opacity-100 transition-opacity">
                             <button
                               type="button"

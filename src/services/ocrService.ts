@@ -227,6 +227,13 @@ class OCRService {
       baselineParsed?: ParsedReceiptDraft | null;
       geometricProposals?: GeometricPriceProposal[];
       fileName?: string;
+      decisionEngineVersion?: string;
+      decisionSummary?: any;
+      primaryReader?: any;
+      secondaryReader?: any;
+      variantReader?: any;
+      matchingDiagnostics?: any[];
+      decisions?: any[];
     }> = [];
 
     try {
@@ -401,6 +408,13 @@ class OCRService {
               changedDecisionCount: engineResult.changedDecisionCount,
               recognizerBUsed: engineResult.recognizerBUsed,
               recognizerBTokens: engineResult.recognizerBTokens,
+              decisionEngineVersion: engineResult.decisionEngineVersion,
+              decisionSummary: engineResult.decisionSummary,
+              primaryReader: engineResult.primaryReader,
+              secondaryReader: engineResult.secondaryReader,
+              variantReader: engineResult.variantReader,
+              matchingDiagnostics: engineResult.matchingDiagnostics,
+              decisions: engineResult.decisions,
             };
             winnerOcrWords = engineResult.words;
 
@@ -633,6 +647,13 @@ class OCRService {
           baselineParsed: pageBaselineParsed,
           geometricProposals: pageGeometricProposals,
           fileName: attachment.fileName,
+          decisionEngineVersion: pagePreprocessingTelemetry?.decisionEngineVersion,
+          decisionSummary: pagePreprocessingTelemetry?.decisionSummary,
+          primaryReader: pagePreprocessingTelemetry?.primaryReader,
+          secondaryReader: pagePreprocessingTelemetry?.secondaryReader,
+          variantReader: pagePreprocessingTelemetry?.variantReader,
+          matchingDiagnostics: pagePreprocessingTelemetry?.matchingDiagnostics,
+          decisions: pagePreprocessingTelemetry?.decisions,
         });
 
         // Aggiorna lo stato del segmento
@@ -735,6 +756,13 @@ class OCRService {
           variantTotalConsensus: pageResults[0]?.variantTotalConsensus ?? null,
           variantPriceEvidence: pageResults[0]?.variantPriceEvidence ?? [],
           previewCandidates: pageResults[0]?.previewCandidates ?? [],
+          decisionEngineVersion: pageResults[0]?.decisionEngineVersion || pageResults[0]?.preprocessingTelemetry?.decisionEngineVersion || 'DE-RUNTIME-DIAG-2',
+          decisionSummary: pageResults[0]?.decisionSummary || pageResults[0]?.preprocessingTelemetry?.decisionSummary || null,
+          primaryReader: pageResults[0]?.primaryReader || pageResults[0]?.preprocessingTelemetry?.primaryReader || null,
+          secondaryReader: pageResults[0]?.secondaryReader || pageResults[0]?.preprocessingTelemetry?.secondaryReader || null,
+          variantReader: pageResults[0]?.variantReader || pageResults[0]?.preprocessingTelemetry?.variantReader || null,
+          matchingDiagnostics: pageResults[0]?.matchingDiagnostics || pageResults[0]?.preprocessingTelemetry?.matchingDiagnostics || [],
+          decisions: pageResults[0]?.decisions || pageResults[0]?.preprocessingTelemetry?.decisions || [],
         } as any,
       });
 

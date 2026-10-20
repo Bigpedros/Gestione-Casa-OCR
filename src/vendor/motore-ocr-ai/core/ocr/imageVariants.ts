@@ -1,3 +1,4 @@
+/* eslint-disable no-useless-escape, no-control-regex */
 import type {Box,OcrPage,OcrToken} from '../../contracts.js';
 
 export type OcrImageVariantName='original'|'grayscale'|'gentle_contrast'|'adaptive'|'sauvola'|'sharpened_light';

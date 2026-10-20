@@ -1,4 +1,4 @@
-/* eslint-disable no-useless-escape, no-control-regex */
+/* eslint-disable no-useless-escape */
 import type {OcrPage} from '../../contracts.js';
 
 export interface SemanticOcrQuality{

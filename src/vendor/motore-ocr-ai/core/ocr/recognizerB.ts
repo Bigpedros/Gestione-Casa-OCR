@@ -1,4 +1,4 @@
-/* eslint-disable no-useless-escape, no-control-regex */
+/* eslint-disable no-useless-escape */
 import type {Box,OcrPage,OcrProviderVariantEvidence,OcrToken} from '../../contracts.js';
 import type {OcrPageInput,OcrProvider,OcrRetryRegion} from './provider.js';
 

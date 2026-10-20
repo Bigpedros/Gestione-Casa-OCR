@@ -1,3 +1,4 @@
+/* eslint-disable no-useless-escape, no-control-regex */
 import type {OcrPage,OcrToken} from '../../contracts.js';
 
 export interface OcrPageInput {

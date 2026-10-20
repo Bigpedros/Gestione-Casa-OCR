@@ -2,7 +2,7 @@ import type {Box,OcrPage,OcrToken} from '../../contracts.js';
 import type {OcrDecision,OcrEvidenceCandidate,OcrEvidenceSet,StabilizedOcrCheckpoint,DecisionSummary,TokenMatchingDiagnostic} from './checkpoints.js';
 import {withLocalEvidenceConsensus} from './localEvidenceResolver.js';
 
-export const DECISION_ENGINE_VERSION = "DE-RUNTIME-DIAG-2";
+export const DECISION_ENGINE_VERSION = "DE-RUNTIME-DIAG-3";
 
 export function stabilizeOcrPage(evidence:OcrEvidenceSet):StabilizedOcrCheckpoint{
   const resolved=withLocalEvidenceConsensus(evidence);
@@ -273,6 +273,11 @@ function replacementAllowed(
   const lexicalRegression=isLexicalRegression(raw,candidate.token);
   if(lexicalRegression&&!reconciliation)return false;
 
+  // Critical numeric anti-regression: once the primary has a structurally valid
+  // amount/percentage, a weaker alternative must not change its semantic family
+  // (e.g. 20,25 -> 20:25 or 20% -> 2.70). Equivalent decimal separators remain allowed.
+  if(isCriticalNumericRegression(raw,candidate.token,reconciliation,allCandidates))return false;
+
   const isMoneyOrPercentage=tokenType==='money'||tokenType==='percentage';
   const isMalformed=isMalformedMoneyOrPercentage(raw.text)||isMoneyOrPercentage;
   const isCleanCandidate=isCleanMoneyOrPercentage(candidate.token.text);
@@ -350,6 +355,58 @@ function isCleanMoneyOrPercentage(value:string):boolean{
 function isReceiptReconciliation(candidate:OcrEvidenceCandidate):boolean{
   return candidate.source==='receipt-finalizer'&&
     /receipt-evidence:(?:TOTAL_SUM_RECONCILIATION|VAT_RECONCILIATION|PAYMENT_TOTAL_RECONCILIATION)/.test(candidate.token.correctionReason??'');
+}
+
+function isCriticalNumericRegression(
+  raw:OcrToken,
+  candidate:OcrToken,
+  reconciliation:boolean,
+  allCandidates:OcrEvidenceCandidate[]
+):boolean{
+  const a=parseCriticalNumeric(raw.text);
+  const b=parseCriticalNumeric(candidate.text);
+  if(!a)return false;
+
+  // A valid primary percentage must stay a percentage; a valid primary amount
+  // must stay an amount. Dates/times and bare numerics are not compatible substitutes.
+  if(!b||a.kind!==b.kind)return !reconciliation;
+
+  // 20,25 and 20.25 (or 22,00% and 22.00%) are equivalent readings.
+  if(Math.abs(a.value-b.value)<1e-9)return false;
+
+  if(reconciliation&&(candidate.confidence??0)>=90)return false;
+
+  const rawConfidence=raw.confidence??0;
+  const candidateConfidence=candidate.confidence??0;
+  if(rawConfidence>=80&&candidateConfidence<=rawConfidence+4)return true;
+
+  // Replacing an already-valid critical number with a different value requires
+  // clear independent corroboration and a material confidence advantage.
+  const corroborated=allCandidates.some(peer=>
+    peer.token.id!==candidate.id&&
+    isIndependentSource(peer.source)&&
+    normalizeCriticalNumeric(peer.token.text)===normalizeCriticalNumeric(candidate.text)&&
+    compatible(raw,peer.token)
+  );
+  return !(corroborated&&candidateConfidence>=rawConfidence+8);
+}
+
+function parseCriticalNumeric(value:string):{kind:'money'|'percentage';value:number}|undefined{
+  const text=value.normalize('NFKC').trim().replace(/^€\s*/,'').replace(/\s*€$/,'');
+  const percentage=text.endsWith('%');
+  const core=percentage?text.slice(0,-1).trim():text;
+  const valid=percentage
+    ? /^\d{1,3}(?:[.,]\d{1,2})?$/.test(core)
+    : /^\d{1,6}[.,]\d{2}$/.test(core);
+  if(!valid)return undefined;
+  const numeric=Number(core.replace(',','.'));
+  if(!Number.isFinite(numeric))return undefined;
+  return{kind:percentage?'percentage':'money',value:numeric};
+}
+
+function normalizeCriticalNumeric(value:string):string{
+  const parsed=parseCriticalNumeric(value);
+  return parsed?`${parsed.kind}:${parsed.value.toFixed(2)}`:'';
 }
 
 function isLexicalRegression(raw:OcrToken,candidate:OcrToken):boolean{

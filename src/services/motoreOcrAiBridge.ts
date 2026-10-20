@@ -5,7 +5,7 @@ import { OcrPageOrchestrator } from '../vendor/motore-ocr-ai/core/ocr/orchestrat
 import { DECISION_ENGINE_VERSION } from '../vendor/motore-ocr-ai/core/pipeline/decisionEngine.js';
 import type { OcrWordGeometry } from './ocrParser/types';
 
-export const MOTORE_OCR_AI_SOURCE_COMMIT = 'fb0d27cbbb288b5b7c7cc63b8cdee6a7d428fd9e';
+export const MOTORE_OCR_AI_SOURCE_COMMIT = 'c3d9756b5ec4d3be9977ab09e6e45ee3eb72d3d3';
 
 export interface MotoreOcrAiPageResult {
   text: string;

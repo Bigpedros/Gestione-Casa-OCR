@@ -3,9 +3,10 @@ import { TesseractLocalProvider } from '../vendor/motore-ocr-ai/core/ocr/tessera
 import { DualRecognizerOcrProvider, OcrsWasmRecognizerB } from '../vendor/motore-ocr-ai/core/ocr/recognizerB.js';
 import { OcrPageOrchestrator } from '../vendor/motore-ocr-ai/core/ocr/orchestrator.js';
 import { DECISION_ENGINE_VERSION } from '../vendor/motore-ocr-ai/core/pipeline/decisionEngine.js';
+import { collectReceiptEvidence } from '../vendor/motore-ocr-ai/core/ocr/receiptFinalizer.js';
 import type { OcrWordGeometry } from './ocrParser/types';
 
-export const MOTORE_OCR_AI_SOURCE_COMMIT = 'c3d9756b5ec4d3be9977ab09e6e45ee3eb72d3d3';
+export const MOTORE_OCR_AI_SOURCE_COMMIT = '619cefd9030864d1cc80c74b93cd429fbbd650aa';
 
 export interface MotoreOcrAiPageResult {
   text: string;
@@ -68,8 +69,20 @@ export async function recognizeReceiptPageWithMotoreOcrAi(
   );
   const rawPage = session.raw.page;
   const rawSnapshot = session.raw;
-  const stabilized = session.stabilized;
-  const page = orchestrator.currentPage(session);
+
+  const receiptEvidence = collectReceiptEvidence(session.stabilized.page, session.evidence.candidates);
+  if (receiptEvidence.tokens.length) {
+    orchestrator.addEvidence(
+      session,
+      'receipt-finalizer',
+      receiptEvidence.tokens,
+      'Gestione Casa receipt evidence collector'
+    );
+  }
+  const stabilized = receiptEvidence.tokens.length
+    ? orchestrator.stabilize(session)
+    : session.stabilized;
+  const page = stabilized.page;
   const tokenConfidence = averageConfidence(page.tokens);
   const confidence = Math.round(Math.max(0, Math.min(
     100,
@@ -97,6 +110,8 @@ export async function recognizeReceiptPageWithMotoreOcrAi(
       `recognizerBTokens:${recognizerBTokens}`,
       `orchestratorInitialMs:${Math.round(session.diagnostics.initialMs)}`,
       `orchestratorStabilizationMs:${Math.round(session.diagnostics.stabilizationMs)}`,
+      `receiptEvidenceTokens:${receiptEvidence.tokens.length}`,
+      `receiptEvidenceObservations:${receiptEvidence.observations.length}`,
     ],
     recognizer: engine.id,
     quality: page.quality ?? null,

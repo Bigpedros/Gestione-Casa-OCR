@@ -270,8 +270,9 @@ function replacementAllowed(
   if(!changed)return false;
 
   const reconciliation=isReceiptReconciliation(candidate);
+  const lineFusion=isReceiptLineFusion(candidate);
   const lexicalRegression=isLexicalRegression(raw,candidate.token);
-  if(lexicalRegression&&!reconciliation)return false;
+  if(lexicalRegression&&!reconciliation&&!lineFusion)return false;
 
   // Critical numeric anti-regression: once the primary has a structurally valid
   // amount/percentage, a weaker alternative must not change its semantic family
@@ -300,6 +301,13 @@ function replacementAllowed(
 
   if(isVariantCandidate&&!hasIndependentCorroboration(candidate,allCandidates))return false;
 
+  if(lineFusion){
+    const rawConfidence=raw.confidence??0;
+    const candidateConfidence=candidate.token.confidence??0;
+    const geom=Math.max(overlap(raw.box,candidate.token.box),verticalOverlap(raw.box,candidate.token.box));
+    return candidateConfidence>=82&&candidateConfidence>=rawConfidence+6&&geom>=.8;
+  }
+
   const destructive=isDestructiveTransformation(raw.text,candidate.token.text);
   if(candidate.source==='local-consensus'){
     const support=candidate.support;
@@ -311,7 +319,14 @@ function replacementAllowed(
   }
   if(destructive){
     if(candidate.source==='receipt-finalizer'){
-      return reconciliation&&(candidate.token.confidence??0)>=90;
+      if(reconciliation)return (candidate.token.confidence??0)>=90;
+      if(lineFusion){
+        const rawConfidence=raw.confidence??0;
+        const candidateConfidence=candidate.token.confidence??0;
+        return candidateConfidence>=82&&candidateConfidence>=rawConfidence+6&&
+          (overlap(raw.box,candidate.token.box)>=.8||verticalOverlap(raw.box,candidate.token.box)>=.9);
+      }
+      return false;
     }
     if(candidate.source==='variant'){
       if(!hasIndependentCorroboration(candidate,peers))return false;
@@ -356,6 +371,12 @@ function isReceiptReconciliation(candidate:OcrEvidenceCandidate):boolean{
   return candidate.source==='receipt-finalizer'&&
     /receipt-evidence:(?:TOTAL_SUM_RECONCILIATION|VAT_RECONCILIATION|PAYMENT_TOTAL_RECONCILIATION)/.test(candidate.token.correctionReason??'');
 }
+
+function isReceiptLineFusion(candidate:OcrEvidenceCandidate):boolean{
+  return candidate.source==='receipt-finalizer'&&
+    /receipt-evidence:LINE_FUSION/.test(candidate.token.correctionReason??'');
+}
+
 
 function isCriticalNumericRegression(
   raw:OcrToken,

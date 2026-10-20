@@ -756,7 +756,7 @@ class OCRService {
           variantTotalConsensus: pageResults[0]?.variantTotalConsensus ?? null,
           variantPriceEvidence: pageResults[0]?.variantPriceEvidence ?? [],
           previewCandidates: pageResults[0]?.previewCandidates ?? [],
-          decisionEngineVersion: pageResults[0]?.decisionEngineVersion || pageResults[0]?.preprocessingTelemetry?.decisionEngineVersion || 'DE-RUNTIME-DIAG-2',
+          decisionEngineVersion: pageResults[0]?.decisionEngineVersion || pageResults[0]?.preprocessingTelemetry?.decisionEngineVersion || 'DE-RUNTIME-DIAG-3',
           decisionSummary: pageResults[0]?.decisionSummary || pageResults[0]?.preprocessingTelemetry?.decisionSummary || null,
           primaryReader: pageResults[0]?.primaryReader || pageResults[0]?.preprocessingTelemetry?.primaryReader || null,
           secondaryReader: pageResults[0]?.secondaryReader || pageResults[0]?.preprocessingTelemetry?.secondaryReader || null,

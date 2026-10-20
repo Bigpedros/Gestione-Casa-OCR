@@ -16,7 +16,7 @@ export function evaluateSemanticOcrQuality(page:OcrPage,rawScore:number):Semanti
     const lines=groupLines(page);
     const totalOk=lines.some(line=>/\bTOTALE(?:\s+COMPLESSIVO)?\b/i.test(line)&&hasMoney(line));
     const paymentOk=lines.some(line=>/\b(PAGAMENTO|IMPORTO\s+PAGATO|BANCOMAT|CONTANTI|CARTA)\b/i.test(line)&&hasMoney(line));
-    const dateOk=/\b\d{1,2}[/.-]\d{1,2}[/.-]\d{2,4}\b/.test(text);
+    const dateOk=/\b\d{1,2}[\/.\-]\d{1,2}[\/.\-]\d{2,4}\b/.test(text);
     const documentOk=/\bDOCUMENTO\b/i.test(text)&&/\b\d{2,6}[-/]?\d{2,6}\b/.test(text);
     const compact=text.replace(/\s+/g,' ');
     const vatLabelPresent=/(?:P\.?\s*IVA|PARTITA\s+IVA)/i.test(compact);
@@ -41,8 +41,8 @@ function groupLines(page:OcrPage):string[]{const map=new Map<string,typeof page.
 function hasMoney(line:string){return /(?:€\s*)?\d{1,5}[.,]\d{2}(?!\s*%)/.test(line);}
 function isSuspiciousToken(value:string,confidence:number|null):boolean{
   const text=value.trim();if(!text)return true;if((confidence??100)<42)return true;
-  if(/[{}[\]\\|]/.test(text))return true;
-  if(/^[A-Za-zÀ-ÿ]{1,3}-?\d+[A-Za-zÀ-ÿ]+$/.test(text))return true;
+  if(/[{}\[\]\\|]/.test(text))return true;
+  if(/^[A-Za-zÀ-ÿ]{1,3}\-?\d+[A-Za-zÀ-ÿ]+$/.test(text))return true;
   if(text.length<=4&&/[a-zà-ÿ]/.test(text)&&/[A-ZÀ-Ý]/.test(text))return true;
   const alnum=(text.match(/[\p{L}\p{N}]/gu)??[]).length;return alnum/Math.max(1,[...text].length)<.55;
 }

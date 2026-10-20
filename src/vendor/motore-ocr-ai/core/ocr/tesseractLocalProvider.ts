@@ -443,7 +443,7 @@ export class TesseractLocalProvider implements OcrProvider {
 }
 
 function chooseSegmentation(width:number,height:number,fallback:PSM):PSM{const ratio=width/Math.max(1,height);return ratio<.72&&height>width*1.35?PSM.SINGLE_COLUMN:fallback;}
-function pageFromResult(input:OcrPageInput,blocks:any[],text:string):OcrPage{
+function pageFromResult(input:OcrPageInput,blocks:any[],_text:string):OcrPage{
   const tokens:OcrToken[]=[];let lineIndex=0,repairedCount=0,filteredCount=0;
   for(const block of blocks)for(const paragraph of block.paragraphs??[])for(const line of paragraph.lines??[]){
     const lineId=`p${input.pageNumber}-l${lineIndex++}`;

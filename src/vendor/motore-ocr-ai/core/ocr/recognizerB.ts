@@ -1,3 +1,4 @@
+/* eslint-disable no-useless-escape */
 import type {Box,OcrPage,OcrProviderVariantEvidence,OcrToken} from '../../contracts.js';
 import type {OcrPageInput,OcrProvider,OcrRetryRegion} from './provider.js';
 
@@ -8,6 +9,7 @@ export interface RecognizerBResult{
   score:number;
   confidence:number|null;
   warnings:string[];
+  timingMs?:number;
 }
 
 export interface RecognizerB{
@@ -47,15 +49,16 @@ export class OcrsWasmRecognizerB implements RecognizerB{
   }
 
   async recognize(input:OcrPageInput,signal?:AbortSignal):Promise<RecognizerBResult>{
+    const started=performance.now();
     signal?.throwIfAborted();
-    if(!isCanvas(input.image))return{id:this.id,tokens:[],text:'',score:0,confidence:null,warnings:['RECOGNIZER_B_IMAGE_UNAVAILABLE']};
+    if(!isCanvas(input.image))return{id:this.id,tokens:[],text:'',score:0,confidence:null,warnings:['RECOGNIZER_B_IMAGE_UNAVAILABLE'],timingMs:performance.now()-started};
     try{
       const runtime=await this.getRuntime(signal);
       const words=await recognizeCanvas(runtime,input.image,signal);
       const tokens=wordsToTokens(words,input.pageNumber,0,0,'b');
-      return{id:this.id,tokens,text:rebuild(tokens),score:scoreTokens(tokens),confidence:tokens.length?averageConfidence(tokens):null,warnings:[]};
+      return{id:this.id,tokens,text:rebuild(tokens),score:scoreTokens(tokens),confidence:tokens.length?averageConfidence(tokens):null,warnings:[],timingMs:performance.now()-started};
     }catch(error){
-      return{id:this.id,tokens:[],text:'',score:0,confidence:null,warnings:[`RECOGNIZER_B_UNAVAILABLE:${message(error)}`]};
+      return{id:this.id,tokens:[],text:'',score:0,confidence:null,warnings:[`RECOGNIZER_B_UNAVAILABLE:${message(error)}`],timingMs:performance.now()-started};
     }
   }
 
@@ -104,11 +107,46 @@ export class DualRecognizerOcrProvider implements OcrProvider{
   }
 
   async recognize(input:OcrPageInput,signal?:AbortSignal):Promise<OcrPage>{
-    const page=await this.primary.recognize(input,signal);
-    if(!shouldRunSecondary(page))return page;
+    signal?.throwIfAborted();
+    const wallStarted=performance.now();
     const independentInput=this.primary.prepareIndependentInput?.(input)??input;
-    const result=await this.secondary.recognize(independentInput,signal);
-    if(!result.tokens.length)return{...page,warnings:[...page.warnings,...result.warnings.map(w=>`RECOGNIZER_B:${w}`)]};
+
+    // Full-page readers are deliberately started together. Reconciliation still treats
+    // the primary raster as immutable and the secondary result only as independent evidence.
+    const primaryStarted=performance.now();
+    const primaryPromise=this.primary.recognize(input,signal).then(page=>({
+      page,
+      timingMs:performance.now()-primaryStarted
+    }));
+    const secondaryStarted=performance.now();
+    const secondaryPromise=this.secondary.recognize(independentInput,signal).then(result=>({
+      result,
+      timingMs:result.timingMs??(performance.now()-secondaryStarted)
+    }));
+
+    const [{page,timingMs:primaryMs},{result,timingMs:secondaryMs}]=await Promise.all([primaryPromise,secondaryPromise]);
+    signal?.throwIfAborted();
+    const wallMs=performance.now()-wallStarted;
+    const timingWarnings=[
+      'OCR_DUAL_EXECUTION_MODE:parallel-full-page',
+      `OCR_PRIMARY_MS:${Math.round(primaryMs)}`,
+      `OCR_SECONDARY_MS:${Math.round(secondaryMs)}`,
+      `OCR_DUAL_WALL_MS:${Math.round(wallMs)}`
+    ];
+
+    // The quality gate still controls whether secondary evidence may affect the page.
+    // In parallel mode the secondary read has already completed, so a clean primary page
+    // pays no extra wall-clock serialization penalty.
+    if(!shouldRunSecondary(page)){
+      return{
+        ...page,
+        warnings:[...page.warnings,...timingWarnings,'RECOGNIZER_B_PARALLEL_UNUSED:QUALITY_GATE']
+      };
+    }
+    if(!result.tokens.length)return{
+      ...page,
+      warnings:[...page.warnings,...timingWarnings,...result.warnings.map(w=>`RECOGNIZER_B:${w}`)]
+    };
     const evidence:OcrProviderVariantEvidence={
       source:`recognizer-b:${result.id}`,
       score:result.score,
@@ -120,6 +158,7 @@ export class DualRecognizerOcrProvider implements OcrProvider{
       variantEvidence:[...(page.variantEvidence??[]),evidence],
       warnings:[
         ...page.warnings,
+        ...timingWarnings,
         `RECOGNIZER_B_USED:${result.id}`,
         `RECOGNIZER_B_TOKENS:${result.tokens.length}`,
         `RECOGNIZER_B_SCORE:${result.score.toFixed(1)}`
@@ -206,7 +245,7 @@ function wordsToTokens(words:OcrsWordJson[],pageNumber:number,offsetX:number,off
 function heuristicConfidence(text:string):number{
   const value=text.trim();if(!value)return 0;
   const plausibility=textPlausibility(value);
-  const structured=/^(?:€\s*)?\d{1,6}[.,]\d{2}%?$/.test(value)||/^\d{1,2}[:/.-]\d{1,4}/.test(value);
+  const structured=/^(?:€\s*)?\d{1,6}[.,]\d{2}%?$/.test(value)||/^\d{1,2}[:/.\-]\d{1,4}/.test(value);
   return Math.round(Math.max(72,Math.min(88,78+plausibility*7+(structured?3:0))));
 }
 function scoreTokens(tokens:OcrToken[]):number{
@@ -223,7 +262,7 @@ function textPlausibility(value:string):number{
   const text=value.trim();if(!text)return 0;
   const alnum=(text.match(/[\p{L}\p{N}]/gu)??[]).length;
   let score=.35+.55*(alnum/Math.max(1,[...text].length));
-  if(/[{}[\]\\|]{2,}/.test(text))score-=.35;
+  if(/[{}\[\]\\|]{2,}/.test(text))score-=.35;
   if(/^[^\p{L}\p{N}]{2,}$/u.test(text))score-=.25;
   return Math.max(0,Math.min(1,score));
 }

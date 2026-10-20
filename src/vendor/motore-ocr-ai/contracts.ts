@@ -27,7 +27,10 @@ export interface QualityReport {
 }
 export interface GeometryCorrectionInfo{
   orientationDegrees:0|90|180|270;deskewDegrees:number;deskewApplied:boolean;
-  dewarpApplied:boolean;dewarpStrength:number;confidence:number;
+  residualSkewDegrees?:number;
+  dewarpApplied:boolean;dewarpStrength:number;
+  curvatureMaxDeviationPx?:number;curvatureMeanDeviationPx?:number;residualCurvatureMaxDeviationPx?:number;
+  confidence:number;
 }
 export interface OcrLineGeometry{
   id:string;box:Box;normalizedBox:Box;tokenIds:string[];text:string;confidence:number;

@@ -1,11 +1,11 @@
 import type { OcrPage, OcrToken } from '../vendor/motore-ocr-ai/contracts.js';
 import { TesseractLocalProvider } from '../vendor/motore-ocr-ai/core/ocr/tesseractLocalProvider.js';
 import { DualRecognizerOcrProvider, OcrsWasmRecognizerB } from '../vendor/motore-ocr-ai/core/ocr/recognizerB.js';
-import { addEvidenceTokens, createEvidenceSet, createRawOcrSnapshot } from '../vendor/motore-ocr-ai/core/pipeline/checkpoints.js';
-import { stabilizeOcrPage, DECISION_ENGINE_VERSION } from '../vendor/motore-ocr-ai/core/pipeline/decisionEngine.js';
+import { OcrPageOrchestrator } from '../vendor/motore-ocr-ai/core/ocr/orchestrator.js';
+import { DECISION_ENGINE_VERSION } from '../vendor/motore-ocr-ai/core/pipeline/decisionEngine.js';
 import type { OcrWordGeometry } from './ocrParser/types';
 
-export const MOTORE_OCR_AI_SOURCE_COMMIT = 'be0005803ed60eadd4eb4030b7d2a2bad79a5c29';
+export const MOTORE_OCR_AI_SOURCE_COMMIT = 'fb0d27cbbb288b5b7c7cc63b8cdee6a7d428fd9e';
 
 export interface MotoreOcrAiPageResult {
   text: string;
@@ -61,24 +61,15 @@ export async function recognizeReceiptPageWithMotoreOcrAi(
 ): Promise<MotoreOcrAiPageResult> {
   const canvas = await dataUrlToCanvas(source, rotationDegrees);
   const engine = getProvider();
-  const rawPage = await engine.recognize(
+  const orchestrator = new OcrPageOrchestrator(engine);
+  const session = await orchestrator.start(
     { pageNumber, width: canvas.width, height: canvas.height, image: canvas },
     signal
   );
-
-  const rawSnapshot = createRawOcrSnapshot(rawPage);
-  const evidence = createEvidenceSet(rawSnapshot);
-  for (const variant of rawPage.variantEvidence ?? []) {
-    addEvidenceTokens(
-      evidence,
-      variant.source.startsWith('recognizer-b:') ? 'recognizer-b' : 'variant',
-      variant.tokens,
-      `${variant.source}; score=${variant.score.toFixed(1)}`
-    );
-  }
-
-  const stabilized = stabilizeOcrPage(evidence);
-  const page = stabilized.page;
+  const rawPage = session.raw.page;
+  const rawSnapshot = session.raw;
+  const stabilized = session.stabilized;
+  const page = orchestrator.currentPage(session);
   const tokenConfidence = averageConfidence(page.tokens);
   const confidence = Math.round(Math.max(0, Math.min(
     100,
@@ -104,6 +95,8 @@ export async function recognizeReceiptPageWithMotoreOcrAi(
       `changed:${changedDecisionCount}`,
       `recognizerB:${recognizerB.length ? 'used' : 'not-used'}`,
       `recognizerBTokens:${recognizerBTokens}`,
+      `orchestratorInitialMs:${Math.round(session.diagnostics.initialMs)}`,
+      `orchestratorStabilizationMs:${Math.round(session.diagnostics.stabilizationMs)}`,
     ],
     recognizer: engine.id,
     quality: page.quality ?? null,

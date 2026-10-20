@@ -1,0 +1,22 @@
+name: MOTORE 0.5 Alignment Check
+
+on:
+  push:
+    branches: [ motore-0.5-alignment ]
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Verify Local Shared SDK TGZ
+        run: echo "9e4fee87e6309ee1753aed31b7524dfb573b4786c55c75b5fd76c6423d2d0529  gestione-casa-shared-sdk-0.5.1.tgz" | sha256sum -c -
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npx vitest run src/tests/motore-ocr-ai-integration.test.ts src/tests/motore-ocr-ai-decision-engine.test.ts src/tests/ocr-engine.test.ts src/tests/ocr-robustness.test.ts src/tests/ocr-todis-regression.test.ts src/tests/rc05e-geometry.test.ts
+      - run: npm run build

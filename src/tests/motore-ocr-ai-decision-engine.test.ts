@@ -409,4 +409,38 @@ describe('MOTORE-OCR-AI Decision Engine Enhanced Tests',()=>{
     expect(result.decisions[0].changed).toBe(false);
     expect(result.decisions[0].decision).toBe('primary-wins');
   });
+
+  it('Regression Case E: strong primary money 20,25 cannot become time-like 20:25',()=>{
+    const rawToken=createToken('t1','20,25',100,100,96);
+    const rawSnapshot={
+      pageNumber:1,width:800,height:1200,text:'20,25',
+      tokens:[rawToken],warnings:[],page:createMockPage([rawToken]),fingerprint:'test'
+    };
+    const secondaryToken=createToken('t1','20:25',100,100,87);
+    const evidenceSet:OcrEvidenceSet={
+      raw:rawSnapshot as any,
+      candidates:[{id:'cand-b',source:'recognizer-b',token:secondaryToken,reason:'recognizer-b:ocrs-rten-wasm; score=85.2'}],
+      observations:[]
+    };
+    const result=stabilizeOcrPage(evidenceSet);
+    expect(result.page.tokens[0].text).toBe('20,25');
+    expect(result.decisions[0].changed).toBe(false);
+  });
+
+  it('Regression Case F: valid percentage 20% cannot become monetary 2.70',()=>{
+    const rawToken=createToken('t1','20%',100,100,78);
+    const rawSnapshot={
+      pageNumber:1,width:800,height:1200,text:'20%',
+      tokens:[rawToken],warnings:[],page:createMockPage([rawToken]),fingerprint:'test'
+    };
+    const secondaryToken=createToken('t1','2.70',100,100,86);
+    const evidenceSet:OcrEvidenceSet={
+      raw:rawSnapshot as any,
+      candidates:[{id:'cand-b',source:'recognizer-b',token:secondaryToken,reason:'recognizer-b:ocrs-rten-wasm; score=85.2'}],
+      observations:[]
+    };
+    const result=stabilizeOcrPage(evidenceSet);
+    expect(result.page.tokens[0].text).toBe('20%');
+    expect(result.decisions[0].changed).toBe(false);
+  });
 });

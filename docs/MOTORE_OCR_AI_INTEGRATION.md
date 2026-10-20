@@ -1,7 +1,7 @@
 # MOTORE-OCR-AI — integrazione Gestione Casa
 
 Baseline OCR importata da `Bigpedros/MOTORE-OCR-AI` al commit
-`be0005803ed60eadd4eb4030b7d2a2bad79a5c29` (package `0.4.1-alpha.4`).
+`fb0d27cbbb288b5b7c7cc63b8cdee6a7d428fd9e` (MOTORE `0.5.0-rc.1`, CI/certification green).
 
 ## Perimetro
 
@@ -26,3 +26,19 @@ Percorsi runtime:
 - `/models/text-recognition.rten`
 
 L'avviso di licenza è in `public/licenses/recognizer-b/NOTICE.md`.
+
+
+## Allineamento MOTORE 0.5
+
+Il vendor OCR è stato riallineato alla baseline certificata MOTORE 0.5 mantenendo separata la semantica applicativa di Gestione Casa.
+
+Capacità donate:
+- detector fotografico ibrido luminanza + bordi/Hough;
+- deskew residuo, curvature metrics e dewarp custodito;
+- camera cleanup conservativo;
+- varianti OCR lazy con fast path;
+- orchestratore per pagina;
+- telemetria per stadio;
+- provider/Recognizer B aggiornati.
+
+La logica di parsing scontrino, knowledge base, contabilità e revisione utente resta nel livello applicativo Gestione Casa.

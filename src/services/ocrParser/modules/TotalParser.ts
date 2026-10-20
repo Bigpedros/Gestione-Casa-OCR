@@ -86,6 +86,28 @@ export class TotalParser implements ReceiptParserModule<number> {
       return null;
     };
 
+    const paidAmountAuthority = (text: string): number => {
+      const hasStrongAnchor = /\bIMPORTO\s+(?:PAGATO|DOVUTO)\b/i.test(text);
+      if (!hasStrongAnchor) return 70;
+
+      // Remove the semantic anchor, money values and punctuation. Remaining lexical
+      // material means the OCR probably fused another phrase into this line
+      // (eg. "Importo pagato ronico 2.70"), so it must not outrank a clean payment line.
+      const residue = text
+        .replace(/\bIMPORTO\s+(?:PAGATO|DOVUTO)\b/ig, ' ')
+        .replace(/(?:€\s*)?\d{1,4}(?:[.,]\d{3})*[.,]\d{2}/g, ' ')
+        .replace(/[\d€:;,.()\[\]{}+\-_/\\|]+/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+
+      return /[A-ZÀ-Ý]{2,}/i.test(residue) ? 58 : 90;
+    };
+
+    const paymentAuthority = (text: string): number => {
+      if (/\bPAGAMENTO\s+(?:ELETTRONICO|ELE\s*I?TRONICO)\b/i.test(text)) return 82;
+      return 75;
+    };
+
     // Helper interno conservativo per escludere righe di imposta/scorporo o classi incompatibili dal lookahead
     const isTaxBreakdownOrNonTotalLine = (text: string): boolean => {
       const u = text.toUpperCase();
@@ -205,7 +227,7 @@ export class TotalParser implements ReceiptParserModule<number> {
             type: 'paid_amount',
             role: 'paid_amount',
             value: amt,
-            score: 75,
+            score: paidAmountAuthority(line),
             lineIndex: i,
             sourceText: line,
             explanation: `Importo pagato rilevato: ${line}`,
@@ -256,7 +278,7 @@ export class TotalParser implements ReceiptParserModule<number> {
             type: 'payment_pos',
             role: 'payment_pos',
             value: amt,
-            score: 75,
+            score: paymentAuthority(line),
             lineIndex: i,
             sourceText: line,
             explanation: `Pagamento/POS rilevato: ${line}`,

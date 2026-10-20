@@ -1,3 +1,4 @@
+/* eslint-disable no-useless-escape, no-control-regex */
 import {createWorker,OEM,PSM,type Worker} from 'tesseract.js';
 import type {OcrPage,OcrToken,QualityReport} from '../../contracts.js';
 import {scanPhotographedDocument} from '../geometry/photoDocumentScanner.js';

@@ -1,3 +1,4 @@
+/* eslint-disable no-useless-escape */
 import type {OcrPage,OcrToken} from '../../contracts.js';
 import type {OcrEvidenceCandidate} from '../pipeline/checkpoints.js';
 import {collectReceiptLineFusionEvidence} from './receiptLineFusion.js';

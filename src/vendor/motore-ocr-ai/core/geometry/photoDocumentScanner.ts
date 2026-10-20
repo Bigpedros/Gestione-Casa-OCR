@@ -1,3 +1,4 @@
+import {detectDocumentByEdges} from './photoDocumentEdgeDetector.js';
 export interface ScanPoint{x:number;y:number}
 export interface ScanQuadrilateral{topLeft:ScanPoint;topRight:ScanPoint;bottomRight:ScanPoint;bottomLeft:ScanPoint}
 export interface PhotoScanMetadata{
@@ -57,6 +58,31 @@ export function scanPhotographedDocument(source:HTMLCanvasElement,maxOutputDimen
 }
 
 export function detectDocumentQuadrilateral(gray:GrayImage):{corners:ScanQuadrilateral;confidence:number;reason:string}|null{
+  const luminance=detectDocumentByLuminance(gray);
+  const edge=detectDocumentByEdges(gray);
+  if(!luminance)return edge;
+  if(!edge)return luminance;
+
+  const disagreement=meanCornerDistance(luminance.corners,edge.corners)/Math.max(1,Math.hypot(gray.width,gray.height));
+  if(disagreement<=.055){
+    const lw=Math.max(.05,luminance.confidence),ew=Math.max(.05,edge.confidence),sum=lw+ew;
+    const corners=blendQuad(luminance.corners,edge.corners,lw/sum,ew/sum);
+    const agreementBonus=(.055-disagreement)/.055*.12;
+    return{
+      corners,
+      confidence:clamp01(Math.max(luminance.confidence,edge.confidence)+agreementBonus),
+      reason:'quadrilatero confermato da segmentazione luminanza e bordi indipendenti'
+    };
+  }
+
+  // Strong disagreement means the two evidence families found different objects.
+  // Keep the more authoritative candidate instead of averaging incompatible geometry.
+  const luminanceScore=luminance.confidence+.04*quadrilateralRectangularity(luminance.corners);
+  const edgeScore=edge.confidence+.06*quadrilateralRectangularity(edge.corners);
+  return edgeScore>luminanceScore?{...edge,reason:`${edge.reason}; detector luminanza divergente`}:{...luminance,reason:`${luminance.reason}; detector bordi divergente`};
+}
+
+function detectDocumentByLuminance(gray:GrayImage):{corners:ScanQuadrilateral;confidence:number;reason:string}|null{
   const {width,height,data}=gray;
   if(width<20||height<20||data.length!==width*height)return null;
 
@@ -219,6 +245,16 @@ function otsuThreshold(data:Uint8Array):number{
     const between=wB*wF*(mB-mF)*(mB-mF);if(between>max){max=between;threshold=i;}
   }
   return threshold;
+}
+function blendQuad(a:ScanQuadrilateral,b:ScanQuadrilateral,wa:number,wb:number):ScanQuadrilateral{
+  const p=(x:ScanPoint,y:ScanPoint)=>({x:x.x*wa+y.x*wb,y:x.y*wa+y.y*wb});
+  return{topLeft:p(a.topLeft,b.topLeft),topRight:p(a.topRight,b.topRight),bottomRight:p(a.bottomRight,b.bottomRight),bottomLeft:p(a.bottomLeft,b.bottomLeft)};
+}
+function meanCornerDistance(a:ScanQuadrilateral,b:ScanQuadrilateral):number{
+  return(
+    distance(a.topLeft,b.topLeft)+distance(a.topRight,b.topRight)+
+    distance(a.bottomRight,b.bottomRight)+distance(a.bottomLeft,b.bottomLeft)
+  )/4;
 }
 function scaleQuad(q:ScanQuadrilateral,sx:number,sy:number):ScanQuadrilateral{
   const p=(v:ScanPoint)=>({x:v.x*sx,y:v.y*sy});

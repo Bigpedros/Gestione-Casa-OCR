@@ -302,7 +302,7 @@ export const buildDiagnosticReport = async (
       extractedLines: finalExtractedLines,
     },
     motoreOcrAi: {
-      decisionEngineVersion: ocrProcessMetadata.decisionEngineVersion || 'DE-RUNTIME-DIAG-2',
+      decisionEngineVersion: ocrProcessMetadata.decisionEngineVersion || 'DE-RUNTIME-DIAG-3',
       primaryReader: ocrProcessMetadata.primaryReader || null,
       secondaryReader: ocrProcessMetadata.secondaryReader || null,
       variantReader: ocrProcessMetadata.variantReader || null,

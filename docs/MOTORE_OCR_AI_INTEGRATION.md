@@ -1,7 +1,7 @@
 # MOTORE-OCR-AI — integrazione Gestione Casa
 
 Baseline OCR importata da `Bigpedros/MOTORE-OCR-AI` al commit
-`c3d9756b5ec4d3be9977ab09e6e45ee3eb72d3d3` (MOTORE `0.5.0-rc.1`, CI/certification green).
+`619cefd9030864d1cc80c74b93cd429fbbd650aa` (MOTORE `0.5.0-rc.1`, CI/certification green).
 
 ## Perimetro
 
@@ -42,3 +42,7 @@ Capacità donate:
 - provider/Recognizer B aggiornati.
 
 La logica di parsing scontrino, knowledge base, contabilità e revisione utente resta nel livello applicativo Gestione Casa.
+
+
+## Receipt Line Fusion
+La baseline `619cefd9030864d1cc80c74b93cd429fbbd650aa` aggiunge fusione receipt a livello di riga tra Tesseract e OCRS/RTen. La fusione usa ancore geometriche/semantiche di riga (IVA/prezzo) e produce evidenze senza mutare il raw OCR.

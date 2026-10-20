@@ -96,7 +96,7 @@ export class TotalParser implements ReceiptParserModule<number> {
       const residue = text
         .replace(/\bIMPORTO\s+(?:PAGATO|DOVUTO)\b/ig, ' ')
         .replace(/(?:€\s*)?\d{1,4}(?:[.,]\d{3})*[.,]\d{2}/g, ' ')
-        .replace(/[\d€:;,.()\[\]{}+\-_/\\|]+/g, ' ')
+        .replace(/[^\p{L}\s]+/gu, ' ')
         .replace(/\s+/g, ' ')
         .trim();
 

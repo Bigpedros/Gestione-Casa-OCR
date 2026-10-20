@@ -1395,7 +1395,11 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
                 </div>
               </div>
 
-              <div className="flex-1 overflow-auto p-4 flex items-center justify-center bg-slate-950 relative min-h-[360px]">
+              <div
+                className={`flex-1 overflow-auto p-4 flex bg-slate-950 relative min-h-[360px] ${
+                  zoomLevel > 1 ? 'items-start justify-start' : 'items-center justify-center'
+                }`}
+              >
                 {activeImageUrl ? (
                   activeAttachment?.mimeType?.includes('pdf') ? (
                     <iframe
@@ -1410,6 +1414,7 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
                       className="max-w-full max-h-[58vh] object-contain transition-transform duration-150 rounded-lg shadow-xl"
                       style={{
                         transform: `scale(${zoomLevel}) rotate(${rotationDegrees + (activeSegment?.rotationDegrees || 0)}deg)`,
+                        transformOrigin: zoomLevel > 1 ? 'top left' : 'center center',
                       }}
                     />
                   )

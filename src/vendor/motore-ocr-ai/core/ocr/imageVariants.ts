@@ -20,25 +20,28 @@ export interface OcrVariantResult{
  * Generalizzazione della pipeline multivariante di Gestione Casa.
  * Le varianti sono ottiche, non dipendono dal tipo semantico del documento.
  */
-export function createOcrImageVariants(source:HTMLCanvasElement,maxDimension=2400):OcrImageVariant[]{
+export const OCR_VARIANT_ORDER:OcrImageVariantName[]=['original','grayscale','gentle_contrast','adaptive','sauvola','sharpened_light'];
+
+export function createOcrImageVariant(source:HTMLCanvasElement,name:OcrImageVariantName,maxDimension=2400):OcrImageVariant{
   const scale=Math.min(1,maxDimension/Math.max(source.width,source.height));
   const width=Math.max(1,Math.round(source.width*scale));
   const height=Math.max(1,Math.round(source.height*scale));
-  const names:OcrImageVariantName[]=['original','grayscale','gentle_contrast','adaptive','sauvola','sharpened_light'];
-  return names.map(name=>{
-    const canvas=document.createElement('canvas');
-    canvas.width=width;canvas.height=height;
-    const ctx=canvas.getContext('2d',{willReadFrequently:true})!;
-    ctx.imageSmoothingEnabled=true;
-    ctx.imageSmoothingQuality='high';
-    ctx.drawImage(source,0,0,width,height);
-    if(name==='grayscale')applyGrayscale(ctx,width,height);
-    if(name==='gentle_contrast'||name==='sharpened_light')applyGentleContrast(ctx,width,height);
-    if(name==='adaptive')applyOtsu(ctx,width,height);
-    if(name==='sauvola')applySauvola(ctx,width,height);
-    if(name==='sharpened_light')applyLightSharpen(ctx,width,height);
-    return{name,canvas,scaleX:source.width/width,scaleY:source.height/height};
-  });
+  const canvas=document.createElement('canvas');
+  canvas.width=width;canvas.height=height;
+  const ctx=canvas.getContext('2d',{willReadFrequently:true})!;
+  ctx.imageSmoothingEnabled=true;
+  ctx.imageSmoothingQuality='high';
+  ctx.drawImage(source,0,0,width,height);
+  if(name==='grayscale')applyGrayscale(ctx,width,height);
+  if(name==='gentle_contrast'||name==='sharpened_light')applyGentleContrast(ctx,width,height);
+  if(name==='adaptive')applyOtsu(ctx,width,height);
+  if(name==='sauvola')applySauvola(ctx,width,height);
+  if(name==='sharpened_light')applyLightSharpen(ctx,width,height);
+  return{name,canvas,scaleX:source.width/width,scaleY:source.height/height};
+}
+
+export function createOcrImageVariants(source:HTMLCanvasElement,maxDimension=2400):OcrImageVariant[]{
+  return OCR_VARIANT_ORDER.map(name=>createOcrImageVariant(source,name,maxDimension));
 }
 
 export function remapVariantPage(page:OcrPage,sourceWidth:number,sourceHeight:number,scaleX:number,scaleY:number):OcrPage{
@@ -95,7 +98,7 @@ export function scoreOcrVariant(page:OcrPage):number{
 function isPlausibleOcrToken(value:string):boolean{
   const text=value.trim();
   if(!text)return false;
-  if(/[{}[\]\\|]{2,}/.test(text))return false;
+  if(/[{}\[\]\\|]{2,}/.test(text))return false;
   const useful=(text.match(/[\p{L}\p{N}]/gu)??[]).length;
   return useful/Math.max(1,[...text].length)>=.6;
 }
@@ -109,10 +112,10 @@ function isWordLike(value:string):boolean{
 function isGarbageToken(value:string):boolean{
   const text=value.trim();
   if(!text)return true;
-  const symbols=(text.match(/[^\p{L}\p{N}.,:/%€+()-]/gu)??[]).length;
+  const symbols=(text.match(/[^\p{L}\p{N}.,:/%€+\-()]/gu)??[]).length;
   const alnum=(text.match(/[\p{L}\p{N}]/gu)??[]).length;
   if(symbols>Math.max(2,alnum))return true;
-  if(/[{}[\]\\|]{2,}/.test(text))return true;
+  if(/[{}\[\]\\|]{2,}/.test(text))return true;
   return text.length>=6&&alnum/text.length<.45;
 }
 function genericDocumentWordHits(text:string):number{
@@ -411,11 +414,11 @@ function findCompatibleToken(tokens:OcrToken[],anchor:OcrToken):OcrToken|undefin
 function tokenTextPlausibility(value:string):number{
   const text=value.trim();
   if(!text)return 0;
-  if(/[{}[\]\\|]{2,}/.test(text))return .15;
+  if(/[{}\[\]\\|]{2,}/.test(text))return .15;
   const alnum=(text.match(/[\p{L}\p{N}]/gu)??[]).length;
   const ratio=alnum/Math.max(1,[...text].length);
   let score=.45+ratio*.45;
-  if(/^[A-Za-zÀ-ÿ]{1,3}-?\d+[A-Za-zÀ-ÿ]+$/.test(text))score-=.28;
+  if(/^[A-Za-zÀ-ÿ]{1,3}\-?\d+[A-Za-zÀ-ÿ]+$/.test(text))score-=.28;
   if(text.length<=4&&/[a-zà-ÿ]/.test(text)&&/[A-ZÀ-Ý]/.test(text))score-=.22;
   if(/^[^\p{L}\p{N}]+$/u.test(text))score-=.25;
   if(/^[\p{L}]+$/u.test(text)&&text.length>=4&&!/[AEIOUÀÈÉÌÒÓÙ]/iu.test(text))score-=.12;

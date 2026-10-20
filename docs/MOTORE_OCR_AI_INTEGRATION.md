@@ -1,7 +1,7 @@
 # MOTORE-OCR-AI — integrazione Gestione Casa
 
 Baseline OCR importata da `Bigpedros/MOTORE-OCR-AI` al commit
-`fb0d27cbbb288b5b7c7cc63b8cdee6a7d428fd9e` (MOTORE `0.5.0-rc.1`, CI/certification green).
+`c3d9756b5ec4d3be9977ab09e6e45ee3eb72d3d3` (MOTORE `0.5.0-rc.1`, CI/certification green).
 
 ## Perimetro
 

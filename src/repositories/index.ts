@@ -882,6 +882,9 @@ export const documentSessionRepository = {
       async () => {
         const session = await db.documentSessions.get(id);
         if (!session) return;
+        if (session.expenseId) {
+          throw new Error('Impossibile eliminare una scansione già registrata a bilancio');
+        }
         if (session.ocrProcessId) {
           const proc = await db.ocrProcesses.get(session.ocrProcessId);
           if (proc?.expenseId) {

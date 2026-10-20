@@ -95,6 +95,7 @@ export interface EditableReviewLine {
   isNewRow?: boolean;
   actionMode?: 'link_existing' | 'create_new' | 'unlinked';
   newProductDisplayName?: string;
+  manuallyValidated?: boolean;
 }
 
 export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
@@ -489,6 +490,7 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
           isNewRow: false,
           actionMode: initialActionMode,
           newProductDisplayName: savedNewProductName,
+          manuallyValidated: line.reviewStatus === 'confirmed' || line.reviewStatus === 'modified',
         };
       });
 
@@ -536,6 +538,17 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
   const effectiveDiscrepancy = isPaymentProof ? 0 : rawDiscrepancy;
   const hasTotalDiscrepancy = !isPaymentProof && effectiveDiscrepancy > 0.01;
 
+  // Metadata extracted fields from ocrProcess metadata if available
+  const ocrMeta = (ocrProcess?.metadata as Record<string, any>) || {};
+  const selectedSupplier = suppliers.find((s) => s.id === selectedSupplierId);
+  const address = ocrMeta.detectedAddress || selectedSupplier?.address || '';
+  const city = ocrMeta.detectedCity || '';
+  const phone = ocrMeta.detectedPhone || '';
+  const vatId = ocrMeta.detectedVatId || selectedSupplier?.taxCodeOrVatNumber || '';
+  const time = ocrMeta.detectedTime || '';
+  const vendor = ocrMeta.detectedVendor || '';
+  const estimatedVat = Math.round(documentTotal * 0.10 * 100) / 100; // 10% average or estimated VAT
+
   const handleLineChange = (
     lineId: string,
     field: keyof EditableReviewLine,
@@ -544,7 +557,7 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
     setEditableLines((prev) =>
       prev.map((line) => {
         if (line.id !== lineId) return line;
-        const updated = { ...line, [field]: value, reviewStatus: 'modified' as OCRLineReviewStatus };
+        const updated = { ...line, [field]: value, reviewStatus: 'modified' as OCRLineReviewStatus, manuallyValidated: true };
 
         if (field === 'quantity' || field === 'unitPrice') {
           const qty = field === 'quantity' ? Number(value) : line.quantity;
@@ -602,6 +615,35 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
 
   const handleDeleteLine = (lineId: string) => {
     setEditableLines((prev) => prev.filter((l) => l.id !== lineId));
+  };
+
+  const handleConfirmLine = (lineId: string) => {
+    const line = editableLines.find((l) => l.id === lineId);
+    if (!line) return;
+
+    const isDiscountOrReturn =
+      line.lineTotal < 0 ||
+      /SCONTO|PROMO|ABBUONO|COUPON|BUONO|RESO|STORNO|ARROTONDAMENTO/i.test(line.description || '');
+    const hasBlockingOcrError =
+      (!isDiscountOrReturn && line.unitPrice <= 0 && line.lineTotal <= 0) ||
+      (line.warnings && line.warnings.includes('OCR_TEXT_SUSPECT'));
+
+    if (hasBlockingOcrError) {
+      setErrorMessage(`Impossibile confermare la riga "${line.description || line.originalText}": presenta un errore bloccante OCR.`);
+      return;
+    }
+
+    setErrorMessage(null);
+    setEditableLines((prev) =>
+      prev.map((l) => {
+        if (l.id !== lineId) return l;
+        return {
+          ...l,
+          reviewStatus: 'confirmed' as OCRLineReviewStatus,
+          manuallyValidated: true,
+        };
+      })
+    );
   };
 
   const handleSaveDraft = async () => {
@@ -896,6 +938,28 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
     setIsSaving(true);
     setErrorMessage(null);
 
+    // Auto-confirm pending valid lines
+    setEditableLines((prev) =>
+      prev.map((line) => {
+        if (line.reviewStatus === 'pending') {
+          const isDiscountOrReturn =
+            line.lineTotal < 0 ||
+            /SCONTO|PROMO|ABBUONO|COUPON|BUONO|RESO|STORNO|ARROTONDAMENTO/i.test(line.description || '');
+          const hasBlockingOcrError =
+            (!isDiscountOrReturn && line.unitPrice <= 0 && line.lineTotal <= 0) ||
+            (line.warnings && line.warnings.includes('OCR_TEXT_SUSPECT'));
+          if (!hasBlockingOcrError) {
+            return {
+              ...line,
+              reviewStatus: 'confirmed' as OCRLineReviewStatus,
+              manuallyValidated: true,
+            };
+          }
+        }
+        return line;
+      })
+    );
+
     const valErrors = getFinalValidationErrors();
     if (valErrors.length > 0) {
       setIsSaving(false);
@@ -921,6 +985,28 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
     if (!ocrProcess) return;
     setIsSaving(true);
     setErrorMessage(null);
+
+    // Auto-confirm pending valid lines
+    setEditableLines((prev) =>
+      prev.map((line) => {
+        if (line.reviewStatus === 'pending') {
+          const isDiscountOrReturn =
+            line.lineTotal < 0 ||
+            /SCONTO|PROMO|ABBUONO|COUPON|BUONO|RESO|STORNO|ARROTONDAMENTO/i.test(line.description || '');
+          const hasBlockingOcrError =
+            (!isDiscountOrReturn && line.unitPrice <= 0 && line.lineTotal <= 0) ||
+            (line.warnings && line.warnings.includes('OCR_TEXT_SUSPECT'));
+          if (!hasBlockingOcrError) {
+            return {
+              ...line,
+              reviewStatus: 'confirmed' as OCRLineReviewStatus,
+              manuallyValidated: true,
+            };
+          }
+        }
+        return line;
+      })
+    );
 
     const valErrors = getFinalValidationErrors();
     if (valErrors.length > 0) {
@@ -1107,16 +1193,44 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
 
   // Strict & Granular Visual State Helpers (Normal, Yellow, Red, Green)
   const getLineVisualState = (line: EditableReviewLine): 'normal' | 'yellow' | 'red' | 'green' => {
-    if (line.reviewStatus === 'modified' || line.isNewRow) {
+    // 1. Manually validated / modified / confirmed / new row => GREEN
+    if (
+      line.reviewStatus === 'modified' ||
+      line.reviewStatus === 'confirmed' ||
+      line.isNewRow ||
+      line.manuallyValidated
+    ) {
       return 'green';
     }
-    if (line.hasConflict || (line.unitPrice <= 0 && line.lineTotal <= 0) || (line.warnings && line.warnings.includes('OCR_TEXT_SUSPECT'))) {
+
+    const isDiscountOrReturn =
+      line.lineTotal < 0 ||
+      /SCONTO|PROMO|ABBUONO|COUPON|BUONO|RESO|STORNO|ARROTONDAMENTO/i.test(line.description || '');
+
+    // 2. Real blocking OCR error / invalid price => RED (hasConflict is classification, not blocking OCR error)
+    const hasBlockingOcrError =
+      (!isDiscountOrReturn && line.unitPrice <= 0 && line.lineTotal <= 0) ||
+      (line.warnings && line.warnings.includes('OCR_TEXT_SUSPECT'));
+
+    if (hasBlockingOcrError) {
       return 'red';
     }
-    // Items with confidence 0.88 and no warnings are normal (NOT red)
-    if (line.confidence < 60 || (line.warnings && line.warnings.length > 0) || !line.categoryId || line.categoryId === 'cat-unclassified') {
+
+    // Normalize confidence (support both 0-1 and 0-100)
+    const confVal = typeof line.confidence === 'number' ? line.confidence : 80;
+    const confPct = confVal > 0 && confVal <= 1 ? confVal * 100 : confVal;
+
+    // 3. Warning / classification conflict / low confidence / unclassified => YELLOW
+    const hasClassificationConflict = Boolean(line.hasConflict);
+    const hasWarnings = Array.isArray(line.warnings) && line.warnings.length > 0;
+    const isLowConfidence = confPct < 60;
+    const isUnclassified = !line.categoryId || line.categoryId === 'cat-unclassified';
+
+    if (hasClassificationConflict || isLowConfidence || hasWarnings || isUnclassified) {
       return 'yellow';
     }
+
+    // 4. Otherwise => NORMAL
     return 'normal';
   };
 
@@ -1129,7 +1243,7 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
       case 'yellow':
         return 'text-amber-700 dark:text-amber-300 font-semibold bg-amber-50 dark:bg-amber-950/40 px-1 rounded';
       default:
-        return 'text-slate-800 dark:text-slate-200';
+        return 'text-slate-900 dark:text-slate-100';
     }
   };
 
@@ -1339,16 +1453,16 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
                 activeMobileTab === 'data' ? 'block' : 'hidden lg:block'
               }`}
             >
-              {/* Receipt Paper Styling Container */}
-              <div className="p-4 bg-amber-50/30 dark:bg-slate-900/90 rounded-2xl border border-slate-200 dark:border-slate-800 font-mono text-xs text-slate-800 dark:text-slate-200 space-y-3 shadow-xs">
+              {/* Receipt Paper Styling Container (Ivory/White paper sheet) */}
+              <div className="p-5 bg-[#fdfcf7] text-slate-900 rounded-xl border border-slate-300 font-mono text-xs shadow-md space-y-4 relative">
                 
-                {/* 1. Header: Intestazione Scontrino */}
-                <div className="text-center space-y-1 pb-3 border-b border-dashed border-slate-300 dark:border-slate-700">
-                  <div className="flex items-center justify-center gap-2">
+                {/* 1. INTESTAZIONE ESERCENTE */}
+                <div className="text-center space-y-1 pb-3 border-b border-dashed border-slate-300">
+                  <div className="flex items-center justify-center">
                     <select
                       value={selectedSupplierId}
                       onChange={(e) => setSelectedSupplierId(e.target.value)}
-                      className="bg-transparent font-bold text-center text-sm text-slate-900 dark:text-white border-b border-dotted border-slate-400 focus:outline-none cursor-pointer max-w-[280px] truncate"
+                      className="bg-transparent font-bold text-center text-sm text-slate-900 border-b border-dotted border-slate-400 focus:outline-none cursor-pointer max-w-[280px] truncate"
                     >
                       <option value="new">➕ {newSupplierName || detectedSupplierName || 'Nuovo Fornitore'}</option>
                       {suppliers.map((s) => (
@@ -1362,43 +1476,33 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
                       value={newSupplierName}
                       onChange={(e) => setNewSupplierName(e.target.value)}
                       placeholder="Nome fornitore"
-                      className="text-center bg-white dark:bg-slate-800 border border-slate-300 rounded px-2 py-0.5 text-xs w-48 mx-auto block mt-1"
+                      className="text-center bg-white border border-slate-300 rounded px-2 py-0.5 text-xs w-48 mx-auto block mt-1"
                     />
                   )}
-                  <div className="text-[10px] text-slate-500 uppercase tracking-widest">
+                  {address && <div className="text-[11px] text-slate-600">{address}</div>}
+                  {city && <div className="text-[11px] text-slate-600">{city}</div>}
+                  {phone && <div className="text-[10px] text-slate-500">Tel: {phone}</div>}
+                  {vatId && <div className="text-[10px] font-semibold text-slate-700">P.IVA / C.F.: {vatId}</div>}
+                </div>
+
+                {/* 2. TIPO DOCUMENTO */}
+                <div className="text-center pb-2 border-b border-dashed border-slate-300">
+                  <div className="font-bold text-xs uppercase tracking-widest text-slate-800">
                     {documentCategory || 'DOCUMENTO COMMERCIALE'}
                   </div>
                 </div>
 
-                {/* 2. Dati Data / Numero Documento */}
-                <div className="flex items-center justify-between text-[11px] text-slate-600 dark:text-slate-400 pb-2 border-b border-dashed border-slate-200 dark:border-slate-800">
-                  <div className="flex items-center gap-1.5">
-                    <Calendar className="w-3.5 h-3.5 text-indigo-500" />
-                    <input
-                      type="date"
-                      value={expenseDate}
-                      onChange={(e) => setExpenseDate(e.target.value)}
-                      className="bg-transparent font-mono text-xs text-slate-800 dark:text-slate-200 focus:outline-none cursor-pointer"
-                    />
-                  </div>
-                  <div className="font-mono text-[11px]">
-                    N. DOC: {ocrProcess?.id ? ocrProcess.id.substring(0, 8).toUpperCase() : '001'}
-                  </div>
-                </div>
-
-                {/* 3. Elenco Righe Prodotto (Copia Digitale Lineare) */}
+                {/* 3. CORPO ARTICOLI (DESCRIZIONE | IVA | PREZZO) */}
                 <div className="space-y-2 py-1">
-                  <div className="flex items-center justify-between text-[10px] uppercase font-bold text-slate-400 pb-1 border-b border-slate-200 dark:border-slate-800">
-                    <span>Articolo / Descrizione</span>
-                    <div className="flex items-center gap-4">
-                      <span>Q.tà</span>
-                      <span>Prezzo (€)</span>
-                    </div>
+                  <div className="flex items-center justify-between text-[10px] uppercase font-bold text-slate-500 pb-1 border-b border-slate-300">
+                    <span className="flex-1">Descrizione</span>
+                    <span className="w-14 text-center">IVA</span>
+                    <span className="w-16 text-right">Prezzo (€)</span>
                   </div>
 
                   {editableLines.length === 0 ? (
                     <div className="text-center py-6 text-slate-400 text-xs">
-                      Nessun articolo. Clicca "+ Aggiungi Riga" in basso.
+                      Nessun articolo. Clicca "+ Aggiungi Articolo" in basso.
                     </div>
                   ) : (
                     editableLines.map((line, idx) => {
@@ -1409,22 +1513,22 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
                       return (
                         <div
                           key={line.id}
-                          className={`p-2 rounded-xl border transition-all space-y-1.5 ${
+                          className={`p-1.5 rounded-lg border transition-all space-y-1 ${
                             isEditing
-                              ? 'bg-white dark:bg-slate-800 border-indigo-500 ring-1 ring-indigo-500 shadow-sm'
-                              : 'bg-transparent border-transparent hover:bg-slate-100/60 dark:hover:bg-slate-800/40'
+                              ? 'bg-white border-indigo-500 ring-1 ring-indigo-500 shadow-sm'
+                              : 'bg-transparent border-transparent hover:bg-slate-200/50'
                           }`}
                         >
-                          {/* Line Main Receipt Row */}
+                          {/* Receipt Line Row */}
                           <div className="flex items-center justify-between gap-2">
-                            <div className="flex items-center gap-2 min-w-0 flex-1">
+                            <div className="flex items-center gap-1.5 min-w-0 flex-1">
                               <span className="text-[10px] text-slate-400 font-mono shrink-0">#{idx + 1}</span>
                               {isEditing ? (
                                 <input
                                   type="text"
                                   value={line.description}
                                   onChange={(e) => handleLineChange(line.id, 'description', e.target.value)}
-                                  className="w-full bg-white dark:bg-slate-900 border border-slate-300 rounded px-2 py-0.5 text-xs font-sans font-medium"
+                                  className="w-full bg-white border border-slate-300 rounded px-2 py-0.5 text-xs font-sans font-medium"
                                   autoFocus
                                 />
                               ) : (
@@ -1438,23 +1542,21 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
                               )}
                             </div>
 
-                            <div className="flex items-center gap-3 shrink-0 font-mono text-xs">
+                            {/* IVA column */}
+                            <span className="w-14 text-center text-[11px] text-slate-600 font-mono shrink-0">
+                              10,0%
+                            </span>
+
+                            {/* Price / Total column aligned right */}
+                            <div className="flex items-center gap-1.5 shrink-0 font-mono text-xs justify-end">
                               {isEditing ? (
                                 <>
-                                  <input
-                                    type="number"
-                                    step="any"
-                                    value={line.quantity}
-                                    onChange={(e) => handleLineChange(line.id, 'quantity', parseFloat(e.target.value) || 0)}
-                                    className="w-12 bg-white dark:bg-slate-900 border border-slate-300 rounded px-1 text-center text-xs"
-                                    title="Quantità"
-                                  />
                                   <input
                                     type="number"
                                     step="0.01"
                                     value={line.lineTotal}
                                     onChange={(e) => handleLineChange(line.id, 'lineTotal', parseFloat(e.target.value) || 0)}
-                                    className="w-16 bg-white dark:bg-slate-900 border border-slate-300 rounded px-1 text-right text-xs font-bold"
+                                    className="w-16 bg-white border border-slate-300 rounded px-1 text-right text-xs font-bold"
                                     title="Totale riga"
                                   />
                                   <button
@@ -1468,10 +1570,25 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
                                 </>
                               ) : (
                                 <>
-                                  <span className="text-slate-500 w-8 text-center">{line.quantity}x</span>
-                                  <span className="font-bold text-slate-900 dark:text-white w-16 text-right">
-                                    € {line.lineTotal.toFixed(2)}
+                                  <span className="font-bold text-slate-900 text-right w-16">
+                                    {line.lineTotal.toFixed(2)}
                                   </span>
+                                  {line.reviewStatus === 'confirmed' || line.manuallyValidated ? (
+                                    <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-emerald-100 dark:bg-emerald-950/60 text-emerald-800 dark:text-emerald-200 rounded-full text-[11px] font-sans font-semibold shrink-0">
+                                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                                      <span>Confermata</span>
+                                    </span>
+                                  ) : (
+                                    <button
+                                      type="button"
+                                      onClick={() => handleConfirmLine(line.id)}
+                                      className="inline-flex items-center gap-1 px-2 py-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-300 rounded-lg text-xs font-sans font-semibold shrink-0 shadow-xs transition-all cursor-pointer"
+                                      title="Conferma riga senza modificarla"
+                                    >
+                                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                                      <span>Conferma</span>
+                                    </button>
+                                  )}
                                   <button
                                     type="button"
                                     onClick={() => setEditingRowId(line.id)}
@@ -1503,7 +1620,7 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
 
                           {/* Collapsible Product & Category Details */}
                           {isExpanded && (
-                            <div className="pt-2 mt-1 border-t border-slate-200 dark:border-slate-700 grid grid-cols-1 sm:grid-cols-2 gap-2 text-[11px] font-sans">
+                            <div className="pt-2 mt-1 border-t border-slate-200 grid grid-cols-1 sm:grid-cols-2 gap-2 text-[11px] font-sans">
                               <div>
                                 <label className="block text-[10px] text-slate-500 mb-0.5 flex items-center gap-1">
                                   <Package className="w-3 h-3 text-indigo-500" /> Prodotto Catalogo
@@ -1523,7 +1640,7 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
                                       handleLineChange(line.id, 'actionMode', 'unlinked');
                                     }
                                   }}
-                                  className="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg px-2 py-1 text-xs text-slate-900 dark:text-white"
+                                  className="w-full bg-white border border-slate-300 rounded-lg px-2 py-1 text-xs text-slate-900"
                                 >
                                   <option value="">Nessun collegamento</option>
                                   <option value="CREATE_NEW">➕ Crea nuovo prodotto</option>
@@ -1540,7 +1657,7 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
                                 <select
                                   value={line.categoryId || ''}
                                   onChange={(e) => handleLineChange(line.id, 'categoryId', e.target.value || null)}
-                                  className="w-full bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg px-2 py-1 text-xs text-slate-900 dark:text-white"
+                                  className="w-full bg-white border border-slate-300 rounded-lg px-2 py-1 text-xs text-slate-900"
                                 >
                                   <option value="">Seleziona Categoria...</option>
                                   {parentCategories.map((c) => (
@@ -1559,38 +1676,38 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
                     <button
                       type="button"
                       onClick={handleAddLine}
-                      className="w-full py-1.5 border border-dashed border-slate-300 dark:border-slate-700 rounded-xl text-xs text-indigo-600 dark:text-indigo-400 font-semibold hover:bg-indigo-50/50 flex items-center justify-center gap-1.5"
+                      className="w-full py-1.5 border border-dashed border-slate-300 rounded-lg text-xs text-indigo-600 font-semibold hover:bg-indigo-50/50 flex items-center justify-center gap-1.5"
                     >
                       <Plus className="w-3.5 h-3.5" /> Aggiungi Articolo alla Copia Digitale
                     </button>
                   </div>
                 </div>
 
-                {/* 4. Riepilogo & Pagamento integrato nello scontrino */}
-                <div className="pt-3 border-t border-dashed border-slate-300 dark:border-slate-700 space-y-1.5 text-xs font-mono">
-                  <div className="flex items-center justify-between font-bold text-slate-900 dark:text-white text-sm pt-1">
+                {/* 4. RIEPILOGO */}
+                <div className="pt-3 border-t border-dashed border-slate-300 space-y-1 text-xs font-mono">
+                  <div className="flex items-center justify-between font-bold text-slate-900 text-sm">
                     <span>TOTALE COMPLESSIVO</span>
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-1">
                       <input
                         type="number"
                         step="0.01"
                         value={documentTotal || ''}
                         onChange={(e) => setDocumentTotal(parseFloat(e.target.value) || 0)}
-                        className="w-24 bg-white dark:bg-slate-800 border border-slate-300 rounded px-1.5 py-0.5 text-right font-bold text-sm"
+                        className="w-24 bg-white border border-slate-300 rounded px-1.5 py-0.5 text-right font-bold text-sm"
                       />
                       <span>€</span>
                     </div>
                   </div>
 
-                  <div className="flex items-center justify-between text-slate-500 text-[11px]">
-                    <span>Somma righe rilevate</span>
-                    <span>€ {roundedSumLines.toFixed(2)}</span>
+                  <div className="flex items-center justify-between text-slate-600 text-[11px]">
+                    <span>di cui IVA (stimata)</span>
+                    <span>€ {estimatedVat.toFixed(2)}</span>
                   </div>
 
                   {hasTotalDiscrepancy && (
-                    <div className="p-2 bg-amber-50 dark:bg-amber-950/40 rounded-lg text-amber-800 dark:text-amber-200 text-[11px] space-y-1 mt-1">
-                      <div>Discrepanza: € {effectiveDiscrepancy.toFixed(2)}</div>
-                      <label className="flex items-center gap-1.5 cursor-pointer font-sans font-medium">
+                    <div className="p-2 bg-amber-50 rounded-lg text-amber-900 text-[11px] space-y-1 mt-1 font-sans">
+                      <div>Discrepanza con somma righe (€ {roundedSumLines.toFixed(2)})</div>
+                      <label className="flex items-center gap-1.5 cursor-pointer font-medium">
                         <input
                           type="checkbox"
                           checked={isDiscrepancyApproved}
@@ -1601,31 +1718,67 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
                       </label>
                     </div>
                   )}
+                </div>
 
-                  <div className="flex items-center justify-between pt-2 border-t border-slate-200 dark:border-slate-800">
-                    <span className="uppercase font-semibold">METODO DI PAGAMENTO</span>
+                {/* 5. PAGAMENTO */}
+                <div className="pt-3 border-t border-dashed border-slate-300 space-y-1.5 text-xs font-mono">
+                  <div className="flex items-center justify-between">
+                    <span className="font-semibold text-slate-700">Pagamento elettronico</span>
+                    <span className="font-bold">€ {documentTotal.toFixed(2)}</span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="font-semibold text-slate-700">Importo pagato</span>
+                    <span className="font-bold">€ {documentTotal.toFixed(2)}</span>
+                  </div>
+                  <div className="flex items-center justify-between pt-1">
+                    <span className="font-semibold text-slate-700 uppercase">Metodo / Circuito</span>
                     <select
                       value={paymentMethod}
                       onChange={(e) => setPaymentMethod(e.target.value as PaymentMethod)}
-                      className="bg-white dark:bg-slate-800 border border-slate-300 rounded px-2 py-1 text-xs font-sans cursor-pointer"
+                      className="bg-white border border-slate-300 rounded px-2 py-0.5 text-xs font-sans cursor-pointer"
                     >
-                      <option value="cash">Contanti</option>
-                      <option value="debitCard">BANCOMAT / Carta Debito</option>
-                      <option value="creditCard">Carta di Credito</option>
-                      <option value="bankTransfer">Bonifico Bancario</option>
-                      <option value="digitalWallet">Digital Wallet</option>
-                      <option value="other">Altro</option>
+                      <option value="cash">CONTANTI</option>
+                      <option value="debitCard">BANCOMAT</option>
+                      <option value="creditCard">CARTA DI CREDITO</option>
+                      <option value="bankTransfer">BONIFICO</option>
+                      <option value="digitalWallet">DIGITAL WALLET</option>
+                      <option value="other">ALTRO</option>
                     </select>
-                  </div>
-
-                  <div className="flex items-center justify-between text-[11px] text-slate-500">
-                    <span>IMPORTO PAGATO</span>
-                    <span>€ {documentTotal.toFixed(2)}</span>
                   </div>
                 </div>
 
+                {/* 6. CHIUSURA DOCUMENTO (Data, ora, n. doc, venditore) */}
+                <div className="pt-3 border-t border-dashed border-slate-300 space-y-1 text-[11px] text-slate-600 font-mono">
+                  <div className="flex items-center justify-between">
+                    <span className="flex items-center gap-1">
+                      <Calendar className="w-3.5 h-3.5 text-indigo-500" /> Data e Ora:
+                    </span>
+                    <div className="flex items-center gap-1">
+                      <input
+                        type="date"
+                        value={expenseDate}
+                        onChange={(e) => setExpenseDate(e.target.value)}
+                        className="bg-transparent font-mono text-xs text-slate-800 cursor-pointer"
+                      />
+                      {time && <span>{time}</span>}
+                    </div>
+                  </div>
+
+                  <div className="flex items-center justify-between">
+                    <span>DOCUMENTO N.</span>
+                    <span className="font-bold">{ocrProcess?.id ? ocrProcess.id.substring(0, 10).toUpperCase() : '1034-0037'}</span>
+                  </div>
+
+                  {vendor && (
+                    <div className="flex items-center justify-between">
+                      <span>VENDITORE:</span>
+                      <span className="font-bold uppercase">{vendor}</span>
+                    </div>
+                  )}
+                </div>
+
                 {existingExpense && (
-                  <div className="p-2.5 bg-emerald-50 dark:bg-emerald-950/40 rounded-xl text-xs text-emerald-800 dark:text-emerald-300 flex items-center gap-2">
+                  <div className="p-2.5 bg-emerald-50 rounded-xl text-xs text-emerald-800 flex items-center gap-2 font-sans">
                     <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
                     <span>Registrazione contabile già effettuata il {existingExpense.expenseDate}</span>
                   </div>

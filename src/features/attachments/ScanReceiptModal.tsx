@@ -89,6 +89,10 @@ export const ScanReceiptModal: React.FC<ScanReceiptModalProps> = ({
   const [zoomedSegment, setZoomedSegment] = useState<DocumentPageSegment | null>(null);
   const [zoomViewMode, setZoomViewMode] = useState<'processed' | 'original'>('processed');
 
+  // Conflict recovery state
+  const [conflictingSession, setConflictingSession] = useState<DocumentSession | null>(null);
+  const [conflictingFile, setConflictingFile] = useState<File | null>(null);
+
   // Delete Draft Confirmation Modal State
   const [confirmDeleteDraftId, setConfirmDeleteDraftId] = useState<string | null>(null);
   const [confirmDeleteCurrent, setConfirmDeleteCurrent] = useState<boolean>(false);
@@ -110,6 +114,8 @@ export const ScanReceiptModal: React.FC<ScanReceiptModalProps> = ({
     setZoomedSegment(null);
     setConfirmDeleteDraftId(null);
     setConfirmDeleteCurrent(false);
+    setConflictingSession(null);
+    setConflictingFile(null);
   }, []);
 
   // Fetch draft thumbnails helper
@@ -247,6 +253,90 @@ export const ScanReceiptModal: React.FC<ScanReceiptModalProps> = ({
     }
   };
 
+  // Conflict Resolution Handlers
+  const handleResolveConflictResume = async () => {
+    if (!conflictingSession) return;
+    setIsLoading(true);
+    setErrorMsg(null);
+    try {
+      const status = conflictingSession.status;
+      if (status === 'draft') {
+        const sess = conflictingSession;
+        setConflictingSession(null);
+        setConflictingFile(null);
+        await handleResumeDraft(sess);
+      } else if (
+        status === 'ready' ||
+        status === 'ready_for_review' ||
+        status === 'completed' ||
+        conflictingSession.ocrProcessId
+      ) {
+        const segs = await documentPageSegmentRepository.getBySessionId(conflictingSession.id);
+        const firstSeg = segs[0];
+        const attId = String(firstSeg?.attachmentId || conflictingSession.metadata?.attachmentId || '');
+        const procId = String(conflictingSession.ocrProcessId || '');
+
+        setConflictingSession(null);
+        setConflictingFile(null);
+        onClose();
+        if (procId) {
+          onScanComplete(attId, procId);
+        }
+      } else {
+        const sess = conflictingSession;
+        setConflictingSession(null);
+        setConflictingFile(null);
+        await handleResumeDraft(sess);
+      }
+    } catch (err: any) {
+      setErrorMsg(err?.message || 'Errore durante la ripresa della sessione');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleResolveConflictDeleteAndReacquire = async () => {
+    if (!conflictingSession) return;
+    setIsLoading(true);
+    setErrorMsg(null);
+    try {
+      let isRegistered = Boolean(conflictingSession.expenseId);
+      if (!isRegistered && conflictingSession.ocrProcessId) {
+        const proc = await ocrProcessRepository.getById(conflictingSession.ocrProcessId);
+        if (proc?.expenseId) isRegistered = true;
+      }
+
+      if (isRegistered) {
+        setErrorMsg('Il documento è già registrato a bilancio e non può essere eliminato.');
+        setIsLoading(false);
+        return;
+      }
+
+      const fileToAcquire = conflictingFile;
+      const sessId = conflictingSession.id;
+
+      await documentSessionRepository.delete(sessId);
+      setConflictingSession(null);
+      setConflictingFile(null);
+
+      if (fileToAcquire) {
+        await handleFilesIngest([fileToAcquire]);
+      } else {
+        setStep('source');
+      }
+    } catch (err: any) {
+      setErrorMsg(err?.message || 'Errore durante l\'eliminazione della sessione precedente');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleResolveConflictCancel = () => {
+    setConflictingSession(null);
+    setConflictingFile(null);
+    setStep('source');
+  };
+
   // Create new session & ingest files
   const handleFilesIngest = async (
     files: FileList | File[],
@@ -324,9 +414,15 @@ export const ScanReceiptModal: React.FC<ScanReceiptModalProps> = ({
         // Check if another active session already exists for this document
         const activeExistingSession = await documentSessionRepository.findActiveSessionByFileHash(fileHash, session.id);
         if (activeExistingSession) {
-          setErrorMsg(`Documento "${file.name}" è già in lavorazione nella sessione attiva (${activeExistingSession.id}). Impossibile creare una sessione duplicata.`);
-          duplicateCount++;
-          continue;
+          const segs = await documentPageSegmentRepository.getBySessionId(session.id);
+          if (segs.length === 0 && !session.ocrProcessId) {
+            await documentSessionRepository.delete(session.id);
+          }
+          setCurrentSession(null);
+          setConflictingSession(activeExistingSession);
+          setConflictingFile(file);
+          setIsLoading(false);
+          return;
         }
 
         // Duplicate check in current session
@@ -757,8 +853,76 @@ export const ScanReceiptModal: React.FC<ScanReceiptModalProps> = ({
           </div>
         )}
 
+        {/* Conflict Recovery Modal View */}
+        {conflictingSession && (
+          <div className="space-y-6 py-2">
+            <div className="flex items-start gap-4 p-4 bg-rose-50 dark:bg-rose-950/40 rounded-2xl border border-rose-200 dark:border-rose-900 text-xs text-rose-800 dark:text-rose-200">
+              <AlertTriangle className="w-6 h-6 text-rose-600 shrink-0 mt-0.5" />
+              <div className="space-y-1">
+                <h4 className="font-bold text-sm text-slate-900 dark:text-white uppercase tracking-wide">
+                  Documento già in lavorazione
+                </h4>
+                <p>
+                  Questo documento appartiene già a una sessione non completata. Scegli come procedere senza creare duplicati.
+                </p>
+              </div>
+            </div>
+
+            <div className="p-4 bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 space-y-3 text-xs">
+              <div className="flex items-center justify-between">
+                <span className="text-slate-500">Titolo documento:</span>
+                <span className="font-bold text-slate-900 dark:text-white">
+                  {(conflictingSession.metadata?.title as string) || 'Documento senza titolo'}
+                </span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-slate-500">ID Sessione:</span>
+                <span className="font-mono text-slate-700 dark:text-slate-300">{conflictingSession.id}</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-slate-500">Stato:</span>
+                <span className="font-bold uppercase px-2 py-0.5 bg-amber-100 dark:bg-amber-950 text-amber-800 dark:text-amber-200 rounded text-[10px]">
+                  {conflictingSession.status}
+                </span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-slate-500">Ultimo aggiornamento:</span>
+                <span className="font-mono text-slate-700 dark:text-slate-300">
+                  {new Date(conflictingSession.updatedAt).toLocaleString('it-IT')}
+                </span>
+              </div>
+            </div>
+
+            <div className="flex flex-col sm:flex-row items-center justify-end gap-3 pt-2">
+              <Button
+                type="button"
+                variant="secondary"
+                onClick={handleResolveConflictCancel}
+              >
+                Annulla
+              </Button>
+              <Button
+                type="button"
+                variant="amber"
+                onClick={handleResolveConflictDeleteAndReacquire}
+                icon={<Trash2 className="w-4 h-4" />}
+              >
+                Elimina precedente e riacquisisci
+              </Button>
+              <Button
+                type="button"
+                variant="primary"
+                onClick={handleResolveConflictResume}
+                icon={<ArrowRight className="w-4 h-4" />}
+              >
+                Riprendi sessione esistente
+              </Button>
+            </div>
+          </div>
+        )}
+
         {/* Wizard Step Content */}
-        {step === 'recovery' && (
+        {!conflictingSession && step === 'recovery' && (
           /* SCREEN: Draft Sessions Recovery */
           <div className="space-y-6 py-2">
             <div className="flex items-start justify-between gap-4 p-4 bg-amber-50/80 dark:bg-amber-950/40 rounded-2xl border border-amber-200 dark:border-amber-900 text-xs text-amber-800 dark:text-amber-200">

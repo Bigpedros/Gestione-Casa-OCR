@@ -198,6 +198,10 @@ export const buildDiagnosticReport = async (
     categoryId: l.categoryId || null,
     productId: l.productId || null,
     actionMode: l.actionMode || 'create',
+    reviewStatus: l.reviewStatus || 'pending',
+    hasConflict: l.hasConflict || false,
+    conflictDetails: l.conflictDetails || null,
+    confidenceLevel: l.confidenceLevel || null,
   }));
 
   const calculatedSum =

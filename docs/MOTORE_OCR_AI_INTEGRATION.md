@@ -1,7 +1,7 @@
 # MOTORE-OCR-AI — integrazione Gestione Casa
 
 Baseline OCR importata da `Bigpedros/MOTORE-OCR-AI` al commit
-`619cefd9030864d1cc80c74b93cd429fbbd650aa` (MOTORE `0.5.0-rc.1`, CI/certification green).
+`7e6738262d326099b7c73955207a371c09ee042f` (MOTORE `0.5.0-rc.1`, CI/certification green).
 
 ## Perimetro
 
@@ -45,4 +45,8 @@ La logica di parsing scontrino, knowledge base, contabilità e revisione utente 
 
 
 ## Receipt Line Fusion
-La baseline `619cefd9030864d1cc80c74b93cd429fbbd650aa` aggiunge fusione receipt a livello di riga tra Tesseract e OCRS/RTen. La fusione usa ancore geometriche/semantiche di riga (IVA/prezzo) e produce evidenze senza mutare il raw OCR.
+La baseline `7e6738262d326099b7c73955207a371c09ee042f` aggiunge fusione receipt a livello di riga tra Tesseract e OCRS/RTen. La fusione usa ancore geometriche/semantiche di riga (IVA/prezzo) e produce evidenze senza mutare il raw OCR.
+
+
+## Receipt Item Block Reconstruction v1
+La baseline `7e6738262d326099b7c73955207a371c09ee042f` ricostruisce voci commerciali indipendentemente dai lineId OCR e dal layout grafico, usando coordinate fisiche, campi Articolo/IVA/Prezzo e relazioni quantità × prezzo unitario = totale. Supporta SINGLE_LINE, DESCRIPTION_CONTINUATION e QTY_UNIT_PREFIX.

@@ -308,6 +308,7 @@ export const buildDiagnosticReport = async (
       variantReader: ocrProcessMetadata.variantReader || null,
       decisionSummary: ocrProcessMetadata.decisionSummary || null,
       matchingDiagnostics: ocrProcessMetadata.matchingDiagnostics || [],
+      receiptItemBlocks: ocrProcessMetadata.receiptItemBlocks || [],
       decisions: (ocrProcessMetadata.decisions || []).map((d: any) => ({
         primaryText: d.primaryText || d.rawText || '',
         secondaryText: d.secondaryText || '',

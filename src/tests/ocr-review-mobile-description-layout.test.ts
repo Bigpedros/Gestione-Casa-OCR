@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest';
 describe('OCR review mobile row layout', () => {
   it('keeps description in a protected grid column and actions on a separate row', () => {
     const source = fs.readFileSync(
-      path.resolve(process.cwd(), 'src/features/attachments/OcrReviewModal.tsx'),
+      path.resolve('src/features/attachments/OcrReviewModal.tsx'),
       'utf8'
     );
 

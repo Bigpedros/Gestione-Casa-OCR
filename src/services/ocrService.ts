@@ -234,6 +234,7 @@ class OCRService {
       variantReader?: any;
       matchingDiagnostics?: any[];
       decisions?: any[];
+      receiptItemBlocks?: any[];
     }> = [];
 
     try {
@@ -415,6 +416,7 @@ class OCRService {
               variantReader: engineResult.variantReader,
               matchingDiagnostics: engineResult.matchingDiagnostics,
               decisions: engineResult.decisions,
+              receiptItemBlocks: engineResult.receiptItemBlocks,
             };
             winnerOcrWords = engineResult.words;
 
@@ -654,6 +656,7 @@ class OCRService {
           variantReader: pagePreprocessingTelemetry?.variantReader,
           matchingDiagnostics: pagePreprocessingTelemetry?.matchingDiagnostics,
           decisions: pagePreprocessingTelemetry?.decisions,
+          receiptItemBlocks: pagePreprocessingTelemetry?.receiptItemBlocks,
         });
 
         // Aggiorna lo stato del segmento
@@ -763,6 +766,7 @@ class OCRService {
           variantReader: pageResults[0]?.variantReader || pageResults[0]?.preprocessingTelemetry?.variantReader || null,
           matchingDiagnostics: pageResults[0]?.matchingDiagnostics || pageResults[0]?.preprocessingTelemetry?.matchingDiagnostics || [],
           decisions: pageResults[0]?.decisions || pageResults[0]?.preprocessingTelemetry?.decisions || [],
+          receiptItemBlocks: pageResults.flatMap((page) => page.receiptItemBlocks || page.preprocessingTelemetry?.receiptItemBlocks || []),
         } as any,
       });
 

@@ -6,7 +6,7 @@ import { DECISION_ENGINE_VERSION } from '../vendor/motore-ocr-ai/core/pipeline/d
 import { collectReceiptEvidence } from '../vendor/motore-ocr-ai/core/ocr/receiptFinalizer.js';
 import type { OcrWordGeometry } from './ocrParser/types';
 
-export const MOTORE_OCR_AI_SOURCE_COMMIT = '619cefd9030864d1cc80c74b93cd429fbbd650aa';
+export const MOTORE_OCR_AI_SOURCE_COMMIT = '7e6738262d326099b7c73955207a371c09ee042f';
 
 export interface MotoreOcrAiPageResult {
   text: string;
@@ -31,6 +31,7 @@ export interface MotoreOcrAiPageResult {
   variantReader?: any;
   matchingDiagnostics?: any[];
   decisions?: any[];
+  receiptItemBlocks?: any[];
 }
 
 let provider: DualRecognizerOcrProvider | null = null;
@@ -112,6 +113,7 @@ export async function recognizeReceiptPageWithMotoreOcrAi(
       `orchestratorStabilizationMs:${Math.round(session.diagnostics.stabilizationMs)}`,
       `receiptEvidenceTokens:${receiptEvidence.tokens.length}`,
       `receiptEvidenceObservations:${receiptEvidence.observations.length}`,
+      `receiptItemBlocks:${receiptEvidence.itemBlocks.length}`,
     ],
     recognizer: engine.id,
     quality: page.quality ?? null,
@@ -130,6 +132,7 @@ export async function recognizeReceiptPageWithMotoreOcrAi(
     variantReader: stabilized.variantReaderInfo,
     matchingDiagnostics: stabilized.matchingDiagnostics,
     decisions: stabilized.decisions,
+    receiptItemBlocks: receiptEvidence.itemBlocks,
   };
 }
 

@@ -15,6 +15,7 @@ import {
   ITEM_MIN_LETTERS,
 } from '../constants';
 import { receiptKnowledgeBase } from '../knowledgeBase';
+import { ReceiptStructuralGrammar } from './ReceiptStructuralGrammar';
 
 /**
  * =========================================================================
@@ -122,11 +123,23 @@ export class LineItemParserV2 {
       if (parsedItems.length > 0) {
         const lastItem = parsedItems[parsedItems.length - 1];
 
-        // 1. Riga esplicita di continuazione / peso / moltiplicatore / prezzo isolato
+        // 1. Riga esplicita di continuazione / peso / moltiplicatore / prezzo isolato.
+        // Guard rail: un importo isolato NON puo sovrascrivere un articolo che
+        // possiede gia un prezzo/totale certo o plausibile. In quel caso la riga
+        // resta autonoma e verra valutata dai successivi gate strutturali/di chiusura.
         if (current.isPureContinuationOrMultiplier) {
-          const mergedItem = this.mergeContinuationLine(lastItem, current);
-          parsedItems[parsedItems.length - 1] = mergedItem;
-          continue;
+          const standalonePriceWouldOverwriteResolvedItem =
+            this.isStandalonePriceOnlyCandidate(current) &&
+            lastItem.lineTotal !== null &&
+            lastItem.lineTotal > 0 &&
+            (lastItem.monetaryEvidence.lineTotalEvidence === 'CERTAIN' ||
+              lastItem.monetaryEvidence.lineTotalEvidence === 'PLAUSIBLE');
+
+          if (!standalonePriceWouldOverwriteResolvedItem) {
+            const mergedItem = this.mergeContinuationLine(lastItem, current);
+            parsedItems[parsedItems.length - 1] = mergedItem;
+            continue;
+          }
         }
 
         // 2. Descrizione multilinea spezzata su righe consecutive
@@ -160,25 +173,30 @@ export class LineItemParserV2 {
       parsedItems.push(item);
     }
 
+    // PASSATA 3: grammatica strutturale generalista.
+    // Assembla righe commerciali complementari usando invarianti semantiche,
+    // mai il layout o il nome dell'esercente.
+    const structurallyAssembledItems = ReceiptStructuralGrammar.assemble(parsedItems);
+
     // Costruzione della vista legacy compatibile (senza mutare i dati né forzare zeri certi)
-    const legacyLines = parsedItems.map((item, idx) => this.toLegacyParsedReceiptLine(item, idx));
+    const legacyLines = structurallyAssembledItems.map((item, idx) => this.toLegacyParsedReceiptLine(item, idx));
 
     // Metriche di sintesi
-    const articleCount = parsedItems.filter((it) => it.type === 'ARTICLE').length;
-    const discountCount = parsedItems.filter((it) => it.type === 'DISCOUNT' || it.type === 'ROUNDING' || it.type === 'RETURN_STORNO').length;
-    const unknownCount = parsedItems.filter((it) => it.type === 'UNKNOWN').length;
-    const certainPriceCount = parsedItems.filter((it) => it.monetaryEvidence.lineTotalEvidence === 'CERTAIN').length;
-    const uncertainPriceCount = parsedItems.length - certainPriceCount;
+    const articleCount = structurallyAssembledItems.filter((it) => it.type === 'ARTICLE').length;
+    const discountCount = structurallyAssembledItems.filter((it) => it.type === 'DISCOUNT' || it.type === 'ROUNDING' || it.type === 'RETURN_STORNO').length;
+    const unknownCount = structurallyAssembledItems.filter((it) => it.type === 'UNKNOWN').length;
+    const certainPriceCount = structurallyAssembledItems.filter((it) => it.monetaryEvidence.lineTotalEvidence === 'CERTAIN').length;
+    const uncertainPriceCount = structurallyAssembledItems.length - certainPriceCount;
 
     const overallConfidence =
-      parsedItems.length > 0
+      structurallyAssembledItems.length > 0
         ? Math.round(
-            (parsedItems.reduce((acc, curr) => acc + curr.confidence.overall, 0) / parsedItems.length) * 100
+            (structurallyAssembledItems.reduce((acc, curr) => acc + curr.confidence.overall, 0) / structurallyAssembledItems.length) * 100
           ) / 100
         : 0;
 
     return {
-      items: parsedItems,
+      items: structurallyAssembledItems,
       legacyLines,
       unparsedNoiseLines: noiseLines,
       overallConfidence,
@@ -641,6 +659,26 @@ export class LineItemParserV2 {
         },
       ],
     };
+  }
+
+  /**
+   * Riconosce una riga che porta esclusivamente un importo monetario.
+   * Impedisce la sovrascrittura retroattiva di un articolo gia risolto.
+   */
+  private static isStandalonePriceOnlyCandidate(candidate: RawLineCandidate): boolean {
+    return (
+      candidate.type === 'ARTICLE' &&
+      candidate.isPureContinuationOrMultiplier &&
+      !candidate.isWeightOnly &&
+      !candidate.isUnitPriceOnly &&
+      candidate.multiplierCandidate === null &&
+      candidate.quantityCandidate === null &&
+      candidate.unitOfMeasureCandidate === null &&
+      !/[A-Za-z0-9\u00C0-\u017F]/.test(candidate.descriptionCandidate) &&
+      candidate.lineTotalCandidate !== null &&
+      (candidate.monetaryEvidence.lineTotalEvidence === 'CERTAIN' ||
+        candidate.monetaryEvidence.lineTotalEvidence === 'PLAUSIBLE')
+    );
   }
 
   /**

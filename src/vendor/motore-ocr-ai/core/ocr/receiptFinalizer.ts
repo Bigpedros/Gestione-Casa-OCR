@@ -2,6 +2,7 @@
 import type {OcrPage,OcrToken} from '../../contracts.js';
 import type {OcrEvidenceCandidate} from '../pipeline/checkpoints.js';
 import {collectReceiptLineFusionEvidence} from './receiptLineFusion.js';
+import {reconstructReceiptItemBlocks,type ReceiptItemBlock} from './receiptItemBlockReconstruction.js';
 
 export interface ReceiptEvidenceObservation{
   code:string;
@@ -12,6 +13,7 @@ export interface ReceiptEvidenceObservation{
 export interface ReceiptEvidenceResult{
   tokens:OcrToken[];
   observations:ReceiptEvidenceObservation[];
+  itemBlocks:ReceiptItemBlock[];
 }
 
 /**
@@ -25,6 +27,9 @@ export function collectReceiptEvidence(page:OcrPage,candidates:OcrEvidenceCandid
   tokens.push(...collectConservativeAlternativeEvidence(page.tokens));
   observations.push(...collectDateTimeObservations(page));
 
+  const itemBlocks=reconstructReceiptItemBlocks(page);
+  observations.push(...itemBlocks.observations);
+
   const lineFusion=collectReceiptLineFusionEvidence(page,candidates);
   tokens.push(...lineFusion.tokens);
   observations.push(...lineFusion.observations);
@@ -32,7 +37,7 @@ export function collectReceiptEvidence(page:OcrPage,candidates:OcrEvidenceCandid
   const monetary=collectMonetaryReconciliationEvidence(page,candidates);
   tokens.push(...monetary.tokens);
   observations.push(...monetary.observations);
-  return{tokens,observations};
+  return{tokens,observations,itemBlocks:itemBlocks.blocks};
 }
 
 
@@ -118,7 +123,7 @@ function collectMonetaryReconciliationEvidence(page:OcrPage,candidates:OcrEviden
       }
     }
   }
-  return{tokens,observations};
+  return{tokens,observations,itemBlocks:[]};
 }
 
 function findOpticalMoneyCandidate(raw:OcrToken,expected:number,candidates:OcrEvidenceCandidate[]):OcrEvidenceCandidate|undefined{

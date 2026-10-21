@@ -14,3 +14,5 @@ export * from './modules/LineItemParser';
 export * from './modules/ReceiptConsistencyValidator';
 export * from './modules/PaymentEvidenceParser';
 export * from './knowledgeBase';
+
+export * from './modules/ReceiptStructuralGrammar';

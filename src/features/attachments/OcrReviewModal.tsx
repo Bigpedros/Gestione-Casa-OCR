@@ -1524,62 +1524,67 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
                               : 'bg-transparent border-transparent hover:bg-slate-200/50'
                           }`}
                         >
-                          {/* Receipt Line Row */}
-                          <div className="flex items-center justify-between gap-2">
-                            <div className="flex items-center gap-1.5 min-w-0 flex-1">
-                              <span className="text-[10px] text-slate-400 font-mono shrink-0">#{idx + 1}</span>
+                          {/* Receipt Line Row: columns stay readable on mobile; actions never compress description */}
+                          <div className="space-y-1">
+                            <div className="grid grid-cols-[minmax(0,1fr)_3.5rem_4rem] items-center gap-2">
+                              <div className="flex items-center gap-1.5 min-w-0">
+                                <span className="text-[10px] text-slate-400 font-mono shrink-0">#{idx + 1}</span>
+                                {isEditing ? (
+                                  <input
+                                    type="text"
+                                    value={line.description}
+                                    onChange={(e) => handleLineChange(line.id, 'description', e.target.value)}
+                                    className="min-w-0 w-full bg-white border border-slate-300 rounded px-2 py-0.5 text-xs font-sans font-medium"
+                                    autoFocus
+                                  />
+                                ) : (
+                                  <span
+                                    onClick={() => setEditingRowId(line.id)}
+                                    className={`min-w-0 block truncate font-medium cursor-pointer hover:underline ${getFieldHighlightClass(visualState)}`}
+                                    title={line.description || 'Clicca per modificare'}
+                                  >
+                                    {line.description || line.originalText}
+                                  </span>
+                                )}
+                              </div>
+
+                              {/* IVA column */}
+                              <span className="text-center text-[11px] text-slate-600 font-mono">
+                                10,0%
+                              </span>
+
+                              {/* Price / Total column */}
                               {isEditing ? (
                                 <input
-                                  type="text"
-                                  value={line.description}
-                                  onChange={(e) => handleLineChange(line.id, 'description', e.target.value)}
-                                  className="w-full bg-white border border-slate-300 rounded px-2 py-0.5 text-xs font-sans font-medium"
-                                  autoFocus
+                                  type="number"
+                                  step="0.01"
+                                  value={line.lineTotal}
+                                  onChange={(e) => handleLineChange(line.id, 'lineTotal', parseFloat(e.target.value) || 0)}
+                                  className="w-full bg-white border border-slate-300 rounded px-1 text-right text-xs font-bold font-mono"
+                                  title="Totale riga"
                                 />
                               ) : (
-                                <span
-                                  onClick={() => setEditingRowId(line.id)}
-                                  className={`truncate font-medium cursor-pointer hover:underline ${getFieldHighlightClass(visualState)}`}
-                                  title="Clicca per modificare"
-                                >
-                                  {line.description}
+                                <span className="font-bold text-slate-900 text-right font-mono text-xs">
+                                  {line.lineTotal.toFixed(2)}
                                 </span>
                               )}
                             </div>
 
-                            {/* IVA column */}
-                            <span className="w-14 text-center text-[11px] text-slate-600 font-mono shrink-0">
-                              10,0%
-                            </span>
-
-                            {/* Price / Total column aligned right */}
-                            <div className="flex items-center gap-1.5 shrink-0 font-mono text-xs justify-end">
+                            {/* Actions on their own row so they cannot squeeze receipt columns */}
+                            <div className="flex items-center justify-end gap-1.5 min-h-7">
                               {isEditing ? (
-                                <>
-                                  <input
-                                    type="number"
-                                    step="0.01"
-                                    value={line.lineTotal}
-                                    onChange={(e) => handleLineChange(line.id, 'lineTotal', parseFloat(e.target.value) || 0)}
-                                    className="w-16 bg-white border border-slate-300 rounded px-1 text-right text-xs font-bold"
-                                    title="Totale riga"
-                                  />
-                                  <button
-                                    type="button"
-                                    onClick={() => setEditingRowId(null)}
-                                    className="p-1 bg-indigo-600 text-white rounded hover:bg-indigo-700"
-                                    title="Salva riga"
-                                  >
-                                    <Check className="w-3.5 h-3.5" />
-                                  </button>
-                                </>
+                                <button
+                                  type="button"
+                                  onClick={() => setEditingRowId(null)}
+                                  className="p-1 bg-indigo-600 text-white rounded hover:bg-indigo-700"
+                                  title="Salva riga"
+                                >
+                                  <Check className="w-3.5 h-3.5" />
+                                </button>
                               ) : (
                                 <>
-                                  <span className="font-bold text-slate-900 text-right w-16">
-                                    {line.lineTotal.toFixed(2)}
-                                  </span>
                                   {line.reviewStatus === 'confirmed' || line.manuallyValidated ? (
-                                    <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-emerald-100 dark:bg-emerald-950/60 text-emerald-800 dark:text-emerald-200 rounded-full text-[11px] font-sans font-semibold shrink-0">
+                                    <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-emerald-100 dark:bg-emerald-950/60 text-emerald-800 dark:text-emerald-200 rounded-full text-[11px] font-sans font-semibold">
                                       <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
                                       <span>Confermata</span>
                                     </span>
@@ -1587,7 +1592,7 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
                                     <button
                                       type="button"
                                       onClick={() => handleConfirmLine(line.id)}
-                                      className="inline-flex items-center gap-1 px-2 py-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-300 rounded-lg text-xs font-sans font-semibold shrink-0 shadow-xs transition-all cursor-pointer"
+                                      className="inline-flex items-center gap-1 px-2 py-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-300 rounded-lg text-xs font-sans font-semibold shadow-xs transition-all cursor-pointer"
                                       title="Conferma riga senza modificarla"
                                     >
                                       <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />

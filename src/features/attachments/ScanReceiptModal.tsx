@@ -813,9 +813,9 @@ export const ScanReceiptModal: React.FC<ScanReceiptModalProps> = ({
           accept="image/*"
           capture="environment"
           onChange={(e) => {
-            const selected = e.target.files;
+            const selected = Array.from(e.target.files ?? []);
             e.currentTarget.value = '';
-            if (selected) {
+            if (selected.length) {
               void handleFilesIngest(selected, false, {
                 acquisitionSource: 'camera_direct',
                 inputAccept: 'image/*',
@@ -832,9 +832,9 @@ export const ScanReceiptModal: React.FC<ScanReceiptModalProps> = ({
           accept="image/jpeg,image/jpg,image/png,image/webp,image/bmp"
           multiple
           onChange={(e) => {
-            const selected = e.target.files;
+            const selected = Array.from(e.target.files ?? []);
             e.currentTarget.value = '';
-            if (selected) {
+            if (selected.length) {
               void handleFilesIngest(selected, false, {
                 acquisitionSource: 'gallery_picker',
                 inputAccept: 'image/jpeg,image/jpg,image/png,image/webp,image/bmp',
@@ -851,9 +851,9 @@ export const ScanReceiptModal: React.FC<ScanReceiptModalProps> = ({
           accept="application/pdf,.pdf"
           multiple
           onChange={(e) => {
-            const selected = e.target.files;
+            const selected = Array.from(e.target.files ?? []);
             e.currentTarget.value = '';
-            if (selected) {
+            if (selected.length) {
               void handleFilesIngest(selected, true, {
                 acquisitionSource: 'file_picker',
                 inputAccept: 'application/pdf,.pdf',
@@ -870,9 +870,9 @@ export const ScanReceiptModal: React.FC<ScanReceiptModalProps> = ({
           accept="image/jpeg,image/jpg,image/png,image/webp,image/bmp,application/pdf,.pdf"
           multiple
           onChange={(e) => {
-            const selected = e.target.files;
+            const selected = Array.from(e.target.files ?? []);
             e.currentTarget.value = '';
-            if (selected) {
+            if (selected.length) {
               void handleFilesIngest(selected, false, {
                 acquisitionSource: 'gallery_picker',
                 inputAccept: 'image/jpeg,image/jpg,image/png,image/webp,image/bmp,application/pdf,.pdf',

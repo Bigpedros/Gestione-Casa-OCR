@@ -419,6 +419,7 @@ class OCRService {
               decisions: engineResult.decisions,
               receiptItemBlocks: engineResult.receiptItemBlocks,
               digitalReconstruction: engineResult.digitalReconstruction,
+              canonicalRaster: engineResult.canonicalRaster,
             };
             winnerOcrWords = engineResult.words;
 
@@ -660,6 +661,7 @@ class OCRService {
           decisions: pagePreprocessingTelemetry?.decisions,
           receiptItemBlocks: pagePreprocessingTelemetry?.receiptItemBlocks,
           digitalReconstruction: pagePreprocessingTelemetry?.digitalReconstruction,
+          canonicalRaster: pagePreprocessingTelemetry?.canonicalRaster,
         });
 
         // Aggiorna lo stato del segmento
@@ -772,6 +774,12 @@ class OCRService {
           receiptItemBlocks: pageResults.flatMap((page) => page.receiptItemBlocks || page.preprocessingTelemetry?.receiptItemBlocks || []),
           digitalReconstructions: pageResults
             .map((page) => page.digitalReconstruction || page.preprocessingTelemetry?.digitalReconstruction)
+            .filter(Boolean),
+          canonicalRasters: pageResults
+            .map((page, index) => {
+              const raster = page.canonicalRaster || page.preprocessingTelemetry?.canonicalRaster;
+              return raster ? { ...raster, pageNumber: index + 1 } : null;
+            })
             .filter(Boolean),
         } as any,
       });

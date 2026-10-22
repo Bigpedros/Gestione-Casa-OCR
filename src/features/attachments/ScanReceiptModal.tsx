@@ -325,15 +325,19 @@ export const ScanReceiptModal: React.FC<ScanReceiptModalProps> = ({
         return;
       }
 
-      const fileToAcquire = conflictingFile;
+      const pendingBatch = pendingConflictBatch;
       const sessId = conflictingSession.id;
 
       await documentSessionRepository.delete(sessId);
       setConflictingSession(null);
       setPendingConflictBatch(null);
 
-      if (fileToAcquire) {
-        await handleFilesIngest([fileToAcquire]);
+      if (pendingBatch?.files.length) {
+        await handleFilesIngest(
+          pendingBatch.files,
+          pendingBatch.isPdf,
+          pendingBatch.sourceInfo
+        );
       } else {
         setStep('source');
       }

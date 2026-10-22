@@ -53,6 +53,27 @@ describe('donazione MOTORE - ricostruzione geometrica',()=>{
     expect(reconstruction.elements.find(e=>e.id==='t4')?.box).toEqual({x:830,y:200,width:60,height:24});
   });
 
+  it('normalizza box patologiche senza creare caratteri giganti',()=>{
+    const p=page();
+    p.tokens.push(token('bad','AB','l3',200,420,260));
+    p.tokens[p.tokens.length-1]!.box.height=120;
+    const reconstruction=buildDigitalPageReconstruction(p);
+    const bad=reconstruction.elements.find(element=>element.id==='bad');
+    const normalHeight=reconstruction.lines[0]!.box.height;
+    expect(bad?.box.height).toBeLessThanOrEqual(normalHeight*1.8);
+    expect(bad?.box.width).toBeLessThan(260);
+    expect(Math.max(...reconstruction.lines.map(line=>line.fontSize))).toBeLessThan(normalHeight);
+  });
+
+  it('ricompone righe per prossimità geometrica anche con lineId OCR errati',()=>{
+    const p=page();
+    p.tokens[0]!.lineId='wrong-a';
+    p.tokens[1]!.lineId='wrong-b';
+    const reconstruction=buildDigitalPageReconstruction(p);
+    const firstText=getDigitalPageText(reconstruction).split('\n')[0]!;
+    expect(firstText).toContain('PANE CASERECCIO');
+  });
+
   it('ricostruisce il testo in ordine visuale senza passare dal parser contabile',()=>{
     const reconstruction=buildDigitalPageReconstruction(page());
     const text=getDigitalPageText(reconstruction);

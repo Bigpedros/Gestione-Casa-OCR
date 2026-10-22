@@ -235,6 +235,7 @@ class OCRService {
       matchingDiagnostics?: any[];
       decisions?: any[];
       receiptItemBlocks?: any[];
+      digitalReconstruction?: any;
     }> = [];
 
     try {
@@ -417,6 +418,7 @@ class OCRService {
               matchingDiagnostics: engineResult.matchingDiagnostics,
               decisions: engineResult.decisions,
               receiptItemBlocks: engineResult.receiptItemBlocks,
+              digitalReconstruction: engineResult.digitalReconstruction,
             };
             winnerOcrWords = engineResult.words;
 
@@ -657,6 +659,7 @@ class OCRService {
           matchingDiagnostics: pagePreprocessingTelemetry?.matchingDiagnostics,
           decisions: pagePreprocessingTelemetry?.decisions,
           receiptItemBlocks: pagePreprocessingTelemetry?.receiptItemBlocks,
+          digitalReconstruction: pagePreprocessingTelemetry?.digitalReconstruction,
         });
 
         // Aggiorna lo stato del segmento
@@ -767,6 +770,9 @@ class OCRService {
           matchingDiagnostics: pageResults[0]?.matchingDiagnostics || pageResults[0]?.preprocessingTelemetry?.matchingDiagnostics || [],
           decisions: pageResults[0]?.decisions || pageResults[0]?.preprocessingTelemetry?.decisions || [],
           receiptItemBlocks: pageResults.flatMap((page) => page.receiptItemBlocks || page.preprocessingTelemetry?.receiptItemBlocks || []),
+          digitalReconstructions: pageResults
+            .map((page) => page.digitalReconstruction || page.preprocessingTelemetry?.digitalReconstruction)
+            .filter(Boolean),
         } as any,
       });
 

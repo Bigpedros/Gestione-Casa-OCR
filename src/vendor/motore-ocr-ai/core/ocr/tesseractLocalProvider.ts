@@ -131,11 +131,12 @@ export class TesseractLocalProvider implements OcrProvider {
       }
 
       const canonicalVisualCanvas=geometry.canvas;
+      const canonicalRasterDataUrl=encodeCanonicalRaster(canonicalVisualCanvas);
       const canonicalRaster={
-        dataUrl:encodeCanonicalRaster(canonicalVisualCanvas),
+        dataUrl:canonicalRasterDataUrl,
         width:canonicalVisualCanvas.width,
         height:canonicalVisualCanvas.height,
-        mimeType:'image/webp',
+        mimeType:canonicalRasterDataUrl.startsWith('data:image/webp')?'image/webp':'image/png',
         source:(sourceFallback||transformFallback?'source-fallback':'geometry-normalized') as const,
         ocrCleanupApplied:cleanupAccepted
       };

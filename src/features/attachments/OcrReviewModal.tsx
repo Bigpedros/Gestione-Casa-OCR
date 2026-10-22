@@ -1497,7 +1497,7 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
               <div className="p-5 bg-[#fdfcf7] text-slate-900 rounded-xl border border-slate-300 font-mono text-xs shadow-md space-y-4 relative">
                 
                 {activeDigitalReconstruction && activeDigitalReconstruction.width > 0 && activeDigitalReconstruction.height > 0 && (
-                  <div className="space-y-2 pb-4 border-b border-dashed border-slate-300" data-testid="digital-reconstruction-3-1-1">
+                  <div className="space-y-2 pb-4 border-b border-dashed border-slate-300" data-testid="digital-reconstruction-3-1">
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <div>
                         <div className="text-[10px] uppercase font-bold tracking-wide text-slate-500">

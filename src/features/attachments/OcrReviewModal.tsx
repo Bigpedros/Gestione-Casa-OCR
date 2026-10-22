@@ -1252,6 +1252,16 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
     ? attachmentsMap[activeSegment.id]
     : Object.values(attachmentsMap)[0];
   const activeImageUrl = activeAttachment?.storageKey || '';
+  const digitalReconstructions = Array.isArray((ocrProcess?.metadata as Record<string, any> | undefined)?.digitalReconstructions)
+    ? ((ocrProcess?.metadata as Record<string, any>).digitalReconstructions as any[])
+    : [];
+  const activeDigitalReconstruction =
+    digitalReconstructions.find((page: any) => page?.pageNumber === activeSegmentIndex + 1) ||
+    digitalReconstructions[activeSegmentIndex] ||
+    null;
+  const reconstructionElementMap = new Map<string, any>(
+    (activeDigitalReconstruction?.elements || []).map((element: any) => [element.id, element])
+  );
 
   return (
     <Modal
@@ -1461,6 +1471,65 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
               {/* Receipt Paper Styling Container (Ivory/White paper sheet) */}
               <div className="p-5 bg-[#fdfcf7] text-slate-900 rounded-xl border border-slate-300 font-mono text-xs shadow-md space-y-4 relative">
                 
+                {activeDigitalReconstruction && activeDigitalReconstruction.width > 0 && activeDigitalReconstruction.height > 0 && (
+                  <div className="space-y-2 pb-4 border-b border-dashed border-slate-300">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] uppercase font-bold tracking-wide text-slate-500">
+                        Ricostruzione geometrica MOTORE
+                      </span>
+                      <span className="text-[9px] text-slate-400">
+                        layout OCR originale
+                      </span>
+                    </div>
+                    <div className="w-full overflow-hidden bg-white border border-slate-200 rounded-lg">
+                      <svg
+                        viewBox={`0 0 ${activeDigitalReconstruction.width} ${activeDigitalReconstruction.height}`}
+                        className="block w-full h-auto bg-white"
+                        preserveAspectRatio="xMidYMin meet"
+                        aria-label="Ricostruzione geometrica dello scontrino"
+                      >
+                        {(activeDigitalReconstruction.lines || []).flatMap((line: any) =>
+                          (line.segments || []).map((segment: any) => {
+                            const segmentText = (segment.elementIds || [])
+                              .map((id: string) => reconstructionElementMap.get(id)?.text || '')
+                              .filter(Boolean)
+                              .join(' ');
+                            if (!segmentText) return null;
+                            const anchor =
+                              segment.alignment === 'right'
+                                ? 'end'
+                                : segment.alignment === 'center'
+                                  ? 'middle'
+                                  : 'start';
+                            const x =
+                              segment.alignment === 'right'
+                                ? segment.box.x + segment.box.width
+                                : segment.alignment === 'center'
+                                  ? segment.box.x + segment.box.width / 2
+                                  : segment.box.x;
+                            return (
+                              <text
+                                key={segment.id}
+                                x={x}
+                                y={line.baselineY}
+                                fontSize={Math.max(6, line.fontSize || 10)}
+                                textAnchor={anchor}
+                                fontFamily="monospace"
+                                fill="#0f172a"
+                              >
+                                {segmentText}
+                              </text>
+                            );
+                          })
+                        )}
+                      </svg>
+                    </div>
+                    <p className="text-[9px] leading-tight text-slate-400 font-sans">
+                      Questa vista conserva coordinate, spaziature e allineamenti OCR. I campi modificabili restano separati qui sotto.
+                    </p>
+                  </div>
+                )}
+
                 {/* 1. INTESTAZIONE ESERCENTE */}
                 <div className="text-center space-y-1 pb-3 border-b border-dashed border-slate-300">
                   <div className="flex items-center justify-center">

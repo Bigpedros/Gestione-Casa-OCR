@@ -12,7 +12,7 @@ export interface ReconstructionLine{
   id:string; box:Box; baselineY:number; fontSize:number; segments:ReconstructionLineSegment[];
 }
 export interface DigitalPageReconstruction{
-  schemaVersion:'1.4'; pageNumber:number; width:number; height:number;
+  schemaVersion:'1.5'; pageNumber:number; width:number; height:number;
   elements:ReconstructionElement[]; lines:ReconstructionLine[];
 }
 
@@ -44,7 +44,7 @@ export function buildDigitalPageReconstruction(page:OcrPage):DigitalPageReconstr
   ).sort((a,b)=>a.box.y-b.box.y||a.box.x-b.box.x);
 
   return{
-    schemaVersion:'1.4',
+    schemaVersion:'1.5',
     pageNumber:page.pageNumber,
     width:page.width,
     height:page.height,
@@ -278,13 +278,28 @@ function deriveTokenBox(token:OcrToken,pageWidth:number,pageHeight:number):Box{
 
   if(characters.length<2)return{...token.box};
 
-  const heights=characters.map(character=>character.box.height);
-  const charHeight=robustMedian(heights);
-  const reliable=characters.filter(character=>{
+  const bodyCharacters=characters.filter(character=>/[\p{L}\p{N}]/u.test(character.text));
+  const heightSource=bodyCharacters.length>=2?bodyCharacters:characters;
+  const charHeight=selectDominantCharacterHeight(heightSource.map(character=>character.box.height));
+  if(!charHeight)return{...token.box};
+
+  const heightReliable=characters.filter(character=>{
     const h=character.box.height;
-    return h>=charHeight*.55&&h<=charHeight*1.75;
+    const punctuation=!/[\p{L}\p{N}]/u.test(character.text);
+    if(punctuation)return h>=Math.max(2,charHeight*.18)&&h<=charHeight*1.45;
+    return h>=charHeight*.62&&h<=charHeight*1.42;
   });
-  if(reliable.length<2)return{...token.box};
+  if(heightReliable.length<2)return{...token.box};
+
+  const baselineModel=estimateCharacterBaseline(heightReliable,charHeight);
+  const baselineReliable=heightReliable.filter(character=>{
+    const predicted=baselineModel.intercept+baselineModel.slope*centerX(character.box);
+    const residual=Math.abs((character.box.y+character.box.height)-predicted);
+    const punctuation=!/[\p{L}\p{N}]/u.test(character.text);
+    const tolerance=punctuation?charHeight*.72:charHeight*.42;
+    return residual<=Math.max(4,tolerance);
+  });
+  const reliable=baselineReliable.length>=2?baselineReliable:heightReliable;
 
   const x=Math.min(...reliable.map(character=>character.box.x));
   const y=Math.min(...reliable.map(character=>character.box.y));
@@ -295,9 +310,9 @@ function deriveTokenBox(token:OcrToken,pageWidth:number,pageHeight:number):Box{
   const wordHeight=token.box.height;
   const wordWidth=token.box.width;
   const pathological=
-    wordHeight>derived.height*1.45||
-    wordWidth>derived.width*1.6||
-    Math.abs(centerY(token.box)-centerY(derived))>Math.max(6,charHeight*.55);
+    wordHeight>derived.height*1.35||
+    wordWidth>derived.width*1.55||
+    Math.abs(centerY(token.box)-centerY(derived))>Math.max(5,charHeight*.5);
 
   if(!pathological)return{...token.box};
   return{
@@ -306,6 +321,51 @@ function deriveTokenBox(token:OcrToken,pageWidth:number,pageHeight:number):Box{
     width:Math.min(pageWidth,derived.width),
     height:Math.min(pageHeight,derived.height)
   };
+}
+
+function selectDominantCharacterHeight(heights:number[]):number{
+  const sorted=heights.filter(value=>Number.isFinite(value)&&value>1).sort((a,b)=>a-b);
+  if(!sorted.length)return 0;
+  if(sorted.length<4)return median(sorted);
+
+  let bestGapIndex=-1;
+  let bestRatio=1;
+  for(let index=1;index<sorted.length;index++){
+    const previous=sorted[index-1]!;
+    const current=sorted[index]!;
+    const ratio=current/Math.max(1,previous);
+    if(ratio>bestRatio){bestRatio=ratio;bestGapIndex=index;}
+  }
+
+  if(bestGapIndex>=2&&bestRatio>=1.45){
+    const lower=sorted.slice(0,bestGapIndex);
+    const upper=sorted.slice(bestGapIndex);
+    if(lower.length>=2&&upper.length>=2)return median(lower);
+  }
+  return robustMedian(sorted);
+}
+
+function estimateCharacterBaseline(
+  characters:Array<{text:string;confidence:number|null;box:Box}>,
+  charHeight:number
+):{slope:number;intercept:number}{
+  const body=characters.filter(character=>/[\p{L}\p{N}]/u.test(character.text));
+  const source=body.length>=2?body:characters;
+  const slopes:number[]=[];
+  for(let i=0;i<source.length;i++){
+    for(let j=i+1;j<source.length;j++){
+      const a=source[i]!,b=source[j]!;
+      const dx=centerX(b.box)-centerX(a.box);
+      if(Math.abs(dx)<Math.max(2,charHeight*.35))continue;
+      const slope=((b.box.y+b.box.height)-(a.box.y+a.box.height))/dx;
+      if(Number.isFinite(slope)&&Math.abs(slope)<=.35)slopes.push(slope);
+    }
+  }
+  const slope=slopes.length?median(slopes):0;
+  const intercept=median(source.map(character=>
+    character.box.y+character.box.height-slope*centerX(character.box)
+  ));
+  return{slope,intercept};
 }
 
 function isRenderableToken(text:string):boolean{

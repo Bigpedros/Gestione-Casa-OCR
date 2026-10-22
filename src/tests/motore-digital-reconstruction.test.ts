@@ -82,6 +82,25 @@ describe('donazione MOTORE - ricostruzione geometrica',()=>{
     expect(reconstruction.lines).toHaveLength(2);
   });
 
+  it('riunisce un prezzo con lineId diverso seguendo la baseline locale',()=>{
+    const p=page();
+    p.tokens=[
+      token('a','ARTICOLO','ocr-l1',110,425,150),
+      token('b','22,00%','ocr-l1',560,432,95),
+      token('c','1,80','ocr-l2',810,469,60),
+      token('d','RIGA2','ocr-l3',120,486,100),
+      token('e','2,60','ocr-l3',810,524,60),
+    ];
+    const reconstruction=buildDigitalPageReconstruction(p);
+    const rows=getDigitalPageText(reconstruction).split('\n');
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toContain('ARTICOLO');
+    expect(rows[0]).toContain('22,00%');
+    expect(rows[0]).toContain('1,80');
+    expect(rows[1]).toContain('RIGA2');
+    expect(rows[1]).toContain('2,60');
+  });
+
   it('ricompone righe per prossimità geometrica anche con lineId OCR errati',()=>{
     const p=page();
     p.tokens[0]!.lineId='wrong-a';

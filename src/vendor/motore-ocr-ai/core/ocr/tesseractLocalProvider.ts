@@ -724,7 +724,9 @@ function encodeCanonicalRaster(canvas:HTMLCanvasElement):string{
   try{
     const webp=canvas.toDataURL('image/webp',.94);
     if(webp.startsWith('data:image/webp'))return webp;
-  }catch{}
+  }catch{
+    // WebP può non essere supportato da tutti i browser/canvas: fallback PNG intenzionale.
+  }
   return canvas.toDataURL('image/png');
 }
 

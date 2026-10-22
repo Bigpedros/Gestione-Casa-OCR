@@ -86,6 +86,32 @@ describe('donazione MOTORE - ricostruzione geometrica',()=>{
     expect(rebuilt.box.y).toBeGreaterThanOrEqual(425);
   });
 
+  it('ripara token corti quando anche tutte le character-box sono patologiche',()=>{
+    const p=page();
+    const ao=token('short-ao','AO','l3',124,642,296);
+    ao.box.height=87;
+    ao.characters=[
+      {text:'A',confidence:98,box:{x:124,y:642,width:93,height:87}},
+      {text:'O',confidence:89,box:{x:218,y:649,width:202,height:55}},
+    ];
+    const wi=token('short-wi','Wi','l4',133,824,316);
+    wi.box.height=86;
+    wi.characters=[
+      {text:'W',confidence:96,box:{x:133,y:824,width:128,height:86}},
+      {text:'i',confidence:92,box:{x:261,y:829,width:188,height:62}},
+    ];
+    p.tokens.push(ao,wi);
+    const reconstruction=buildDigitalPageReconstruction(p);
+    const rebuiltAo=reconstruction.elements.find(element=>element.id==='short-ao')!;
+    const rebuiltWi=reconstruction.elements.find(element=>element.id==='short-wi')!;
+    expect(rebuiltAo.box.height).toBeLessThan(40);
+    expect(rebuiltAo.box.width).toBeLessThan(80);
+    expect(rebuiltAo.box.x).toBe(124);
+    expect(rebuiltWi.box.height).toBeLessThan(40);
+    expect(rebuiltWi.box.width).toBeLessThan(80);
+    expect(rebuiltWi.box.x).toBe(133);
+  });
+
   it('scarta outlier verticali e caratteri sovradimensionati nella word-box',()=>{
     const p=page();
     const bad=token('char-outliers','SUOFPERL','l3',100,480,180);

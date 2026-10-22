@@ -42,6 +42,7 @@ import {
 import { productClassificationService } from '../../services/productClassification/ProductClassificationService';
 import { receiptParserService } from '../../services/ocrParser/receiptParserService';
 import { TextNormalizationModule } from '../../services/ocrParser/modules/TextNormalizationModule';
+import { bindDigitalReconstructionSemantics } from '../../vendor/motore-ocr-ai/core/reconstruction/digitalReconstruction';
 import { ocrService } from '../../services/ocrService';
 import type {
   DocumentSession,
@@ -1264,62 +1265,20 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
   );
 
 
-  const normalizeReconstructionText = (value: string): string =>
-    (value || '')
-      .toUpperCase()
-      .normalize('NFD')
-      .replace(/[\u0300-\u036f]/g, '')
-      .replace(/[^A-Z0-9]+/g, ' ')
-      .trim();
-
-  const reconstructionLineText = (line: any): string =>
-    (line?.segments || [])
-      .slice()
-      .sort((a: any, b: any) => a.box.x - b.box.x)
-      .flatMap((segment: any) => segment.elementIds || [])
-      .map((id: string) => reconstructionElementMap.get(id)?.text || '')
-      .filter(Boolean)
-      .join(' ');
-
-  const scoreReconstructionBinding = (geometryText: string, reviewLine: EditableReviewLine): number => {
-    const geometry = normalizeReconstructionText(geometryText);
-    const semantic = normalizeReconstructionText(reviewLine.originalText || reviewLine.description || '');
-    const description = normalizeReconstructionText(reviewLine.description || '');
-    if (!geometry || (!semantic && !description)) return 0;
-
-    const geometryTokens = new Set(geometry.split(/\s+/).filter((token) => token.length > 1));
-    const semanticTokens = new Set(
-      `${semantic} ${description}`.split(/\s+/).filter((token) => token.length > 1)
-    );
-    const overlap = [...geometryTokens].filter((token) => semanticTokens.has(token)).length;
-    const union = new Set([...geometryTokens, ...semanticTokens]).size || 1;
-    let score = overlap / union;
-
-    if (semantic && (geometry.includes(semantic) || semantic.includes(geometry))) score += 0.45;
-    const price = reviewLine.lineTotal > 0 ? reviewLine.lineTotal.toFixed(2).replace('.', ',') : '';
-    if (price && geometryText.includes(price)) score += 0.25;
-    return score;
-  };
-
-  const reconstructionBindings = new Map<string, string>();
-  const usedReviewLineIds = new Set<string>();
-  for (const geometryLine of activeDigitalReconstruction?.lines || []) {
-    const geometryText = reconstructionLineText(geometryLine);
-    let bestLine: EditableReviewLine | null = null;
-    let bestScore = 0;
-    for (const reviewLine of editableLines) {
-      if (usedReviewLineIds.has(reviewLine.id)) continue;
-      const score = scoreReconstructionBinding(geometryText, reviewLine);
-      if (score > bestScore) {
-        bestScore = score;
-        bestLine = reviewLine;
-      }
-    }
-    if (bestLine && bestScore >= 0.28) {
-      reconstructionBindings.set(geometryLine.id, bestLine.id);
-      usedReviewLineIds.add(bestLine.id);
-    }
-  }
+  const semanticBindings = activeDigitalReconstruction
+    ? bindDigitalReconstructionSemantics(
+        activeDigitalReconstruction,
+        editableLines.map((line) => ({
+          id: line.id,
+          text: `${line.originalText || ''} ${line.description || ''}`,
+          amount: line.lineTotal,
+        }))
+      )
+    : [];
+  const reconstructionBindings = new Map<string, string>(
+    semanticBindings.map((binding) => [binding.lineId, binding.targetId])
+  );
+  const usedReviewLineIds = new Set<string>(semanticBindings.map((binding) => binding.targetId));
 
   const selectedReviewLine = editingRowId
     ? editableLines.find((line) => line.id === editingRowId) || null

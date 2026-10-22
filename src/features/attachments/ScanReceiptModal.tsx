@@ -73,6 +73,7 @@ export const ScanReceiptModal: React.FC<ScanReceiptModalProps> = ({
   const pdfInputRef = useRef<HTMLInputElement>(null);
   const appendInputRef = useRef<HTMLInputElement>(null);
   const replaceInputRef = useRef<HTMLInputElement>(null);
+  const ingestLockRef = useRef<boolean>(false);
 
   // Wizard Navigation
   const [step, setStep] = useState<WizardStep>('source');
@@ -129,6 +130,7 @@ export const ScanReceiptModal: React.FC<ScanReceiptModalProps> = ({
     setConfirmDeleteCurrent(false);
     setConflictingSession(null);
     setPendingConflictBatch(null);
+    ingestLockRef.current = false;
   }, []);
 
   // Fetch draft thumbnails helper
@@ -238,6 +240,7 @@ export const ScanReceiptModal: React.FC<ScanReceiptModalProps> = ({
     } catch (err: any) {
       setErrorMsg(err?.message || 'Impossibile riprendere la bozza selezionata');
     } finally {
+      ingestLockRef.current = false;
       setIsLoading(false);
     }
   };
@@ -361,13 +364,48 @@ export const ScanReceiptModal: React.FC<ScanReceiptModalProps> = ({
     sourceInfo: AcquisitionSourceInfo = { acquisitionSource: 'gallery_picker', isMultiple: true }
   ) => {
     if (!files || files.length === 0) return;
+    if (ingestLockRef.current) {
+      setInfoMsg('Acquisizione già in corso. Attendi il completamento dell’operazione corrente.');
+      return;
+    }
+
     const inputFiles = Array.from(files);
+    ingestLockRef.current = true;
     setIsLoading(true);
     setErrorMsg(null);
     setInfoMsg(null);
 
     try {
       let session = currentSession;
+
+      // PRE-FLIGHT: calcola gli hash e rileva conflitti PRIMA di creare una nuova sessione.
+      const preparedFiles: Array<{ file: File; fileHash: string }> = [];
+      for (const file of inputFiles) {
+        const val = validateReceiptFile(file);
+        if (!val.valid) {
+          setErrorMsg(val.error || `File "${file.name}" non valido`);
+          continue;
+        }
+        const fileHash = await computeFileHash(file);
+        preparedFiles.push({ file, fileHash });
+      }
+
+      if (preparedFiles.length === 0) return;
+
+      if (!session) {
+        for (const prepared of preparedFiles) {
+          const activeExistingSession = await documentSessionRepository.findActiveSessionByFileHash(prepared.fileHash);
+          if (activeExistingSession) {
+            setConflictingSession(activeExistingSession);
+            setPendingConflictBatch({
+              files: inputFiles,
+              isPdf,
+              sourceInfo,
+            });
+            return;
+          }
+        }
+      }
 
       // Determine initial modes
       const firstFile = inputFiles[0];
@@ -413,37 +451,19 @@ export const ScanReceiptModal: React.FC<ScanReceiptModalProps> = ({
       let addedCount = 0;
       let duplicateCount = 0;
 
-      // 2. Process each file
-      for (let i = 0; i < inputFiles.length; i++) {
-        const file = inputFiles[i];
-        const val = validateReceiptFile(file);
-        if (!val.valid) {
-          setErrorMsg(val.error || `File "${file.name}" non valido`);
-          continue;
-        }
+      // 2. Process each prepared file
+      for (let i = 0; i < preparedFiles.length; i++) {
+        const { file, fileHash } = preparedFiles[i];
 
-        const fileHash = await computeFileHash(file);
-
-        // Check if another active session already exists for this document
+        // A current session may already contain some pages when replaying a preserved batch.
         const activeExistingSession = await documentSessionRepository.findActiveSessionByFileHash(fileHash, session.id);
         if (activeExistingSession) {
-          const segs = await documentPageSegmentRepository.getBySessionId(session.id);
-          const temporarySessionIsEmpty = segs.length === 0 && !session.ocrProcessId;
-          if (temporarySessionIsEmpty) {
-            await documentSessionRepository.delete(session.id);
-            setCurrentSession(null);
-          } else {
-            // Conserva la sessione parzialmente acquisita: al riavvio gli hash già presenti
-            // vengono ignorati, quindi il batch può essere ripreso senza perdere o duplicare pagine.
-            setCurrentSession(session);
-          }
           setConflictingSession(activeExistingSession);
           setPendingConflictBatch({
             files: inputFiles,
             isPdf,
             sourceInfo,
           });
-          setIsLoading(false);
           return;
         }
 
@@ -792,15 +812,18 @@ export const ScanReceiptModal: React.FC<ScanReceiptModalProps> = ({
           type="file"
           accept="image/*"
           capture="environment"
-          onChange={(e) =>
-            e.target.files &&
-            handleFilesIngest(e.target.files, false, {
-              acquisitionSource: 'camera_direct',
-              inputAccept: 'image/*',
-              hasCaptureAttribute: true,
-              isMultiple: false,
-            })
-          }
+          onChange={(e) => {
+            const selected = e.target.files;
+            e.currentTarget.value = '';
+            if (selected) {
+              void handleFilesIngest(selected, false, {
+                acquisitionSource: 'camera_direct',
+                inputAccept: 'image/*',
+                hasCaptureAttribute: true,
+                isMultiple: false,
+              });
+            }
+          }}
           className="hidden"
         />
         <input
@@ -808,15 +831,18 @@ export const ScanReceiptModal: React.FC<ScanReceiptModalProps> = ({
           type="file"
           accept="image/jpeg,image/jpg,image/png,image/webp,image/bmp"
           multiple
-          onChange={(e) =>
-            e.target.files &&
-            handleFilesIngest(e.target.files, false, {
-              acquisitionSource: 'gallery_picker',
-              inputAccept: 'image/jpeg,image/jpg,image/png,image/webp,image/bmp',
-              hasCaptureAttribute: false,
-              isMultiple: true,
-            })
-          }
+          onChange={(e) => {
+            const selected = e.target.files;
+            e.currentTarget.value = '';
+            if (selected) {
+              void handleFilesIngest(selected, false, {
+                acquisitionSource: 'gallery_picker',
+                inputAccept: 'image/jpeg,image/jpg,image/png,image/webp,image/bmp',
+                hasCaptureAttribute: false,
+                isMultiple: true,
+              });
+            }
+          }}
           className="hidden"
         />
         <input
@@ -824,15 +850,18 @@ export const ScanReceiptModal: React.FC<ScanReceiptModalProps> = ({
           type="file"
           accept="application/pdf,.pdf"
           multiple
-          onChange={(e) =>
-            e.target.files &&
-            handleFilesIngest(e.target.files, true, {
-              acquisitionSource: 'file_picker',
-              inputAccept: 'application/pdf,.pdf',
-              hasCaptureAttribute: false,
-              isMultiple: true,
-            })
-          }
+          onChange={(e) => {
+            const selected = e.target.files;
+            e.currentTarget.value = '';
+            if (selected) {
+              void handleFilesIngest(selected, true, {
+                acquisitionSource: 'file_picker',
+                inputAccept: 'application/pdf,.pdf',
+                hasCaptureAttribute: false,
+                isMultiple: true,
+              });
+            }
+          }}
           className="hidden"
         />
         <input
@@ -840,15 +869,18 @@ export const ScanReceiptModal: React.FC<ScanReceiptModalProps> = ({
           type="file"
           accept="image/jpeg,image/jpg,image/png,image/webp,image/bmp,application/pdf,.pdf"
           multiple
-          onChange={(e) =>
-            e.target.files &&
-            handleFilesIngest(e.target.files, false, {
-              acquisitionSource: 'gallery_picker',
-              inputAccept: 'image/jpeg,image/jpg,image/png,image/webp,image/bmp,application/pdf,.pdf',
-              hasCaptureAttribute: false,
-              isMultiple: true,
-            })
-          }
+          onChange={(e) => {
+            const selected = e.target.files;
+            e.currentTarget.value = '';
+            if (selected) {
+              void handleFilesIngest(selected, false, {
+                acquisitionSource: 'gallery_picker',
+                inputAccept: 'image/jpeg,image/jpg,image/png,image/webp,image/bmp,application/pdf,.pdf',
+                hasCaptureAttribute: false,
+                isMultiple: true,
+              });
+            }
+          }}
           className="hidden"
         />
         <input
@@ -1055,7 +1087,7 @@ export const ScanReceiptModal: React.FC<ScanReceiptModalProps> = ({
           </div>
         )}
 
-        {step === 'source' && (
+        {!conflictingSession && step === 'source' && (
           /* SCREEN: Choose Source */
           <div className="py-4 space-y-6">
             <div className="text-center max-w-md mx-auto space-y-2">
@@ -1074,7 +1106,9 @@ export const ScanReceiptModal: React.FC<ScanReceiptModalProps> = ({
               {/* Camera Action */}
               <button
                 type="button"
+                disabled={isLoading}
                 onClick={() => {
+                  if (isLoading) return;
                   setErrorMsg(null);
                   cameraInputRef.current?.click();
                 }}
@@ -1096,7 +1130,9 @@ export const ScanReceiptModal: React.FC<ScanReceiptModalProps> = ({
               {/* Gallery Images Action */}
               <button
                 type="button"
+                disabled={isLoading}
                 onClick={() => {
+                  if (isLoading) return;
                   setErrorMsg(null);
                   galleryInputRef.current?.click();
                 }}
@@ -1118,7 +1154,9 @@ export const ScanReceiptModal: React.FC<ScanReceiptModalProps> = ({
               {/* PDF Document Action */}
               <button
                 type="button"
+                disabled={isLoading}
                 onClick={() => {
+                  if (isLoading) return;
                   setErrorMsg(null);
                   pdfInputRef.current?.click();
                 }}
@@ -1182,7 +1220,7 @@ export const ScanReceiptModal: React.FC<ScanReceiptModalProps> = ({
           </div>
         )}
 
-        {step === 'pages' && currentSession && (
+        {!conflictingSession && step === 'pages' && currentSession && (
           /* SCREEN: Pages Editor & Settings */
           <div className="space-y-5 py-2">
             {/* Session Header Controls */}
@@ -1426,7 +1464,7 @@ export const ScanReceiptModal: React.FC<ScanReceiptModalProps> = ({
           </div>
         )}
 
-        {step === 'summary' && currentSession && (
+        {!conflictingSession && step === 'summary' && currentSession && (
           /* SCREEN: Summary & Final Confirmation */
           <div className="space-y-6 py-2">
             <div className="p-5 bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 space-y-4 shadow-xs">

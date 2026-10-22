@@ -135,4 +135,51 @@ describe('Receipt Item Block Reconstruction donation',()=>{
     expect(result.blocks[0]).toMatchObject({description:'ARTICOLO',totalPrice:1.8});
     expect(result.blocks[1]).toMatchObject({description:'ALTRO',totalPrice:2.6});
   });
+  it('pairs VAT and price across adjacent physical rows',()=>{
+    const result=reconstructReceiptItemBlocks(page([
+      token('d1','FILO','d1',120,420,55),
+      token('d2','LEGACCI','d1',190,422,110),
+      token('v1','22,00%','v1',560,432,90),
+      token('d3','VERDE','d2',130,472,80),
+      token('p1','1,80','p1',815,469,60),
+      token('a2','ALTRO','a2',130,650,80),
+      token('v2','22,00%','a2',560,650,90),
+      token('p2','2,60','a2',815,650,60),
+      token('t1','TOTALE','t1',500,760,90),
+      token('t2','4,40','t1',815,760,60)
+    ]));
+    expect(result.blocks).toHaveLength(2);
+    expect(result.blocks[0]).toMatchObject({vatRate:22,totalPrice:1.8});
+    expect(result.blocks[0]?.description).toContain('FILO');
+    expect(result.blocks[0]?.description).toContain('VERDE');
+  });
+
+  it('promotes better Recognizer B description inside same commercial band',()=>{
+    const primary=page([
+      token('d1','SPAZZYOTT','p1',150,710,150,72),
+      token('d2','8241','p1',330,712,75,76),
+      token('d3','BLU','p1',440,714,50,90),
+      token('v1','22,00%','p1',575,716,90,93),
+      token('p1','1,95','p1',820,718,60,94),
+      token('d4','ALTRO','p2',150,820,90,90),
+      token('v2','22,00%','p2',575,820,90,93),
+      token('p2','2,60','p2',820,820,60,94),
+      token('t1','TOTALE','t1',500,920,90),
+      token('t2','4,55','t1',820,920,60)
+    ]);
+    const candidates:any[]=[
+      {source:'recognizer-b',token:token('b1','SPAZZOLINI','b1',150,708,150,91)},
+      {source:'recognizer-b',token:token('b2','PATT','b1',320,710,60,91)},
+      {source:'recognizer-b',token:token('b3','52X51','b1',385,710,70,90)},
+      {source:'recognizer-b',token:token('b4','BLU','b1',465,712,50,92)},
+      {source:'recognizer-b',token:token('bv','22,00%','b1',575,714,90,94)},
+      {source:'recognizer-b',token:token('bp','1,95','b1',820,716,60,95)}
+    ];
+    const result=reconstructReceiptItemBlocks(primary,candidates);
+    expect(result.blocks).toHaveLength(2);
+    expect(result.blocks[0]?.descriptionSource).toBe('secondary');
+    expect(result.blocks[0]?.description).toContain('SPAZZOLINI');
+    expect(result.blocks[0]?.description).toContain('52X51');
+    expect(result.blocks[0]?.totalPrice).toBe(1.95);
+  });
 });

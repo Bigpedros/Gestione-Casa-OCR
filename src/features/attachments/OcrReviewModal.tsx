@@ -1601,7 +1601,11 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
                                     key={segment.id}
                                     x={x}
                                     y={line.baselineY}
-                                    fontSize={Math.max(6, line.fontSize || 10)}
+                                    fontSize={Math.max(
+                                      line.fontSize || 10,
+                                      (activeDigitalReconstruction.width || 0) * 0.014,
+                                      12
+                                    )}
                                     fontFamily="ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace"
                                     fontWeight="500"
                                     fill="#111827"

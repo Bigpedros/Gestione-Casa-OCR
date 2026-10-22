@@ -12,7 +12,7 @@ export interface ReconstructionLine{
   id:string; box:Box; baselineY:number; fontSize:number; segments:ReconstructionLineSegment[];
 }
 export interface DigitalPageReconstruction{
-  schemaVersion:'1.2'; pageNumber:number; width:number; height:number;
+  schemaVersion:'1.3'; pageNumber:number; width:number; height:number;
   elements:ReconstructionElement[]; lines:ReconstructionLine[];
 }
 
@@ -44,7 +44,7 @@ export function buildDigitalPageReconstruction(page:OcrPage):DigitalPageReconstr
   ).sort((a,b)=>a.box.y-b.box.y||a.box.x-b.box.x);
 
   return{
-    schemaVersion:'1.2',
+    schemaVersion:'1.3',
     pageNumber:page.pageNumber,
     width:page.width,
     height:page.height,
@@ -68,26 +68,84 @@ function clusterRows(
   canonicalHeight:number,
   pageSlope:number
 ):ReconstructionElement[][]{
-  const correctedY=(element:ReconstructionElement)=>centerY(element.box)-pageSlope*centerX(element.box);
-  const ordered=[...elements].sort((a,b)=>correctedY(a)-correctedY(b)||a.box.x-b.box.x);
+  const coarseY=(element:ReconstructionElement)=>centerY(element.box)-pageSlope*centerX(element.box);
+  const ordered=[...elements].sort((a,b)=>coarseY(a)-coarseY(b)||a.box.x-b.box.x);
   const rows:ReconstructionElement[][]=[];
-  const tolerance=Math.max(5,canonicalHeight*.66);
+  const baseTolerance=Math.max(5,canonicalHeight*.82);
 
   for(const element of ordered){
-    const cy=correctedY(element);
+    const x=centerX(element.box);
+    const y=centerY(element.box);
     let best:ReconstructionElement[]|undefined;
-    let bestDistance=Infinity;
+    let bestScore=Infinity;
+
     for(const row of rows){
-      const rowCenter=median(row.map(correctedY));
-      const distance=Math.abs(cy-rowCenter);
-      if(distance<=tolerance&&distance<bestDistance){
-        best=row; bestDistance=distance;
+      const predictedY=predictLocalRowY(row,x,pageSlope,canonicalHeight);
+      const distance=Math.abs(y-predictedY);
+      const sameLineHint=row.some(item=>item.lineId===element.lineId);
+      const tolerance=baseTolerance*(sameLineHint?1.2:1);
+      if(distance>tolerance)continue;
+      if(hasStrongHorizontalOverlap(row,element,canonicalHeight)&&!sameLineHint)continue;
+
+      const score=distance-(sameLineHint?canonicalHeight*.15:0);
+      if(score<bestScore){
+        best=row;
+        bestScore=score;
       }
     }
+
     if(best)best.push(element);
     else rows.push([element]);
   }
+
   return rows;
+}
+
+function predictLocalRowY(
+  row:ReconstructionElement[],
+  x:number,
+  fallbackSlope:number,
+  canonicalHeight:number
+):number{
+  if(row.length===1){
+    const only=row[0]!;
+    return centerY(only.box)+fallbackSlope*(x-centerX(only.box));
+  }
+
+  const xs=row.map(item=>centerX(item.box));
+  const ys=row.map(item=>centerY(item.box));
+  const xMean=xs.reduce((sum,value)=>sum+value,0)/xs.length;
+  const yMean=ys.reduce((sum,value)=>sum+value,0)/ys.length;
+  let numerator=0;
+  let denominator=0;
+  for(let index=0;index<row.length;index++){
+    const dx=xs[index]!-xMean;
+    numerator+=dx*(ys[index]!-yMean);
+    denominator+=dx*dx;
+  }
+
+  const span=Math.max(...xs)-Math.min(...xs);
+  let slope=denominator>0&&span>=canonicalHeight*2.5?numerator/denominator:fallbackSlope;
+  if(!Number.isFinite(slope))slope=fallbackSlope;
+  slope=clamp(slope,-.22,.22);
+  return yMean+slope*(x-xMean);
+}
+
+function hasStrongHorizontalOverlap(
+  row:ReconstructionElement[],
+  element:ReconstructionElement,
+  canonicalHeight:number
+):boolean{
+  const left=element.box.x;
+  const right=element.box.x+element.box.width;
+  for(const item of row){
+    const overlap=Math.min(right,item.box.x+item.box.width)-Math.max(left,item.box.x);
+    if(overlap>Math.min(element.box.width,item.box.width)*.45){
+      const verticalDistance=Math.abs(centerY(item.box)-centerY(element.box));
+      if(verticalDistance>canonicalHeight*.45)return true;
+    }
+  }
+  return false;
 }
 
 function estimatePageTextSlope(

@@ -4,7 +4,7 @@ import type { OcrToken } from '../vendor/motore-ocr-ai/contracts';
 
 describe('MOTORE-OCR-AI integration', () => {
   it('pins the audited engine source', () => {
-    expect(MOTORE_OCR_AI_SOURCE_COMMIT).toBe('7e6738262d326099b7c73955207a371c09ee042f');
+    expect(MOTORE_OCR_AI_SOURCE_COMMIT).toBe('4209daa43b547faf3e887357fc4bc817ff8147b2');
   });
 
   it('maps stabilized tokens to Gestione Casa geometry', () => {

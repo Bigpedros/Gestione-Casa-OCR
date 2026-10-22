@@ -107,7 +107,7 @@ describe('FASE P4-D2-RC-02 — Nessuna Falsa Discrepanza per PAYMENT_PROOF', () 
       expect(screen.getByDisplayValue('EUROSPAR')).toBeInTheDocument();
     });
 
-    expect(screen.queryByText(/Attenzione: Discrepanza sul Totale Documento/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Discrepanza con somma righe/i)).not.toBeInTheDocument();
   });
 
   // TEST 4
@@ -154,7 +154,7 @@ describe('FASE P4-D2-RC-02 — Nessuna Falsa Discrepanza per PAYMENT_PROOF', () 
       expect(screen.getByDisplayValue('EUROSPAR')).toBeInTheDocument();
     });
 
-    expect(screen.queryByText(/Discrepanza Rilevata negli Importi/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Discrepanza con somma righe/i)).not.toBeInTheDocument();
   });
 
   // TEST 5
@@ -258,10 +258,10 @@ describe('FASE P4-D2-RC-02 — Nessuna Falsa Discrepanza per PAYMENT_PROOF', () 
       expect(screen.getByDisplayValue('EUROSPAR')).toBeInTheDocument();
     });
 
-    const diagToggle = screen.getByText(/Mostra diagnostica OCR/i);
+    const diagToggle = screen.getByRole('button', { name: /^Diagnostica$/i });
     fireEvent.click(diagToggle);
 
-    const copyBtn = screen.getByRole('button', { name: /Copia diagnostica/i });
+    const copyBtn = screen.getByRole('button', { name: /Copia D1 JSON/i });
     fireEvent.click(copyBtn);
 
     await waitFor(() => {
@@ -322,7 +322,7 @@ describe('FASE P4-D2-RC-02 — Nessuna Falsa Discrepanza per PAYMENT_PROOF', () 
       expect(screen.getByDisplayValue('EUROSPAR')).toBeInTheDocument();
     });
 
-    const confirmBtn = screen.getByRole('button', { name: /Conferma revisione dati/i });
+    const confirmBtn = screen.getByRole('button', { name: /Conferma revisione/i });
     expect(confirmBtn).not.toBeDisabled();
   });
 
@@ -370,7 +370,7 @@ describe('FASE P4-D2-RC-02 — Nessuna Falsa Discrepanza per PAYMENT_PROOF', () 
       expect(screen.getByDisplayValue('EUROSPAR')).toBeInTheDocument();
     });
 
-    const accountingBtn = screen.getByRole('button', { name: /Crea Registrazione Contabile/i });
+    const accountingBtn = screen.getByRole('button', { name: /Crea Registrazione/i });
     expect(accountingBtn).not.toBeDisabled();
 
     fireEvent.click(accountingBtn);
@@ -440,25 +440,25 @@ describe('FASE P4-D2-RC-02 — Nessuna Falsa Discrepanza per PAYMENT_PROOF', () 
     });
 
     // 1. Nessun banner di discrepanza
-    expect(screen.queryByText(/Attenzione: Discrepanza sul Totale Documento/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Discrepanza con somma righe/i)).not.toBeInTheDocument();
 
     // 2. Nessun box di discrepanza
-    expect(screen.queryByText(/Discrepanza Rilevata negli Importi/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Discrepanza con somma righe/i)).not.toBeInTheDocument();
 
     // 3. Nessuna checkbox
     expect(screen.queryByRole('checkbox')).not.toBeInTheDocument();
 
     // 4. Pulsanti non bloccati
-    const confirmBtn = screen.getByRole('button', { name: /Conferma revisione dati/i });
-    const accountingBtn = screen.getByRole('button', { name: /Crea Registrazione Contabile/i });
+    const confirmBtn = screen.getByRole('button', { name: /Conferma revisione/i });
+    const accountingBtn = screen.getByRole('button', { name: /Crea Registrazione/i });
     expect(confirmBtn).not.toBeDisabled();
     expect(accountingBtn).not.toBeDisabled();
 
     // 5. Diagnostica con discrepancy 0 e hasDiscrepancy false
-    const diagToggle = screen.getByText(/Mostra diagnostica OCR/i);
+    const diagToggle = screen.getByRole('button', { name: /^Diagnostica$/i });
     fireEvent.click(diagToggle);
 
-    const copyBtn = screen.getByRole('button', { name: /Copia diagnostica/i });
+    const copyBtn = screen.getByRole('button', { name: /Copia D1 JSON/i });
     fireEvent.click(copyBtn);
 
     await waitFor(() => {
@@ -525,7 +525,7 @@ describe('FASE P4-D2-RC-02 — Nessuna Falsa Discrepanza per PAYMENT_PROOF', () 
       expect(screen.getByDisplayValue('SUPERMERCATO')).toBeInTheDocument();
     });
 
-    expect(screen.getByText(/Attenzione: Discrepanza sul Totale Documento/i)).toBeInTheDocument();
+    expect(screen.getByText(/Discrepanza con somma righe/i)).toBeInTheDocument();
   });
 
   // TEST 11
@@ -582,9 +582,9 @@ describe('FASE P4-D2-RC-02 — Nessuna Falsa Discrepanza per PAYMENT_PROOF', () 
       expect(screen.getByDisplayValue('SUPERMERCATO')).toBeInTheDocument();
     });
 
-    expect(screen.getByText(/Discrepanza Rilevata negli Importi/i)).toBeInTheDocument();
+    expect(screen.getByText(/Discrepanza con somma righe/i)).toBeInTheDocument();
 
-    const confirmBtn = screen.getByRole('button', { name: /Conferma revisione dati/i });
+    const confirmBtn = screen.getByRole('button', { name: /Conferma revisione/i });
     expect(confirmBtn).toBeDisabled();
 
     const checkbox = screen.getByRole('checkbox');
@@ -655,10 +655,10 @@ describe('FASE P4-D2-RC-02 — Nessuna Falsa Discrepanza per PAYMENT_PROOF', () 
       expect(screen.getByDisplayValue('SUPERMERCATO')).toBeInTheDocument();
     });
 
-    const diagToggle = screen.getByText(/Mostra diagnostica OCR/i);
+    const diagToggle = screen.getByRole('button', { name: /^Diagnostica$/i });
     fireEvent.click(diagToggle);
 
-    const copyBtn = screen.getByRole('button', { name: /Copia diagnostica/i });
+    const copyBtn = screen.getByRole('button', { name: /Copia D1 JSON/i });
     fireEvent.click(copyBtn);
 
     await waitFor(() => {
@@ -747,10 +747,10 @@ describe('FASE P4-D2-RC-02 — Nessuna Falsa Discrepanza per PAYMENT_PROOF', () 
     });
 
     // 1. Nessun banner di discrepanza
-    expect(screen.queryByText(/Attenzione: Discrepanza sul Totale Documento/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Discrepanza con somma righe/i)).not.toBeInTheDocument();
 
     // 2. Nessun box di discrepanza
-    expect(screen.queryByText(/Discrepanza Rilevata negli Importi/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Discrepanza con somma righe/i)).not.toBeInTheDocument();
 
     // 3. Nessuna checkbox di approvazione discrepanza
     expect(
@@ -758,10 +758,10 @@ describe('FASE P4-D2-RC-02 — Nessuna Falsa Discrepanza per PAYMENT_PROOF', () 
     ).not.toBeInTheDocument();
 
     // 4. Diagnostica: discrepancy 0, hasDiscrepancy false
-    const diagToggle = screen.getByText(/Mostra diagnostica OCR/i);
+    const diagToggle = screen.getByRole('button', { name: /^Diagnostica$/i });
     fireEvent.click(diagToggle);
 
-    const copyBtn = screen.getByRole('button', { name: /Copia diagnostica/i });
+    const copyBtn = screen.getByRole('button', { name: /Copia D1 JSON/i });
     fireEvent.click(copyBtn);
 
     await waitFor(() => {
@@ -829,12 +829,12 @@ describe('FASE P4-D2-RC-02 — Nessuna Falsa Discrepanza per PAYMENT_PROOF', () 
       expect(screen.getByDisplayValue('EUROSPAR')).toBeInTheDocument();
     });
 
-    expect(screen.queryByText(/Attenzione: Discrepanza sul Totale Documento/i)).not.toBeInTheDocument();
-    expect(screen.queryByText(/Discrepanza Rilevata negli Importi/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Discrepanza con somma righe/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Discrepanza con somma righe/i)).not.toBeInTheDocument();
     expect(screen.queryByRole('checkbox')).not.toBeInTheDocument();
 
-    const confirmBtn = screen.getByRole('button', { name: /Conferma revisione dati/i });
-    const accountingBtn = screen.getByRole('button', { name: /Crea Registrazione Contabile/i });
+    const confirmBtn = screen.getByRole('button', { name: /Conferma revisione/i });
+    const accountingBtn = screen.getByRole('button', { name: /Crea Registrazione/i });
     expect(confirmBtn).not.toBeDisabled();
     expect(accountingBtn).not.toBeDisabled();
   });

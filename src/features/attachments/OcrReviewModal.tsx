@@ -1245,6 +1245,13 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
     digitalReconstructions.find((page: any) => page?.pageNumber === activeSegmentIndex + 1) ||
     digitalReconstructions[activeSegmentIndex] ||
     null;
+  const canonicalRasters = Array.isArray((ocrProcess?.metadata as Record<string, any> | undefined)?.canonicalRasters)
+    ? ((ocrProcess?.metadata as Record<string, any>).canonicalRasters as any[])
+    : [];
+  const activeCanonicalRaster =
+    canonicalRasters.find((raster: any) => raster?.pageNumber === activeSegmentIndex + 1) ||
+    canonicalRasters[activeSegmentIndex] ||
+    null;
   const reconstructionElementMap = new Map<string, any>(
     (activeDigitalReconstruction?.elements || []).map((element: any) => [element.id, element])
   );
@@ -1288,7 +1295,7 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
       subtitle={
         session?.metadata?.title
           ? `Documento: ${session.metadata.title as string}`
-          : 'Digital Reconstruction 2.0 - Confronta con originale e modifica direttamente le righe ricostruite'
+          : 'Digital Reconstruction 3.0 - Facsimile raster normalizzato con revisione interattiva'
       }
       maxWidth="5xl"
     >
@@ -1489,36 +1496,47 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
               <div className="p-5 bg-[#fdfcf7] text-slate-900 rounded-xl border border-slate-300 font-mono text-xs shadow-md space-y-4 relative">
                 
                 {activeDigitalReconstruction && activeDigitalReconstruction.width > 0 && activeDigitalReconstruction.height > 0 && (
-                  <div className="space-y-2 pb-4 border-b border-dashed border-slate-300" data-testid="digital-reconstruction-2">
+                  <div className="space-y-2 pb-4 border-b border-dashed border-slate-300" data-testid="digital-reconstruction-3">
                     <div className="flex items-center justify-between gap-3">
                       <span className="text-[10px] uppercase font-bold tracking-wide text-slate-500">
-                        Digital Reconstruction 2.0
+                        Digital Reconstruction 3.0
                       </span>
                       <span className="text-[9px] text-slate-400">
-                        layout OCR + revisione interattiva
+                        raster normalizzato + layer interattivo
                       </span>
                     </div>
-                    <div className="w-full overflow-hidden bg-white border border-slate-200 rounded-lg">
-                      <svg
-                        viewBox={`0 0 ${activeDigitalReconstruction.width} ${activeDigitalReconstruction.height}`}
-                        className="block w-full h-auto bg-white"
-                        preserveAspectRatio="xMidYMin meet"
-                        aria-label="Ricostruzione digitale interattiva dello scontrino"
+
+                    {activeCanonicalRaster?.dataUrl ? (
+                      <div
+                        className="relative w-full overflow-hidden bg-white border border-slate-200 rounded-lg"
+                        data-testid="canonical-raster-facsimile"
                       >
-                        {(activeDigitalReconstruction.lines || []).map((line: any) => {
-                          const boundId = reconstructionBindings.get(line.id);
-                          const reviewLine = boundId ? editableLines.find((item) => item.id === boundId) || null : null;
-                          const palette = getSvgReviewPalette(reviewLine);
-                          const selected = Boolean(reviewLine && editingRowId === reviewLine.id);
-                          return (
-                            <g
-                              key={line.id}
-                              onClick={() => reviewLine && setEditingRowId(reviewLine.id)}
-                              className={reviewLine ? 'cursor-pointer' : undefined}
-                              role={reviewLine ? 'button' : undefined}
-                              aria-label={reviewLine ? `Modifica riga ${reviewLine.description || reviewLine.originalText}` : undefined}
-                            >
-                              {reviewLine && (
+                        <img
+                          src={activeCanonicalRaster.dataUrl}
+                          alt="Facsimile raster normalizzato del documento"
+                          className="block w-full h-auto select-none"
+                          draggable={false}
+                        />
+                        <svg
+                          viewBox={`0 0 ${activeDigitalReconstruction.width} ${activeDigitalReconstruction.height}`}
+                          className="absolute inset-0 block w-full h-full"
+                          preserveAspectRatio="xMidYMin meet"
+                          aria-label="Layer interattivo della copia digitale"
+                        >
+                          {(activeDigitalReconstruction.lines || []).map((line: any) => {
+                            const boundId = reconstructionBindings.get(line.id);
+                            const reviewLine = boundId ? editableLines.find((item) => item.id === boundId) || null : null;
+                            if (!reviewLine) return null;
+                            const palette = getSvgReviewPalette(reviewLine);
+                            const selected = editingRowId === reviewLine.id;
+                            return (
+                              <g
+                                key={line.id}
+                                onClick={() => setEditingRowId(reviewLine.id)}
+                                className="cursor-pointer"
+                                role="button"
+                                aria-label={`Modifica riga ${reviewLine.description || reviewLine.originalText}`}
+                              >
                                 <rect
                                   x={Math.max(0, line.box.x - 5)}
                                   y={Math.max(0, line.box.y - 3)}
@@ -1526,53 +1544,54 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
                                   height={Math.max(1, line.box.height + 6)}
                                   rx={4}
                                   fill={palette.fill}
-                                  fillOpacity={selected ? 0.75 : 0.42}
+                                  fillOpacity={selected ? 0.22 : 0.06}
                                   stroke={palette.stroke}
-                                  strokeWidth={selected ? 2.5 : 1}
-                                  strokeOpacity={selected ? 1 : 0.7}
+                                  strokeWidth={selected ? 3 : 1.4}
+                                  strokeOpacity={selected ? 1 : 0.8}
                                 />
-                              )}
+                                <title>{reviewLine.description || reviewLine.originalText}</title>
+                              </g>
+                            );
+                          })}
+                        </svg>
+                      </div>
+                    ) : (
+                      <div className="w-full overflow-hidden bg-white border border-slate-200 rounded-lg" data-testid="legacy-geometric-fallback">
+                        <svg
+                          viewBox={`0 0 ${activeDigitalReconstruction.width} ${activeDigitalReconstruction.height}`}
+                          className="block w-full h-auto bg-white"
+                          preserveAspectRatio="xMidYMin meet"
+                          aria-label="Fallback geometrico per documento precedente alla Digital Reconstruction 3.0"
+                        >
+                          {(activeDigitalReconstruction.lines || []).map((line: any) => (
+                            <g key={line.id}>
                               {(line.segments || []).map((segment: any) => {
                                 const segmentText = (segment.elementIds || [])
                                   .map((id: string) => reconstructionElementMap.get(id)?.text || '')
                                   .filter(Boolean)
                                   .join(' ');
                                 if (!segmentText) return null;
-                                const anchor =
-                                  segment.alignment === 'right'
-                                    ? 'end'
-                                    : segment.alignment === 'center'
-                                      ? 'middle'
-                                      : 'start';
-                                const x =
-                                  segment.alignment === 'right'
-                                    ? segment.box.x + segment.box.width
-                                    : segment.alignment === 'center'
-                                      ? segment.box.x + segment.box.width / 2
-                                      : segment.box.x;
                                 return (
                                   <text
                                     key={segment.id}
-                                    x={x}
+                                    x={segment.box.x}
                                     y={line.baselineY}
                                     fontSize={Math.max(6, line.fontSize || 10)}
-                                    textAnchor={anchor}
                                     fontFamily="monospace"
-                                    fill={reviewLine ? palette.text : '#0f172a'}
-                                    fontWeight={selected ? 700 : 400}
-                                    pointerEvents="none"
+                                    fill="#0f172a"
                                   >
                                     {segmentText}
                                   </text>
                                 );
                               })}
                             </g>
-                          );
-                        })}
-                      </svg>
-                    </div>
+                          ))}
+                        </svg>
+                      </div>
+                    )}
+
                     <p className="text-[9px] leading-tight text-slate-400 font-sans">
-                      Le righe evidenziate sono collegate ai dati modificabili. Clicca direttamente sulla riga del documento per modificarla o confermarla.
+                      Il facsimile usa il raster realmente rettificato dal MOTORE. L’OCR non ridisegna più il documento: serve solo a localizzare, comprendere e rendere modificabili le aree.
                     </p>
                   </div>
                 )}
@@ -1731,7 +1750,7 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
                     </div>
                   ) : (
                     <div className="text-center py-4 px-3 bg-slate-50 border border-dashed border-slate-300 rounded-lg text-[11px] text-slate-500 font-sans">
-                      Clicca una riga evidenziata nella Digital Reconstruction 2.0 per modificarla o confermarla.
+                      Clicca una riga evidenziata nella Digital Reconstruction 3.0 per modificarla o confermarla.
                     </div>
                   )}
 

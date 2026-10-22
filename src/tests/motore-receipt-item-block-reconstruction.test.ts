@@ -119,4 +119,20 @@ describe('Receipt Item Block Reconstruction donation',()=>{
     expect(result.blocks[0]?.structureType).toBe('SINGLE_LINE');
     expect(result.blocks[0]?.quantity).toBe(1);
   });
+  it('infers columns without printed header from repeated VAT and price anchors',()=>{
+    const result=reconstructReceiptItemBlocks(page([
+      token('a1','ARTICOLO','l1',60,180,130),
+      token('a2','22,00%','l1',560,180,90),
+      token('a3','1,80','l1',820,180,70),
+      token('b1','ALTRO','l2',60,240,110),
+      token('b2','22,00%','l2',560,240,90),
+      token('b3','2,60','l2',820,240,70),
+      token('t1','TOTALE','l3',500,320,90),
+      token('t2','4,40','l3',820,320,70)
+    ]));
+    expect(result.blocks).toHaveLength(2);
+    expect(result.observations.some(o=>o.code==='RECEIPT_ITEM_COLUMNS_FROM_ANCHORS')).toBe(true);
+    expect(result.blocks[0]).toMatchObject({description:'ARTICOLO',totalPrice:1.8});
+    expect(result.blocks[1]).toMatchObject({description:'ALTRO',totalPrice:2.6});
+  });
 });

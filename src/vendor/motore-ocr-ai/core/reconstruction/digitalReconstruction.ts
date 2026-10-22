@@ -63,6 +63,78 @@ export function getDigitalPageText(reconstruction:DigitalPageReconstruction):str
   ).join('\n');
 }
 
+
+export interface ReconstructionSemanticTarget{
+  id:string;
+  text:string;
+  amount?:number|null;
+}
+export interface ReconstructionSemanticBinding{
+  lineId:string;
+  targetId:string;
+  score:number;
+}
+
+/**
+ * Digital Reconstruction 2.0: collega la geometria OCR a entità semantiche
+ * senza introdurre dipendenze dal tipo di documento.
+ */
+export function bindDigitalReconstructionSemantics(
+  reconstruction:DigitalPageReconstruction,
+  targets:ReconstructionSemanticTarget[]
+):ReconstructionSemanticBinding[]{
+  const byId=new Map(reconstruction.elements.map(element=>[element.id,element]));
+  const usedTargets=new Set<string>();
+  const bindings:ReconstructionSemanticBinding[]=[];
+
+  for(const line of reconstruction.lines){
+    const geometryText=line.segments
+      .slice().sort((a,b)=>a.box.x-b.box.x)
+      .flatMap(segment=>segment.elementIds)
+      .map(id=>byId.get(id)?.text??'')
+      .filter(Boolean)
+      .join(' ');
+
+    let best:ReconstructionSemanticTarget|undefined;
+    let bestScore=0;
+    for(const target of targets){
+      if(usedTargets.has(target.id))continue;
+      const score=semanticBindingScore(geometryText,target);
+      if(score>bestScore){best=target;bestScore=score;}
+    }
+    if(best&&bestScore>=.28){
+      usedTargets.add(best.id);
+      bindings.push({lineId:line.id,targetId:best.id,score:bestScore});
+    }
+  }
+  return bindings;
+}
+
+function semanticBindingScore(geometryText:string,target:ReconstructionSemanticTarget):number{
+  const geometry=normalizeBindingText(geometryText);
+  const semantic=normalizeBindingText(target.text);
+  if(!geometry||!semantic)return 0;
+  const geometryTokens=new Set(geometry.split(/\s+/).filter(token=>token.length>1));
+  const semanticTokens=new Set(semantic.split(/\s+/).filter(token=>token.length>1));
+  const overlap=[...geometryTokens].filter(token=>semanticTokens.has(token)).length;
+  const union=new Set([...geometryTokens,...semanticTokens]).size||1;
+  let score=overlap/union;
+  if(geometry.includes(semantic)||semantic.includes(geometry))score+=.45;
+  if(typeof target.amount==='number'&&target.amount>0){
+    const comma=target.amount.toFixed(2).replace('.',',');
+    const dot=target.amount.toFixed(2);
+    if(geometryText.includes(comma)||geometryText.includes(dot))score+=.25;
+  }
+  return score;
+}
+
+function normalizeBindingText(value:string):string{
+  return(value||'').toUpperCase().normalize('NFD')
+    .replace(/[\u0300-\u036f]/g,'')
+    .replace(/[^A-Z0-9]+/g,' ')
+    .trim();
+}
+
 function clusterRows(
   elements:ReconstructionElement[],
   canonicalHeight:number,

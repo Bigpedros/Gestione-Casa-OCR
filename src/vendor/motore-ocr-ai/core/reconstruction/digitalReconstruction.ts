@@ -269,7 +269,11 @@ function buildLine(
     id,
     box:{x,y,width:Math.max(1,right-x),height:lineHeight},
     baselineY:y+lineHeight*.78,
-    fontSize:clamp(canonicalHeight*.68,5,Math.max(6,canonicalHeight*.9)),
+    fontSize:clamp(
+      Math.max(canonicalHeight*.72,pageWidth*.014),
+      Math.max(9,pageWidth*.011),
+      Math.max(14,canonicalHeight*1.08)
+    ),
     segments:buildSegments(id,elements,lineHeight,pageWidth,y,canonicalHeight)
   };
 }

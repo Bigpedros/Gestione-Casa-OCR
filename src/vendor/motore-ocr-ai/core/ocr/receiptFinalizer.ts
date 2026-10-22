@@ -27,7 +27,7 @@ export function collectReceiptEvidence(page:OcrPage,candidates:OcrEvidenceCandid
   tokens.push(...collectConservativeAlternativeEvidence(page.tokens));
   observations.push(...collectDateTimeObservations(page));
 
-  const itemBlocks=reconstructReceiptItemBlocks(page);
+  const itemBlocks=reconstructReceiptItemBlocks(page,candidates);
   observations.push(...itemBlocks.observations);
 
   const lineFusion=collectReceiptLineFusionEvidence(page,candidates);

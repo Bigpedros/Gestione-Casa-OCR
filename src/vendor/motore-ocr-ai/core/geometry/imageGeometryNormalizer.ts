@@ -40,7 +40,27 @@ export function normalizeRasterGeometry(source:HTMLCanvasElement,orientationDegr
   const deskewApplied=Math.abs(deskew.angle)>=.18&&deskew.confidence>=.45;
   if(deskewApplied)canvas=rotateArbitrary(canvas,-deskew.angle);
 
-  const afterDeskew=analyzeCanvasGeometry(canvas);
+  let afterDeskew=analyzeCanvasGeometry(canvas);
+
+  // Secondo pass conservativo: una singola rotazione può lasciare skew residuo
+  // quando prospettiva e baseline del testo non coincidono perfettamente.
+  // Applichiamo una sola correzione aggiuntiva soltanto se il residuo è misurabile
+  // e supportato da sufficiente geometria, evitando oscillazioni e over-correction.
+  if(deskewApplied&&Math.abs(afterDeskew.skew)>=.18&&afterDeskew.lines.length>=2){
+    const residualEstimate=estimateDeskew(canvas);
+    const improvesDirection=
+      Math.sign(residualEstimate.angle)===Math.sign(afterDeskew.skew)||
+      Math.abs(residualEstimate.angle-afterDeskew.skew)<=.35;
+    if(residualEstimate.confidence>=.5&&Math.abs(residualEstimate.angle)<=2.5&&improvesDirection){
+      const candidate=rotateArbitrary(canvas,-residualEstimate.angle);
+      const candidateAnalysis=analyzeCanvasGeometry(candidate);
+      if(Math.abs(candidateAnalysis.skew)<Math.abs(afterDeskew.skew)*.72){
+        canvas=candidate;
+        afterDeskew=candidateAnalysis;
+      }
+    }
+  }
+
   const dewarpPlan=buildDewarpPlan(canvas,afterDeskew.lines);
   let dewarpApplied=false;
   let dewarpStrength=dewarpPlan.strength;

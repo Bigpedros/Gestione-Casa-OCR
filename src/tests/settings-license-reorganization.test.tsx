@@ -1,104 +1,14 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import { MemoryRouter, Routes, Route } from 'react-router-dom';
-import crypto from 'node:crypto';
-import { Buffer } from 'node:buffer';
 import { db } from '../database/db';
 import { LicenseProvider } from '../context/LicenseContext';
 import { SettingsPage } from '../features/settings/SettingsPage';
 import { LicensePage } from '../features/settings/LicensePage';
 import { ContactPage } from '../features/settings/ContactPage';
 import { ContributorsSettingsPage } from '../features/settings/ContributorsSettingsPage';
-import { localLicenseRepository } from '../services/licensing';
 import { seedInitialCategoriesAndSettings } from '../database/seed/seedCategories';
-import { ACTIVATION_CONFIG } from '../config/activation.config';
-import { getOrCreateDeviceId } from '../services/deviceService';
-import {
-  buildCanonicalLicensePayloadV2,
-  buildCanonicalValidationReceiptV1,
-  computeLicensePayloadHashV2,
-  type SignedLicenseDocumentV2,
-  type SignedValidationReceiptV1,
-  type ValidationReceiptV1,
-} from '@gestione-casa/shared-sdk/activation';
-import type { LicenseDocumentV2 } from '@gestione-casa/shared-sdk/licensing';
 
-function generateEd25519TestKeyPair() {
-  const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519');
-  const spkiBase64 = publicKey.export({ type: 'spki', format: 'der' }).toString('base64');
-  return { publicKey: spkiBase64, privateKey };
-}
-
-function createSignedTestDoc(
-  licenseDoc: Partial<LicenseDocumentV2>,
-  privateKey: crypto.KeyObject,
-): SignedLicenseDocumentV2 {
-  const fullDoc: LicenseDocumentV2 = {
-    id: licenseDoc.id || 'LIC-V2-TEST',
-    licenseCode: licenseDoc.licenseCode || 'ABCD-EFGH-JKMN-PQRQ',
-    checksum: licenseDoc.checksum || 'Q',
-    edition: licenseDoc.edition || 'professional',
-    term: licenseDoc.term || 'annual',
-    status: licenseDoc.status || 'activated',
-    owner: licenseDoc.owner || 'Mario Rossi',
-    customerId: licenseDoc.customerId ?? 'CUST-200',
-    deviceId: licenseDoc.deviceId ?? 'DEV-12345678-1234-1234-1234-123456789012',
-    generatedAt: licenseDoc.generatedAt || '2026-08-01T00:00:00.000Z',
-    assignedAt: null,
-    sentAt: null,
-    activatedAt: '2026-08-01T00:00:00.000Z',
-    suspendedAt: null,
-    revokedAt: null,
-    expiresAt: '2027-08-01T00:00:00.000Z',
-    engineVersion: '2.1',
-    schemaVersion: 2,
-    offlinePolicy: { allowed: true, maxDays: 30 },
-    metadata: {},
-  };
-
-  const canonicalPayload = buildCanonicalLicensePayloadV2(fullDoc);
-  const signatureBuffer = crypto.sign(null, Buffer.from(canonicalPayload, 'utf-8'), privateKey);
-
-  return {
-    license: fullDoc,
-    signature: signatureBuffer.toString('base64'),
-    signatureAlgorithm: 'Ed25519',
-    keyId: 'test-key-1',
-    signatureVersion: 2,
-    canonicalPayload,
-  };
-}
-
-function createSignedTestReceipt(
-  receipt: Partial<ValidationReceiptV1>,
-  signedDoc: SignedLicenseDocumentV2,
-  privateKey: crypto.KeyObject,
-): SignedValidationReceiptV1 {
-  const licensePayloadHash = computeLicensePayloadHashV2(signedDoc.license);
-  const fullReceipt: ValidationReceiptV1 = {
-    receiptVersion: 1,
-    receiptId: receipt.receiptId || 'REC-V1-TEST',
-    licenseId: signedDoc.license.id,
-    deviceId: signedDoc.license.deviceId || 'DEV-12345678-1234-1234-1234-123456789012',
-    licenseSchemaVersion: 2,
-    validatedAt: '2026-08-15T00:00:00.000Z',
-    offlineValidUntil: '2026-09-15T00:00:00.000Z',
-    licenseExpiresAt: signedDoc.license.expiresAt,
-    licensePayloadHash,
-  };
-
-  const canonicalPayload = buildCanonicalValidationReceiptV1(fullReceipt);
-  const signatureBuffer = crypto.sign(null, Buffer.from(canonicalPayload, 'utf-8'), privateKey);
-
-  return {
-    receipt: fullReceipt,
-    signature: signatureBuffer.toString('base64'),
-    signatureAlgorithm: 'Ed25519',
-    keyId: 'test-key-1',
-    signatureVersion: 1,
-    canonicalPayload,
-  };
-}
 
 describe('Riorganizzazione Grafica Impostazioni / Licenza Software & Contributori', () => {
   beforeEach(async () => {

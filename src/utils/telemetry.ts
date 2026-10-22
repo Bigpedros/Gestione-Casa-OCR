@@ -16,6 +16,9 @@ export interface AppBuildInfo {
 }
 
 export const getAppBuildInfo = (): AppBuildInfo => {
+  if (typeof __APP_BUILD_INFO__ !== 'undefined' && __APP_BUILD_INFO__) {
+    return __APP_BUILD_INFO__;
+  }
   const globalBuildInfo = (globalThis as any).__APP_BUILD_INFO__;
   if (globalBuildInfo) {
     return globalBuildInfo;

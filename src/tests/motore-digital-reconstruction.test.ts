@@ -85,6 +85,47 @@ describe('donazione MOTORE - ricostruzione geometrica',()=>{
     expect(rebuilt.box.y).toBeGreaterThanOrEqual(425);
   });
 
+  it('scarta outlier verticali e caratteri sovradimensionati nella word-box',()=>{
+    const p=page();
+    const bad=token('char-outliers','SUOFPERL','l3',100,480,180);
+    bad.box.height=82;
+    bad.characters=[
+      {text:'S',confidence:98,box:{x:110,y:505,width:17,height:28}},
+      {text:'U',confidence:93,box:{x:130,y:508,width:20,height:60}},
+      {text:'O',confidence:94,box:{x:153,y:511,width:16,height:28}},
+      {text:'F',confidence:91,box:{x:171,y:514,width:16,height:26}},
+      {text:'P',confidence:93,box:{x:188,y:486,width:18,height:57}},
+      {text:'E',confidence:97,box:{x:208,y:489,width:17,height:59}},
+      {text:'R',confidence:97,box:{x:227,y:523,width:16,height:27}},
+      {text:'L',confidence:77,box:{x:243,y:495,width:18,height:57}},
+    ];
+    p.tokens.push(bad);
+    const reconstruction=buildDigitalPageReconstruction(p);
+    const rebuilt=reconstruction.elements.find(element=>element.id==='char-outliers')!;
+    expect(rebuilt.box.height).toBeLessThan(45);
+    expect(rebuilt.box.y).toBeGreaterThanOrEqual(500);
+    expect(rebuilt.box.width).toBeLessThanOrEqual(151);
+  });
+
+  it('scarta un carattere fuori baseline pur con altezza normale',()=>{
+    const p=page();
+    const bad=token('baseline-outlier','FILODE','l3',100,420,130);
+    bad.box.height=62;
+    bad.characters=[
+      {text:'F',confidence:99,box:{x:112,y:443,width:14,height:27}},
+      {text:'I',confidence:98,box:{x:131,y:446,width:14,height:29}},
+      {text:'L',confidence:95,box:{x:150,y:449,width:16,height:29}},
+      {text:'O',confidence:95,box:{x:168,y:453,width:16,height:28}},
+      {text:'D',confidence:86,box:{x:184,y:425,width:17,height:28}},
+      {text:'E',confidence:97,box:{x:204,y:443,width:18,height:29}},
+    ];
+    p.tokens.push(bad);
+    const reconstruction=buildDigitalPageReconstruction(p);
+    const rebuilt=reconstruction.elements.find(element=>element.id==='baseline-outlier')!;
+    expect(rebuilt.box.height).toBeLessThan(50);
+    expect(rebuilt.box.y).toBeGreaterThanOrEqual(440);
+  });
+
   it('riunisce una riga inclinata usando la baseline compensata',()=>{
     const p=page();
     p.tokens=[

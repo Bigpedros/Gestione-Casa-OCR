@@ -83,11 +83,18 @@ function clusterRows(
       const predictedY=predictLocalRowY(row,x,pageSlope,canonicalHeight);
       const distance=Math.abs(y-predictedY);
       const sameLineHint=row.some(item=>item.lineId===element.lineId);
-      const tolerance=baseTolerance*(sameLineHint?1.2:1);
+      const xs=row.map(item=>centerX(item));
+      const minX=Math.min(...xs);
+      const maxX=Math.max(...xs);
+      const outsideDistance=x<minX?minX-x:x>maxX?x-maxX:0;
+      const extrapolationBoost=outsideDistance>0
+        ?Math.min(canonicalHeight*1.1,(outsideDistance/Math.max(1,canonicalHeight))*canonicalHeight*.08)
+        :0;
+      const tolerance=baseTolerance*(sameLineHint?1.2:1)+extrapolationBoost;
       if(distance>tolerance)continue;
       if(hasStrongHorizontalOverlap(row,element,canonicalHeight)&&!sameLineHint)continue;
 
-      const score=distance-(sameLineHint?canonicalHeight*.15:0);
+      const score=distance-(sameLineHint?canonicalHeight*.15:0)-extrapolationBoost*.2;
       if(score<bestScore){
         best=row;
         bestScore=score;

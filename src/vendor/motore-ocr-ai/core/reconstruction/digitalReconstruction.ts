@@ -12,7 +12,7 @@ export interface ReconstructionLine{
   id:string; box:Box; baselineY:number; fontSize:number; segments:ReconstructionLineSegment[];
 }
 export interface DigitalPageReconstruction{
-  schemaVersion:'1.1'; pageNumber:number; width:number; height:number;
+  schemaVersion:'1.2'; pageNumber:number; width:number; height:number;
   elements:ReconstructionElement[]; lines:ReconstructionLine[];
 }
 
@@ -37,13 +37,14 @@ export function buildDigitalPageReconstruction(page:OcrPage):DigitalPageReconstr
     box:sanitizeBox(element.box,element.text,canonicalHeight,page.width,page.height)
   }));
 
-  const rows=clusterRows(elements,canonicalHeight);
+  const pageSlope=estimatePageTextSlope(elements,page.width,canonicalHeight);
+  const rows=clusterRows(elements,canonicalHeight,pageSlope);
   const lines=rows.map((row,index)=>
     buildLine(`geo-line-${index}`,row.sort((a,b)=>a.box.x-b.box.x),page.width,page.height,canonicalHeight)
   ).sort((a,b)=>a.box.y-b.box.y||a.box.x-b.box.x);
 
   return{
-    schemaVersion:'1.1',
+    schemaVersion:'1.2',
     pageNumber:page.pageNumber,
     width:page.width,
     height:page.height,
@@ -62,17 +63,22 @@ export function getDigitalPageText(reconstruction:DigitalPageReconstruction):str
   ).join('\n');
 }
 
-function clusterRows(elements:ReconstructionElement[],canonicalHeight:number):ReconstructionElement[][]{
-  const ordered=[...elements].sort((a,b)=>centerY(a.box)-centerY(b.box)||a.box.x-b.box.x);
+function clusterRows(
+  elements:ReconstructionElement[],
+  canonicalHeight:number,
+  pageSlope:number
+):ReconstructionElement[][]{
+  const correctedY=(element:ReconstructionElement)=>centerY(element.box)-pageSlope*centerX(element.box);
+  const ordered=[...elements].sort((a,b)=>correctedY(a)-correctedY(b)||a.box.x-b.box.x);
   const rows:ReconstructionElement[][]=[];
-  const tolerance=Math.max(6,canonicalHeight*.82);
+  const tolerance=Math.max(5,canonicalHeight*.66);
 
   for(const element of ordered){
-    const cy=centerY(element.box);
+    const cy=correctedY(element);
     let best:ReconstructionElement[]|undefined;
     let bestDistance=Infinity;
     for(const row of rows){
-      const rowCenter=median(row.map(item=>centerY(item.box)));
+      const rowCenter=median(row.map(correctedY));
       const distance=Math.abs(cy-rowCenter);
       if(distance<=tolerance&&distance<bestDistance){
         best=row; bestDistance=distance;
@@ -82,6 +88,31 @@ function clusterRows(elements:ReconstructionElement[],canonicalHeight:number):Re
     else rows.push([element]);
   }
   return rows;
+}
+
+function estimatePageTextSlope(
+  elements:ReconstructionElement[],
+  pageWidth:number,
+  canonicalHeight:number
+):number{
+  const byLineId=new Map<string,ReconstructionElement[]>();
+  for(const element of elements){
+    if(!element.lineId||element.lineId==='unassigned')continue;
+    const row=byLineId.get(element.lineId)??[];
+    row.push(element);byLineId.set(element.lineId,row);
+  }
+
+  const slopes:number[]=[];
+  for(const row of byLineId.values()){
+    if(row.length<2)continue;
+    const sorted=[...row].sort((a,b)=>centerX(a.box)-centerX(b.box));
+    const first=sorted[0]!,last=sorted.at(-1)!;
+    const dx=centerX(last.box)-centerX(first.box);
+    if(dx<Math.max(pageWidth*.08,canonicalHeight*4))continue;
+    const slope=(centerY(last.box)-centerY(first.box))/dx;
+    if(Number.isFinite(slope)&&Math.abs(slope)<=.18)slopes.push(slope);
+  }
+  return slopes.length>=2?median(slopes):0;
 }
 
 function buildLine(
@@ -189,7 +220,7 @@ function statusFromConfidence(confidence:number|null,text:string):Reconstruction
   if(normalized<.75)return'uncertain';
   return'reliable';
 }
-function centerY(box:Box){return box.y+box.height/2;}
+function centerX(box:Box){return box.x+box.width/2;}\nfunction centerY(box:Box){return box.y+box.height/2;}
 function robustMedian(values:number[]):number{
   if(values.length<5)return median(values);
   const sorted=[...values].sort((a,b)=>a-b);

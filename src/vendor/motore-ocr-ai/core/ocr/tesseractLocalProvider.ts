@@ -130,6 +130,16 @@ export class TesseractLocalProvider implements OcrProvider {
         }
       }
 
+      const canonicalVisualCanvas=geometry.canvas;
+      const canonicalRaster={
+        dataUrl:encodeCanonicalRaster(canonicalVisualCanvas),
+        width:canonicalVisualCanvas.width,
+        height:canonicalVisualCanvas.height,
+        mimeType:'image/webp',
+        source:(sourceFallback||transformFallback?'source-fallback':'geometry-normalized') as const,
+        ocrCleanupApplied:cleanupAccepted
+      };
+
       this.evidenceCanvas.set(original,ocrSource);
       const preparedInput={...input,width:ocrSource.width,height:ocrSource.height,image:ocrSource};
       const profile=profileConfig(this.options.performanceProfile??'med');
@@ -214,6 +224,7 @@ export class TesseractLocalProvider implements OcrProvider {
         lines:hierarchy.lines,
         blocks:hierarchy.blocks,
         quality:quality as QualityReport,
+        canonicalRaster,
         photoScan:scan.metadata,
         geometryCorrection:geometry.metadata,
         detectedRegions:autoRegions,
@@ -708,6 +719,14 @@ function profileConfig(profile:'min'|'med'|'max'){
     :{maxDimension:2400,variantCount:4,retryLimit:6};
 }
 function median(values:number[]){if(!values.length)return 0;const s=[...values].sort((a,b)=>a-b),m=Math.floor(s.length/2);return s.length%2?s[m]!:((s[m-1]??0)+(s[m]??0))/2;}
+function encodeCanonicalRaster(canvas:HTMLCanvasElement):string{
+  try{
+    const webp=canvas.toDataURL('image/webp',.94);
+    if(webp.startsWith('data:image/webp'))return webp;
+  }catch{}
+  return canvas.toDataURL('image/png');
+}
+
 function clonePage(page:OcrPage):OcrPage{return{
   ...page,tokens:page.tokens.map(t=>({...t,box:{...t.box},characters:t.characters?.map(ch=>({...ch,box:{...ch.box}})),alternatives:t.alternatives?[...t.alternatives]:undefined})),
   lines:page.lines?.map(line=>({...line,box:{...line.box},normalizedBox:{...line.normalizedBox},tokenIds:[...line.tokenIds]})),

@@ -236,6 +236,7 @@ class OCRService {
       decisions?: any[];
       receiptItemBlocks?: any[];
       digitalReconstruction?: any;
+      canonicalRaster?: any;
     }> = [];
 
     try {

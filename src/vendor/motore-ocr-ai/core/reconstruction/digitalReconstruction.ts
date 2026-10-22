@@ -302,10 +302,14 @@ function deriveTokenBox(token:OcrToken,pageWidth:number,pageHeight:number):Box{
   const reliable=baselineReliable.length>=2?baselineReliable:heightReliable;
 
   const x=Math.min(...reliable.map(character=>character.box.x));
-  const y=Math.min(...reliable.map(character=>character.box.y));
+  const rawY=Math.min(...reliable.map(character=>character.box.y));
   const right=Math.max(...reliable.map(character=>character.box.x+character.box.width));
-  const bottom=Math.max(...reliable.map(character=>character.box.y+character.box.height));
-  const derived={x,y,width:Math.max(1,right-x),height:Math.max(1,bottom-y)};
+  const rawBottom=Math.max(...reliable.map(character=>character.box.y+character.box.height));
+  const rawHeight=Math.max(1,rawBottom-rawY);
+  const normalizedHeight=Math.min(rawHeight,charHeight*1.32);
+  const center=median(reliable.map(character=>centerY(character.box)));
+  const y=center-normalizedHeight/2;
+  const derived={x,y,width:Math.max(1,right-x),height:Math.max(1,normalizedHeight)};
 
   const wordHeight=token.box.height;
   const wordWidth=token.box.width;

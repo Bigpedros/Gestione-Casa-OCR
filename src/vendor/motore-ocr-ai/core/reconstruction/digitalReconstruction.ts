@@ -220,7 +220,8 @@ function statusFromConfidence(confidence:number|null,text:string):Reconstruction
   if(normalized<.75)return'uncertain';
   return'reliable';
 }
-function centerX(box:Box){return box.x+box.width/2;}\nfunction centerY(box:Box){return box.y+box.height/2;}
+function centerX(box:Box){return box.x+box.width/2;}
+function centerY(box:Box){return box.y+box.height/2;}
 function robustMedian(values:number[]):number{
   if(values.length<5)return median(values);
   const sorted=[...values].sort((a,b)=>a-b);

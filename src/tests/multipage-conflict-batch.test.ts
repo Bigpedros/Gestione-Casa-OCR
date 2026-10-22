@@ -20,14 +20,18 @@ describe('multipage acquisition conflict recovery', () => {
     expect(source).not.toContain('handleFilesIngest([fileToAcquire])');
   });
 
-  it('keeps a partially acquired session so replay is idempotent by file hash', () => {
+  it('preflights the whole batch before session creation and keeps replay idempotent by file hash', () => {
     const source = fs.readFileSync(
       path.resolve('src/features/attachments/ScanReceiptModal.tsx'),
       'utf8'
     );
 
-    expect(source).toContain('temporarySessionIsEmpty');
-    expect(source).toContain('setCurrentSession(session)');
+    const preflightIndex = source.indexOf('// PRE-FLIGHT: calcola gli hash');
+    const createSessionIndex = source.indexOf('session = await documentSessionRepository.create({');
+
+    expect(preflightIndex).toBeGreaterThan(-1);
+    expect(createSessionIndex).toBeGreaterThan(preflightIndex);
+    expect(source).toContain('findActiveSessionByFileHash(prepared.fileHash)');
     expect(source).toContain('documentPageSegmentRepository.getByHash(session.id, fileHash)');
     expect(source).toContain('duplicateCount++');
   });

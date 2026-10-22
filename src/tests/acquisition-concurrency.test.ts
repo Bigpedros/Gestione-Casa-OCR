@@ -29,6 +29,12 @@ describe('acquisition concurrency and conflict gating', () => {
     expect(source).toContain("!conflictingSession && step === 'summary' && currentSession");
   });
 
+  it('snapshots FileList before reset so picker selections are not lost', () => {
+    expect(source.match(/const selected = Array\.from\(e\.target\.files \?\? \[\]\)/g)?.length)
+      .toBeGreaterThanOrEqual(4);
+    expect(source).not.toContain('const selected = e.target.files;');
+  });
+
   it('resets file input values and disables source buttons during ingest', () => {
     expect(source.match(/e\.currentTarget\.value = ''/g)?.length).toBeGreaterThanOrEqual(4);
     expect(source.match(/disabled=\{isLoading\}/g)?.length).toBeGreaterThanOrEqual(3);

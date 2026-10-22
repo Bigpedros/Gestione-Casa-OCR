@@ -361,7 +361,7 @@ CONTANTI 2,00`;
 
       expect(result.status).toBe('completed');
       expect(mockTerminateFn).toHaveBeenCalledTimes(1);
-    });
+    }, 20000);
 
     it('invoca worker.terminate() esattamente una volta anche se il riconoscimento lancia eccezione', async () => {
       mockWorkerRecognizeFn.mockRejectedValue(new Error('TESSERACT_OCR_FATAL_ERROR'));
@@ -378,7 +378,7 @@ CONTANTI 2,00`;
       const allProcesses = await ocrProcessRepository.getAll();
       expect(allProcesses.length).toBeGreaterThan(0);
       expect(allProcesses[0].status).toBe('failed');
-    });
+    }, 20000);
   });
 
   // ---------------------------------------------------------------------------

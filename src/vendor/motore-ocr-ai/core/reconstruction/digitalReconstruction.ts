@@ -2,65 +2,48 @@ import type { Box, OcrPage, OcrToken } from '../../contracts.js';
 
 export type ReconstructionStatus='reliable'|'uncertain'|'error'|'unreadable';
 export interface ReconstructionElement{
-  id:string;
-  lineId:string;
-  box:Box;
-  originalText:string;
-  normalizedText:string;
-  text:string;
-  confidence:number|null;
-  status:ReconstructionStatus;
+  id:string; lineId:string; box:Box; originalText:string; normalizedText:string;
+  text:string; confidence:number|null; status:ReconstructionStatus;
 }
 export interface ReconstructionLineSegment{
-  id:string;
-  box:Box;
-  elementIds:string[];
-  alignment:'left'|'center'|'right';
+  id:string; box:Box; elementIds:string[]; alignment:'left'|'center'|'right';
 }
 export interface ReconstructionLine{
-  id:string;
-  box:Box;
-  baselineY:number;
-  fontSize:number;
-  segments:ReconstructionLineSegment[];
+  id:string; box:Box; baselineY:number; fontSize:number; segments:ReconstructionLineSegment[];
 }
 export interface DigitalPageReconstruction{
-  schemaVersion:'1.0';
-  pageNumber:number;
-  width:number;
-  height:number;
-  elements:ReconstructionElement[];
-  lines:ReconstructionLine[];
+  schemaVersion:'1.1'; pageNumber:number; width:number; height:number;
+  elements:ReconstructionElement[]; lines:ReconstructionLine[];
 }
 
 /**
- * Donazione MOTORE -> Gestione Casa della ricostruzione geometrica general-purpose.
- * Usa esclusivamente token OCR + coordinate fisiche: nessuna dipendenza dal parser
- * semantico degli scontrini o da layout/merchant specifici.
+ * Ricostruzione geometrica general-purpose.
+ * Fail-safe rispetto a box OCR patologiche: la tipografia deriva dalla statistica
+ * dell'intera pagina e le righe vengono ricostruite per prossimità geometrica,
+ * senza dipendere dal parser semantico o da layout specifici.
  */
 export function buildDigitalPageReconstruction(page:OcrPage):DigitalPageReconstruction{
-  const elements=page.tokens
-    .filter(token=>token.text.trim())
+  const rawElements=page.tokens
+    .filter(token=>token.text.trim()&&isRenderableToken(token.text))
     .map(fromToken);
-  const byId=new Map(elements.map(element=>[element.id,element]));
-  const grouped=new Map<string,ReconstructionElement[]>();
-  for(const element of elements){
-    const list=grouped.get(element.lineId)??[];
-    list.push(element);
-    grouped.set(element.lineId,list);
-  }
 
-  const lines=[...grouped.entries()].map(([lineId,lineElements])=>
-    buildLine(lineId,lineElements.sort((a,b)=>a.box.x-b.box.x),page.width,page.height)
+  const canonicalHeight=robustMedian(
+    rawElements.map(element=>element.box.height)
+      .filter(value=>Number.isFinite(value)&&value>2&&value<Math.max(20,page.height*.12))
+  )||Math.max(10,page.height*.018);
+
+  const elements=rawElements.map(element=>({
+    ...element,
+    box:sanitizeBox(element.box,element.text,canonicalHeight,page.width,page.height)
+  }));
+
+  const rows=clusterRows(elements,canonicalHeight);
+  const lines=rows.map((row,index)=>
+    buildLine(`geo-line-${index}`,row.sort((a,b)=>a.box.x-b.box.x),page.width,page.height,canonicalHeight)
   ).sort((a,b)=>a.box.y-b.box.y||a.box.x-b.box.x);
 
-  // Invariante: ogni id referenziato dai segmenti deve esistere.
-  for(const line of lines)for(const segment of line.segments){
-    segment.elementIds=segment.elementIds.filter(id=>byId.has(id));
-  }
-
   return{
-    schemaVersion:'1.0',
+    schemaVersion:'1.1',
     pageNumber:page.pageNumber,
     width:page.width,
     height:page.height,
@@ -73,33 +56,52 @@ export function getDigitalPageText(reconstruction:DigitalPageReconstruction):str
   const byId=new Map(reconstruction.elements.map(element=>[element.id,element]));
   return reconstruction.lines.map(line=>
     line.segments
-      .slice()
-      .sort((a,b)=>a.box.x-b.box.x)
+      .slice().sort((a,b)=>a.box.x-b.box.x)
       .map(segment=>segment.elementIds.map(id=>byId.get(id)?.text??'').filter(Boolean).join(' '))
-      .filter(Boolean)
-      .join('   ')
+      .filter(Boolean).join('   ')
   ).join('\n');
+}
+
+function clusterRows(elements:ReconstructionElement[],canonicalHeight:number):ReconstructionElement[][]{
+  const ordered=[...elements].sort((a,b)=>centerY(a.box)-centerY(b.box)||a.box.x-b.box.x);
+  const rows:ReconstructionElement[][]=[];
+  const tolerance=Math.max(6,canonicalHeight*.82);
+
+  for(const element of ordered){
+    const cy=centerY(element.box);
+    let best:ReconstructionElement[]|undefined;
+    let bestDistance=Infinity;
+    for(const row of rows){
+      const rowCenter=median(row.map(item=>centerY(item.box)));
+      const distance=Math.abs(cy-rowCenter);
+      if(distance<=tolerance&&distance<bestDistance){
+        best=row; bestDistance=distance;
+      }
+    }
+    if(best)best.push(element);
+    else rows.push([element]);
+  }
+  return rows;
 }
 
 function buildLine(
   id:string,
   elements:ReconstructionElement[],
   pageWidth:number,
-  pageHeight:number
+  pageHeight:number,
+  canonicalHeight:number
 ):ReconstructionLine{
-  const allHeights=elements.map(element=>element.box.height).filter(value=>value>2&&Number.isFinite(value));
-  const localHeight=median(allHeights)||Math.max(10,pageHeight*.018);
-  const centerY=median(elements.map(element=>element.box.y+element.box.height/2));
-  const lineHeight=clamp(localHeight,6,Math.max(6,pageHeight*.08));
-  const y=clamp(centerY-lineHeight/2,0,Math.max(0,pageHeight-lineHeight));
+  const center=median(elements.map(element=>centerY(element.box)));
+  const lineHeight=clamp(canonicalHeight,6,Math.max(6,pageHeight*.04));
+  const y=clamp(center-lineHeight/2,0,Math.max(0,pageHeight-lineHeight));
   const x=Math.max(0,Math.min(...elements.map(element=>element.box.x)));
   const right=Math.min(pageWidth,Math.max(...elements.map(element=>element.box.x+element.box.width)));
   return{
     id,
     box:{x,y,width:Math.max(1,right-x),height:lineHeight},
     baselineY:y+lineHeight*.78,
-    fontSize:clamp(lineHeight*.68,5,lineHeight*.92),
-    segments:buildSegments(id,elements,lineHeight,pageWidth,y)
+    fontSize:clamp(canonicalHeight*.68,5,Math.max(6,canonicalHeight*.9)),
+    segments:buildSegments(id,elements,lineHeight,pageWidth,y,canonicalHeight)
   };
 }
 
@@ -108,18 +110,17 @@ function buildSegments(
   elements:ReconstructionElement[],
   lineHeight:number,
   pageWidth:number,
-  lineY:number
+  lineY:number,
+  canonicalHeight:number
 ):ReconstructionLineSegment[]{
   const groups:ReconstructionElement[][]=[];
   let current:ReconstructionElement[]=[];
-  const gapThreshold=Math.max(lineHeight*.9,pageWidth*.035);
+  const gapThreshold=Math.max(canonicalHeight*1.25,pageWidth*.028);
+
   for(const element of elements){
     const previous=current.at(-1);
     const gap=previous?element.box.x-(previous.box.x+previous.box.width):0;
-    if(previous&&gap>gapThreshold){
-      groups.push(current);
-      current=[];
-    }
+    if(previous&&gap>gapThreshold){groups.push(current);current=[];}
     current.push(element);
   }
   if(current.length)groups.push(current);
@@ -138,6 +139,27 @@ function buildSegments(
   });
 }
 
+function sanitizeBox(box:Box,text:string,canonicalHeight:number,pageWidth:number,pageHeight:number):Box{
+  const originalCenterX=box.x+box.width/2;
+  const originalCenterY=box.y+box.height/2;
+  const height=box.height>canonicalHeight*1.8||box.height<canonicalHeight*.35
+    ? canonicalHeight
+    : box.height;
+
+  const compactLength=Math.max(1,[...text].length);
+  const expectedWidth=Math.max(canonicalHeight*.45,compactLength*canonicalHeight*.58);
+  const width=box.width>expectedWidth*2.4
+    ? Math.min(box.width,expectedWidth*1.35)
+    : box.width;
+
+  return{
+    x:clamp(originalCenterX-width/2,0,Math.max(0,pageWidth-width)),
+    y:clamp(originalCenterY-height/2,0,Math.max(0,pageHeight-height)),
+    width:Math.max(1,width),
+    height:Math.max(1,height)
+  };
+}
+
 function fromToken(token:OcrToken):ReconstructionElement{
   const text=(token.normalizedText??token.text).trim();
   const confidence=token.confidence;
@@ -153,6 +175,12 @@ function fromToken(token:OcrToken):ReconstructionElement{
   };
 }
 
+function isRenderableToken(text:string):boolean{
+  const trimmed=text.trim();
+  if(!trimmed)return false;
+  if(/[\p{L}\p{N}€$%]/u.test(trimmed))return true;
+  return !/^[|_~^"'°·.\\-]+$/.test(trimmed);
+}
 function statusFromConfidence(confidence:number|null,text:string):ReconstructionStatus{
   if(!text)return'unreadable';
   if(confidence===null)return'uncertain';
@@ -160,6 +188,13 @@ function statusFromConfidence(confidence:number|null,text:string):Reconstruction
   if(normalized<.35)return'error';
   if(normalized<.75)return'uncertain';
   return'reliable';
+}
+function centerY(box:Box){return box.y+box.height/2;}
+function robustMedian(values:number[]):number{
+  if(values.length<5)return median(values);
+  const sorted=[...values].sort((a,b)=>a-b);
+  const trim=Math.floor(sorted.length*.15);
+  return median(sorted.slice(trim,sorted.length-trim));
 }
 function median(values:number[]):number{
   if(!values.length)return 0;

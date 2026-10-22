@@ -14,7 +14,6 @@ import {
   FileText,
   Sparkles,
   Package,
-  Tag,
   ChevronLeft,
   ChevronRight,
   RefreshCw,
@@ -23,7 +22,6 @@ import {
   Copy,
   Download,
   X,
-  Edit3,
   ChevronDown,
   ChevronUp,
 } from 'lucide-react';
@@ -1233,19 +1231,6 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
 
     // 4. Otherwise => NORMAL
     return 'normal';
-  };
-
-  const getFieldHighlightClass = (state: 'normal' | 'yellow' | 'red' | 'green'): string => {
-    switch (state) {
-      case 'green':
-        return 'text-emerald-700 dark:text-emerald-300 font-semibold bg-emerald-50 dark:bg-emerald-950/40 px-1 rounded';
-      case 'red':
-        return 'text-rose-700 dark:text-rose-300 font-semibold bg-rose-50 dark:bg-rose-950/40 px-1 rounded underline decoration-rose-500';
-      case 'yellow':
-        return 'text-amber-700 dark:text-amber-300 font-semibold bg-amber-50 dark:bg-amber-950/40 px-1 rounded';
-      default:
-        return 'text-slate-900 dark:text-slate-100';
-    }
   };
 
   const activeSegment = segments[activeSegmentIndex];

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildDigitalPageReconstruction,
+  bindDigitalReconstructionSemantics,
   getDigitalPageText,
 } from '../vendor/motore-ocr-ai/core/reconstruction/digitalReconstruction';
 import type { OcrPage, OcrToken } from '../vendor/motore-ocr-ai/contracts';
@@ -169,6 +170,16 @@ describe('donazione MOTORE - ricostruzione geometrica',()=>{
     const reconstruction=buildDigitalPageReconstruction(p);
     const firstText=getDigitalPageText(reconstruction).split('\n')[0]!;
     expect(firstText).toContain('PANE CASERECCIO');
+  });
+
+  it('collega in modo generico una riga geometrica alla sua entità semantica',()=>{
+    const reconstruction=buildDigitalPageReconstruction(page());
+    const bindings=bindDigitalReconstructionSemantics(reconstruction,[
+      {id:'item-pane',text:'PANE CASERECCIO',amount:2.60},
+      {id:'total',text:'TOTALE',amount:2.60},
+    ]);
+    expect(bindings.some(binding=>binding.targetId==='item-pane')).toBe(true);
+    expect(bindings.some(binding=>binding.targetId==='total')).toBe(true);
   });
 
   it('ricostruisce il testo in ordine visuale senza passare dal parser contabile',()=>{

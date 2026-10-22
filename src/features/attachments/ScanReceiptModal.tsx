@@ -240,7 +240,6 @@ export const ScanReceiptModal: React.FC<ScanReceiptModalProps> = ({
     } catch (err: any) {
       setErrorMsg(err?.message || 'Impossibile riprendere la bozza selezionata');
     } finally {
-      ingestLockRef.current = false;
       setIsLoading(false);
     }
   };
@@ -541,6 +540,7 @@ export const ScanReceiptModal: React.FC<ScanReceiptModalProps> = ({
     } catch (err: any) {
       setErrorMsg(err?.message || 'Errore durante l\'acquisizione del file');
     } finally {
+      ingestLockRef.current = false;
       setIsLoading(false);
     }
   };

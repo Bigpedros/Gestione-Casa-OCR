@@ -12,7 +12,7 @@ export interface ReconstructionLine{
   id:string; box:Box; baselineY:number; fontSize:number; segments:ReconstructionLineSegment[];
 }
 export interface DigitalPageReconstruction{
-  schemaVersion:'1.5'; pageNumber:number; width:number; height:number;
+  schemaVersion:'1.6'; pageNumber:number; width:number; height:number;
   elements:ReconstructionElement[]; lines:ReconstructionLine[];
 }
 
@@ -23,9 +23,10 @@ export interface DigitalPageReconstruction{
  * senza dipendere dal parser semantico o da layout specifici.
  */
 export function buildDigitalPageReconstruction(page:OcrPage):DigitalPageReconstruction{
+  const pageCharacterHeight=estimatePageCharacterHeight(page.tokens,page.height);
   const rawElements=page.tokens
     .filter(token=>token.text.trim()&&isRenderableToken(token.text))
-    .map(token=>fromToken(token,page.width,page.height));
+    .map(token=>fromToken(token,page.width,page.height,pageCharacterHeight));
 
   const canonicalHeight=robustMedian(
     rawElements.map(element=>element.box.height)
@@ -328,13 +329,13 @@ function sanitizeBox(box:Box,text:string,canonicalHeight:number,pageWidth:number
   };
 }
 
-function fromToken(token:OcrToken,pageWidth:number,pageHeight:number):ReconstructionElement{
+function fromToken(token:OcrToken,pageWidth:number,pageHeight:number,pageCharacterHeight:number):ReconstructionElement{
   const text=(token.normalizedText??token.text).trim();
   const confidence=token.confidence;
   return{
     id:token.id,
     lineId:token.lineId,
-    box:deriveTokenBox(token,pageWidth,pageHeight),
+    box:deriveTokenBox(token,pageWidth,pageHeight,pageCharacterHeight),
     originalText:token.rawText??token.text,
     normalizedText:token.normalizedText??token.text,
     text,
@@ -343,17 +344,20 @@ function fromToken(token:OcrToken,pageWidth:number,pageHeight:number):Reconstruc
   };
 }
 
-function deriveTokenBox(token:OcrToken,pageWidth:number,pageHeight:number):Box{
+function deriveTokenBox(token:OcrToken,pageWidth:number,pageHeight:number,pageCharacterHeight:number):Box{
   const characters=(token.characters??[])
     .filter(character=>character.text.trim()&&Number.isFinite(character.box.x)&&Number.isFinite(character.box.y))
     .filter(character=>character.box.width>0&&character.box.height>0);
 
-  if(characters.length<2)return{...token.box};
+  if(characters.length<2)return repairShortPathologicalToken(token,pageWidth,pageHeight,pageCharacterHeight);
 
   const bodyCharacters=characters.filter(character=>/[\p{L}\p{N}]/u.test(character.text));
   const heightSource=bodyCharacters.length>=2?bodyCharacters:characters;
   const charHeight=selectDominantCharacterHeight(heightSource.map(character=>character.box.height));
-  if(!charHeight)return{...token.box};
+  if(!charHeight)return repairShortPathologicalToken(token,pageWidth,pageHeight,pageCharacterHeight);
+  if(charHeight>pageCharacterHeight*1.75||charHeight<pageCharacterHeight*.45){
+    return repairShortPathologicalToken(token,pageWidth,pageHeight,pageCharacterHeight);
+  }
 
   const heightReliable=characters.filter(character=>{
     const h=character.box.height;
@@ -361,7 +365,7 @@ function deriveTokenBox(token:OcrToken,pageWidth:number,pageHeight:number):Box{
     if(punctuation)return h>=Math.max(2,charHeight*.18)&&h<=charHeight*1.45;
     return h>=charHeight*.62&&h<=charHeight*1.42;
   });
-  if(heightReliable.length<2)return{...token.box};
+  if(heightReliable.length<2)return repairShortPathologicalToken(token,pageWidth,pageHeight,pageCharacterHeight);
 
   const baselineModel=estimateCharacterBaseline(heightReliable,charHeight);
   const baselineReliable=heightReliable.filter(character=>{
@@ -397,6 +401,50 @@ function deriveTokenBox(token:OcrToken,pageWidth:number,pageHeight:number):Box{
     width:Math.min(pageWidth,derived.width),
     height:Math.min(pageHeight,derived.height)
   };
+}
+
+function estimatePageCharacterHeight(tokens:OcrToken[],pageHeight:number):number{
+  const heights=tokens.flatMap(token=>
+    (token.characters??[])
+      .filter(character=>/[\p{L}\p{N}]/u.test(character.text))
+      .map(character=>character.box.height)
+  ).filter(value=>Number.isFinite(value)&&value>=4&&value<=Math.max(80,pageHeight*.08));
+  if(!heights.length)return Math.max(10,pageHeight*.018);
+
+  const sorted=[...heights].sort((a,b)=>a-b);
+  const lower=sorted.filter(value=>value<=median(sorted)*1.45);
+  return robustMedian(lower.length>=5?lower:sorted)||Math.max(10,pageHeight*.018);
+}
+
+function repairShortPathologicalToken(
+  token:OcrToken,
+  pageWidth:number,
+  pageHeight:number,
+  pageCharacterHeight:number
+):Box{
+  const text=(token.normalizedText??token.text).trim();
+  const length=Math.max(1,[...text].length);
+  const expectedHeight=clamp(pageCharacterHeight,5,Math.max(6,pageHeight*.05));
+  const expectedWidth=Math.max(expectedHeight*.45,length*expectedHeight*.62);
+  const wordHeight=token.box.height;
+  const wordWidth=token.box.width;
+  const characters=token.characters??[];
+  const charWidths=characters.map(character=>character.box.width).filter(value=>Number.isFinite(value)&&value>0);
+  const absurdCharacterWidth=charWidths.some(width=>width>expectedHeight*2.2);
+  const pathological=
+    wordHeight>expectedHeight*1.8||
+    wordHeight<expectedHeight*.35||
+    wordWidth>expectedWidth*2.2||
+    absurdCharacterWidth;
+
+  if(!pathological)return{...token.box};
+
+  const width=Math.min(pageWidth,Math.min(wordWidth,expectedWidth*1.25));
+  const height=Math.min(pageHeight,expectedHeight);
+  const x=clamp(token.box.x,0,Math.max(0,pageWidth-width));
+  const centerYOriginal=centerY(token.box);
+  const y=clamp(centerYOriginal-height/2,0,Math.max(0,pageHeight-height));
+  return{x,y,width:Math.max(1,width),height:Math.max(1,height)};
 }
 
 function selectDominantCharacterHeight(heights:number[]):number{

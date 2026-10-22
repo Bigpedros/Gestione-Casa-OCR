@@ -65,6 +65,23 @@ describe('donazione MOTORE - ricostruzione geometrica',()=>{
     expect(Math.max(...reconstruction.lines.map(line=>line.fontSize))).toBeLessThan(normalHeight);
   });
 
+  it('riunisce una riga inclinata usando la baseline compensata',()=>{
+    const p=page();
+    p.tokens=[
+      token('a','PRODOTTO','same',100,200,120),
+      token('b','22,00%','same',560,226,90),
+      token('c','2,60','same',830,242,60),
+      token('d','RIGA2','row2',100,270,100),
+      token('e','1,80','row2',830,312,60),
+    ];
+    const reconstruction=buildDigitalPageReconstruction(p);
+    const firstText=getDigitalPageText(reconstruction).split('\n')[0]!;
+    expect(firstText).toContain('PRODOTTO');
+    expect(firstText).toContain('22,00%');
+    expect(firstText).toContain('2,60');
+    expect(reconstruction.lines).toHaveLength(2);
+  });
+
   it('ricompone righe per prossimità geometrica anche con lineId OCR errati',()=>{
     const p=page();
     p.tokens[0]!.lineId='wrong-a';

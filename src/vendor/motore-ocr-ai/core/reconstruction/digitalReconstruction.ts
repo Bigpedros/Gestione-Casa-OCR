@@ -83,7 +83,7 @@ function clusterRows(
       const predictedY=predictLocalRowY(row,x,pageSlope,canonicalHeight);
       const distance=Math.abs(y-predictedY);
       const sameLineHint=row.some(item=>item.lineId===element.lineId);
-      const xs=row.map(item=>centerX(item));
+      const xs=row.map(item=>centerX(item.box));
       const minX=Math.min(...xs);
       const maxX=Math.max(...xs);
       const outsideDistance=x<minX?minX-x:x>maxX?x-maxX:0;

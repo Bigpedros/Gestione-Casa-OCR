@@ -12,7 +12,7 @@ export interface ReconstructionLine{
   id:string; box:Box; baselineY:number; fontSize:number; segments:ReconstructionLineSegment[];
 }
 export interface DigitalPageReconstruction{
-  schemaVersion:'1.3'; pageNumber:number; width:number; height:number;
+  schemaVersion:'1.4'; pageNumber:number; width:number; height:number;
   elements:ReconstructionElement[]; lines:ReconstructionLine[];
 }
 
@@ -25,7 +25,7 @@ export interface DigitalPageReconstruction{
 export function buildDigitalPageReconstruction(page:OcrPage):DigitalPageReconstruction{
   const rawElements=page.tokens
     .filter(token=>token.text.trim()&&isRenderableToken(token.text))
-    .map(fromToken);
+    .map(token=>fromToken(token,page.width,page.height));
 
   const canonicalHeight=robustMedian(
     rawElements.map(element=>element.box.height)
@@ -44,7 +44,7 @@ export function buildDigitalPageReconstruction(page:OcrPage):DigitalPageReconstr
   ).sort((a,b)=>a.box.y-b.box.y||a.box.x-b.box.x);
 
   return{
-    schemaVersion:'1.3',
+    schemaVersion:'1.4',
     pageNumber:page.pageNumber,
     width:page.width,
     height:page.height,
@@ -256,18 +256,55 @@ function sanitizeBox(box:Box,text:string,canonicalHeight:number,pageWidth:number
   };
 }
 
-function fromToken(token:OcrToken):ReconstructionElement{
+function fromToken(token:OcrToken,pageWidth:number,pageHeight:number):ReconstructionElement{
   const text=(token.normalizedText??token.text).trim();
   const confidence=token.confidence;
   return{
     id:token.id,
     lineId:token.lineId,
-    box:{...token.box},
+    box:deriveTokenBox(token,pageWidth,pageHeight),
     originalText:token.rawText??token.text,
     normalizedText:token.normalizedText??token.text,
     text,
     confidence,
     status:statusFromConfidence(confidence,text)
+  };
+}
+
+function deriveTokenBox(token:OcrToken,pageWidth:number,pageHeight:number):Box{
+  const characters=(token.characters??[])
+    .filter(character=>character.text.trim()&&Number.isFinite(character.box.x)&&Number.isFinite(character.box.y))
+    .filter(character=>character.box.width>0&&character.box.height>0);
+
+  if(characters.length<2)return{...token.box};
+
+  const heights=characters.map(character=>character.box.height);
+  const charHeight=robustMedian(heights);
+  const reliable=characters.filter(character=>{
+    const h=character.box.height;
+    return h>=charHeight*.55&&h<=charHeight*1.75;
+  });
+  if(reliable.length<2)return{...token.box};
+
+  const x=Math.min(...reliable.map(character=>character.box.x));
+  const y=Math.min(...reliable.map(character=>character.box.y));
+  const right=Math.max(...reliable.map(character=>character.box.x+character.box.width));
+  const bottom=Math.max(...reliable.map(character=>character.box.y+character.box.height));
+  const derived={x,y,width:Math.max(1,right-x),height:Math.max(1,bottom-y)};
+
+  const wordHeight=token.box.height;
+  const wordWidth=token.box.width;
+  const pathological=
+    wordHeight>derived.height*1.45||
+    wordWidth>derived.width*1.6||
+    Math.abs(centerY(token.box)-centerY(derived))>Math.max(6,charHeight*.55);
+
+  if(!pathological)return{...token.box};
+  return{
+    x:clamp(derived.x,0,Math.max(0,pageWidth-derived.width)),
+    y:clamp(derived.y,0,Math.max(0,pageHeight-derived.height)),
+    width:Math.min(pageWidth,derived.width),
+    height:Math.min(pageHeight,derived.height)
   };
 }
 

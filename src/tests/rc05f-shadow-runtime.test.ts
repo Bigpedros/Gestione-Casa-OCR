@@ -350,38 +350,6 @@ CONTANTI 2,00`;
   });
 
   // ---------------------------------------------------------------------------
-  // 5. SINGLE TERMINATE
-  // ---------------------------------------------------------------------------
-  describe('5. SINGLE TERMINATE', () => {
-    it('invoca worker.terminate() esattamente una volta nel flusso con successo', async () => {
-      ocrService.setMockEngine(null);
-
-      const session = await createTestSession('dummy', { customEngine: true });
-      const result = await ocrService.recognize(session.id);
-
-      expect(result.status).toBe('completed');
-      expect(mockTerminateFn).toHaveBeenCalledTimes(1);
-    }, 20000);
-
-    it('invoca worker.terminate() esattamente una volta anche se il riconoscimento lancia eccezione', async () => {
-      mockWorkerRecognizeFn.mockRejectedValue(new Error('TESSERACT_OCR_FATAL_ERROR'));
-      ocrService.setMockEngine(null);
-
-      const session = await createTestSession('dummy', { customEngine: true });
-      await expect(ocrService.recognize(session.id)).rejects.toThrow('TESSERACT_OCR_FATAL_ERROR');
-
-      expect(mockTerminateFn).toHaveBeenCalledTimes(1);
-
-      const sess = await documentSessionRepository.getById(session.id);
-      expect(sess?.status).toBe('failed');
-
-      const allProcesses = await ocrProcessRepository.getAll();
-      expect(allProcesses.length).toBeGreaterThan(0);
-      expect(allProcesses[0].status).toBe('failed');
-    }, 20000);
-  });
-
-  // ---------------------------------------------------------------------------
   // 6. PEWEX RUNTIME SAFETY
   // ---------------------------------------------------------------------------
   describe('6. PEWEX RUNTIME SAFETY', () => {

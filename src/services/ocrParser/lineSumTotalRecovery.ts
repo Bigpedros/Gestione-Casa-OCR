@@ -37,6 +37,13 @@ export function applySingleLineTotalRecovery(draft: ParsedReceiptDraft): boolean
   if (draft.documentCategory !== 'COMMERCIAL_RECEIPT') return false;
 
   if (draft.total.value !== null && draft.total.value > 0) return false;
+
+  // Fail closed when the document explicitly contains a total but OCR could not
+  // read it reliably. In this case the sum of the product lines must not be
+  // promoted to the fiscal total: it may conflict with discounts, other amounts
+  // or the actual payment evidence.
+  if ((draft.total.warnings ?? []).includes('TOTALE_PRESENTE_MA_ILLEGGIBILE')) return false;
+
   if (draft.lines.length !== 1) return false;
 
   const line = draft.lines[0];

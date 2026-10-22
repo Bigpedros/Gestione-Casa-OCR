@@ -1,7 +1,7 @@
 # MOTORE-OCR-AI — integrazione Gestione Casa
 
 Baseline OCR importata da `Bigpedros/MOTORE-OCR-AI` al commit
-`4209daa43b547faf3e887357fc4bc817ff8147b2` (MOTORE `0.5.0-rc.1`, CI/certification green).
+`6d9b6f8300429af0db1d54e7af3a10c1fe96e7ce` (MOTORE `0.5.0-rc.1`, CI/certification green).
 
 ## Perimetro
 
@@ -45,12 +45,16 @@ La logica di parsing scontrino, knowledge base, contabilità e revisione utente 
 
 
 ## Receipt Line Fusion
-La baseline `4209daa43b547faf3e887357fc4bc817ff8147b2` aggiunge fusione receipt a livello di riga tra Tesseract e OCRS/RTen. La fusione usa ancore geometriche/semantiche di riga (IVA/prezzo) e produce evidenze senza mutare il raw OCR.
+La baseline `6d9b6f8300429af0db1d54e7af3a10c1fe96e7ce` aggiunge fusione receipt a livello di riga tra Tesseract e OCRS/RTen. La fusione usa ancore geometriche/semantiche di riga (IVA/prezzo) e produce evidenze senza mutare il raw OCR.
 
 
 ## Receipt Item Block Reconstruction v1
-La baseline `4209daa43b547faf3e887357fc4bc817ff8147b2` ricostruisce voci commerciali indipendentemente dai lineId OCR e dal layout grafico, usando coordinate fisiche, campi Articolo/IVA/Prezzo e relazioni quantità × prezzo unitario = totale. Supporta SINGLE_LINE, DESCRIPTION_CONTINUATION e QTY_UNIT_PREFIX.
+La baseline `6d9b6f8300429af0db1d54e7af3a10c1fe96e7ce` ricostruisce voci commerciali indipendentemente dai lineId OCR e dal layout grafico, usando coordinate fisiche, campi Articolo/IVA/Prezzo e relazioni quantità × prezzo unitario = totale. Supporta SINGLE_LINE, DESCRIPTION_CONTINUATION e QTY_UNIT_PREFIX.
 
 
 ### Headerless receipt inference
-La baseline `4209daa43b547faf3e887357fc4bc817ff8147b2` rende facoltativa l’intestazione DESCRIZIONE/IVA/PREZZO: quando manca, le colonne vengono inferite da ancore IVA e prezzi ripetute, mantenendo il motore indipendente dal layout grafico dello scontrino.
+La baseline `6d9b6f8300429af0db1d54e7af3a10c1fe96e7ce` rende facoltativa l’intestazione DESCRIZIONE/IVA/PREZZO: quando manca, le colonne vengono inferite da ancore IVA e prezzi ripetute, mantenendo il motore indipendente dal layout grafico dello scontrino.
+
+
+## Receipt Item Block Reconstruction v2
+La baseline `6d9b6f8300429af0db1d54e7af3a10c1fe96e7ce` generalizza la ricostruzione delle voci commerciali a fasce verticali ancorate da IVA e prezzo, anche quando i campi cadono su righe OCR diverse. All’interno della stessa fascia confronta Tesseract e Recognizer B e può promuovere la descrizione del secondo lettore quando è meglio supportata, senza cambiare gli importi strutturalmente affidabili. La regola quantità × prezzo unitario resta matematica e generalista, senza logiche specifiche per esercente.

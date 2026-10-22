@@ -4,6 +4,7 @@ import { DualRecognizerOcrProvider, OcrsWasmRecognizerB } from '../vendor/motore
 import { OcrPageOrchestrator } from '../vendor/motore-ocr-ai/core/ocr/orchestrator.js';
 import { DECISION_ENGINE_VERSION } from '../vendor/motore-ocr-ai/core/pipeline/decisionEngine.js';
 import { collectReceiptEvidence } from '../vendor/motore-ocr-ai/core/ocr/receiptFinalizer.js';
+import { buildDigitalPageReconstruction, type DigitalPageReconstruction } from '../vendor/motore-ocr-ai/core/reconstruction/digitalReconstruction.js';
 import type { OcrWordGeometry } from './ocrParser/types';
 
 export const MOTORE_OCR_AI_SOURCE_COMMIT = '6d9b6f8300429af0db1d54e7af3a10c1fe96e7ce';
@@ -32,6 +33,7 @@ export interface MotoreOcrAiPageResult {
   matchingDiagnostics?: any[];
   decisions?: any[];
   receiptItemBlocks?: any[];
+  digitalReconstruction?: DigitalPageReconstruction;
 }
 
 let provider: DualRecognizerOcrProvider | null = null;
@@ -94,6 +96,7 @@ export async function recognizeReceiptPageWithMotoreOcrAi(
   );
   const recognizerBTokens = recognizerB.reduce((sum, entry) => sum + entry.tokens.length, 0);
   const changedDecisionCount = stabilized.decisions.filter((decision) => decision.changed).length;
+  const digitalReconstruction = buildDigitalPageReconstruction(page);
 
   return {
     text: page.text,
@@ -133,6 +136,7 @@ export async function recognizeReceiptPageWithMotoreOcrAi(
     matchingDiagnostics: stabilized.matchingDiagnostics,
     decisions: stabilized.decisions,
     receiptItemBlocks: receiptEvidence.itemBlocks,
+    digitalReconstruction,
   };
 }
 

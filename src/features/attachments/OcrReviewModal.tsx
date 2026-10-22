@@ -1263,6 +1263,79 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
     (activeDigitalReconstruction?.elements || []).map((element: any) => [element.id, element])
   );
 
+
+  const normalizeReconstructionText = (value: string): string =>
+    (value || '')
+      .toUpperCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^A-Z0-9]+/g, ' ')
+      .trim();
+
+  const reconstructionLineText = (line: any): string =>
+    (line?.segments || [])
+      .slice()
+      .sort((a: any, b: any) => a.box.x - b.box.x)
+      .flatMap((segment: any) => segment.elementIds || [])
+      .map((id: string) => reconstructionElementMap.get(id)?.text || '')
+      .filter(Boolean)
+      .join(' ');
+
+  const scoreReconstructionBinding = (geometryText: string, reviewLine: EditableReviewLine): number => {
+    const geometry = normalizeReconstructionText(geometryText);
+    const semantic = normalizeReconstructionText(reviewLine.originalText || reviewLine.description || '');
+    const description = normalizeReconstructionText(reviewLine.description || '');
+    if (!geometry || (!semantic && !description)) return 0;
+
+    const geometryTokens = new Set(geometry.split(/\s+/).filter((token) => token.length > 1));
+    const semanticTokens = new Set(
+      `${semantic} ${description}`.split(/\s+/).filter((token) => token.length > 1)
+    );
+    const overlap = [...geometryTokens].filter((token) => semanticTokens.has(token)).length;
+    const union = new Set([...geometryTokens, ...semanticTokens]).size || 1;
+    let score = overlap / union;
+
+    if (semantic && (geometry.includes(semantic) || semantic.includes(geometry))) score += 0.45;
+    const price = reviewLine.lineTotal > 0 ? reviewLine.lineTotal.toFixed(2).replace('.', ',') : '';
+    if (price && geometryText.includes(price)) score += 0.25;
+    return score;
+  };
+
+  const reconstructionBindings = new Map<string, string>();
+  const usedReviewLineIds = new Set<string>();
+  for (const geometryLine of activeDigitalReconstruction?.lines || []) {
+    const geometryText = reconstructionLineText(geometryLine);
+    let bestLine: EditableReviewLine | null = null;
+    let bestScore = 0;
+    for (const reviewLine of editableLines) {
+      if (usedReviewLineIds.has(reviewLine.id)) continue;
+      const score = scoreReconstructionBinding(geometryText, reviewLine);
+      if (score > bestScore) {
+        bestScore = score;
+        bestLine = reviewLine;
+      }
+    }
+    if (bestLine && bestScore >= 0.28) {
+      reconstructionBindings.set(geometryLine.id, bestLine.id);
+      usedReviewLineIds.add(bestLine.id);
+    }
+  }
+
+  const selectedReviewLine = editingRowId
+    ? editableLines.find((line) => line.id === editingRowId) || null
+    : null;
+  const unmappedEditableLines = editableLines.filter((line) => !usedReviewLineIds.has(line.id));
+
+  const getSvgReviewPalette = (line: EditableReviewLine | null) => {
+    if (!line) return { fill: '#f8fafc', stroke: '#cbd5e1', text: '#0f172a' };
+    switch (getLineVisualState(line)) {
+      case 'green': return { fill: '#dcfce7', stroke: '#16a34a', text: '#166534' };
+      case 'red': return { fill: '#ffe4e6', stroke: '#e11d48', text: '#9f1239' };
+      case 'yellow': return { fill: '#fef3c7', stroke: '#d97706', text: '#92400e' };
+      default: return { fill: '#f8fafc', stroke: '#94a3b8', text: '#0f172a' };
+    }
+  };
+
   return (
     <Modal
       isOpen={isOpen}
@@ -1271,7 +1344,7 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
       subtitle={
         session?.metadata?.title
           ? `Documento: ${session.metadata.title as string}`
-          : 'Copia Digitale dello Scontrino - Confronta con originale e clicca sui campi per modificare'
+          : 'Digital Reconstruction 2.0 - Confronta con originale e modifica direttamente le righe ricostruite'
       }
       maxWidth="5xl"
     >
@@ -1472,13 +1545,13 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
               <div className="p-5 bg-[#fdfcf7] text-slate-900 rounded-xl border border-slate-300 font-mono text-xs shadow-md space-y-4 relative">
                 
                 {activeDigitalReconstruction && activeDigitalReconstruction.width > 0 && activeDigitalReconstruction.height > 0 && (
-                  <div className="space-y-2 pb-4 border-b border-dashed border-slate-300">
-                    <div className="flex items-center justify-between">
+                  <div className="space-y-2 pb-4 border-b border-dashed border-slate-300" data-testid="digital-reconstruction-2">
+                    <div className="flex items-center justify-between gap-3">
                       <span className="text-[10px] uppercase font-bold tracking-wide text-slate-500">
-                        Ricostruzione geometrica MOTORE
+                        Digital Reconstruction 2.0
                       </span>
                       <span className="text-[9px] text-slate-400">
-                        layout OCR originale
+                        layout OCR + revisione interattiva
                       </span>
                     </div>
                     <div className="w-full overflow-hidden bg-white border border-slate-200 rounded-lg">
@@ -1486,46 +1559,76 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
                         viewBox={`0 0 ${activeDigitalReconstruction.width} ${activeDigitalReconstruction.height}`}
                         className="block w-full h-auto bg-white"
                         preserveAspectRatio="xMidYMin meet"
-                        aria-label="Ricostruzione geometrica dello scontrino"
+                        aria-label="Ricostruzione digitale interattiva dello scontrino"
                       >
-                        {(activeDigitalReconstruction.lines || []).flatMap((line: any) =>
-                          (line.segments || []).map((segment: any) => {
-                            const segmentText = (segment.elementIds || [])
-                              .map((id: string) => reconstructionElementMap.get(id)?.text || '')
-                              .filter(Boolean)
-                              .join(' ');
-                            if (!segmentText) return null;
-                            const anchor =
-                              segment.alignment === 'right'
-                                ? 'end'
-                                : segment.alignment === 'center'
-                                  ? 'middle'
-                                  : 'start';
-                            const x =
-                              segment.alignment === 'right'
-                                ? segment.box.x + segment.box.width
-                                : segment.alignment === 'center'
-                                  ? segment.box.x + segment.box.width / 2
-                                  : segment.box.x;
-                            return (
-                              <text
-                                key={segment.id}
-                                x={x}
-                                y={line.baselineY}
-                                fontSize={Math.max(6, line.fontSize || 10)}
-                                textAnchor={anchor}
-                                fontFamily="monospace"
-                                fill="#0f172a"
-                              >
-                                {segmentText}
-                              </text>
-                            );
-                          })
-                        )}
+                        {(activeDigitalReconstruction.lines || []).map((line: any) => {
+                          const boundId = reconstructionBindings.get(line.id);
+                          const reviewLine = boundId ? editableLines.find((item) => item.id === boundId) || null : null;
+                          const palette = getSvgReviewPalette(reviewLine);
+                          const selected = Boolean(reviewLine && editingRowId === reviewLine.id);
+                          return (
+                            <g
+                              key={line.id}
+                              onClick={() => reviewLine && setEditingRowId(reviewLine.id)}
+                              className={reviewLine ? 'cursor-pointer' : undefined}
+                              role={reviewLine ? 'button' : undefined}
+                              aria-label={reviewLine ? `Modifica riga ${reviewLine.description || reviewLine.originalText}` : undefined}
+                            >
+                              {reviewLine && (
+                                <rect
+                                  x={Math.max(0, line.box.x - 5)}
+                                  y={Math.max(0, line.box.y - 3)}
+                                  width={Math.max(1, line.box.width + 10)}
+                                  height={Math.max(1, line.box.height + 6)}
+                                  rx={4}
+                                  fill={palette.fill}
+                                  fillOpacity={selected ? 0.75 : 0.42}
+                                  stroke={palette.stroke}
+                                  strokeWidth={selected ? 2.5 : 1}
+                                  strokeOpacity={selected ? 1 : 0.7}
+                                />
+                              )}
+                              {(line.segments || []).map((segment: any) => {
+                                const segmentText = (segment.elementIds || [])
+                                  .map((id: string) => reconstructionElementMap.get(id)?.text || '')
+                                  .filter(Boolean)
+                                  .join(' ');
+                                if (!segmentText) return null;
+                                const anchor =
+                                  segment.alignment === 'right'
+                                    ? 'end'
+                                    : segment.alignment === 'center'
+                                      ? 'middle'
+                                      : 'start';
+                                const x =
+                                  segment.alignment === 'right'
+                                    ? segment.box.x + segment.box.width
+                                    : segment.alignment === 'center'
+                                      ? segment.box.x + segment.box.width / 2
+                                      : segment.box.x;
+                                return (
+                                  <text
+                                    key={segment.id}
+                                    x={x}
+                                    y={line.baselineY}
+                                    fontSize={Math.max(6, line.fontSize || 10)}
+                                    textAnchor={anchor}
+                                    fontFamily="monospace"
+                                    fill={reviewLine ? palette.text : '#0f172a'}
+                                    fontWeight={selected ? 700 : 400}
+                                    pointerEvents="none"
+                                  >
+                                    {segmentText}
+                                  </text>
+                                );
+                              })}
+                            </g>
+                          );
+                        })}
                       </svg>
                     </div>
                     <p className="text-[9px] leading-tight text-slate-400 font-sans">
-                      Questa vista conserva coordinate, spaziature e allineamenti OCR. I campi modificabili restano separati qui sotto.
+                      Le righe evidenziate sono collegate ai dati modificabili. Clicca direttamente sulla riga del documento per modificarla o confermarla.
                     </p>
                   </div>
                 )}
@@ -1566,198 +1669,156 @@ export const OcrReviewModal: React.FC<OcrReviewModalProps> = ({
                   </div>
                 </div>
 
-                {/* 3. CORPO ARTICOLI (DESCRIZIONE | IVA | PREZZO) */}
+                {/* 3. REVISIONE INTERATTIVA — unica superficie collegata alla ricostruzione geometrica */}
                 <div className="space-y-2 py-1">
                   <div className="flex items-center justify-between text-[10px] uppercase font-bold text-slate-500 pb-1 border-b border-slate-300">
-                    <span className="flex-1">Descrizione</span>
-                    <span className="w-14 text-center">IVA</span>
-                    <span className="w-16 text-right">Prezzo (€)</span>
+                    <span>Revisione riga selezionata</span>
+                    <span>{usedReviewLineIds.size}/{editableLines.length} righe localizzate</span>
                   </div>
 
                   {editableLines.length === 0 ? (
                     <div className="text-center py-6 text-slate-400 text-xs">
-                      Nessun articolo. Clicca "+ Aggiungi Articolo" in basso.
+                      Nessun articolo. Usa “Aggiungi Articolo” per inserirne uno manualmente.
+                    </div>
+                  ) : selectedReviewLine ? (
+                    <div className="p-2 rounded-lg border border-indigo-300 bg-indigo-50/40 space-y-2 font-sans">
+                      <div className="grid grid-cols-[minmax(0,1fr)_5rem] gap-2 items-end">
+                        <label className="text-[10px] text-slate-500">
+                          Descrizione
+                          <input
+                            type="text"
+                            value={selectedReviewLine.description}
+                            onChange={(e) => handleLineChange(selectedReviewLine.id, 'description', e.target.value)}
+                            className="mt-0.5 w-full bg-white border border-slate-300 rounded px-2 py-1 text-xs text-slate-900"
+                          />
+                        </label>
+                        <label className="text-[10px] text-slate-500">
+                          Prezzo (€)
+                          <input
+                            type="number"
+                            step="0.01"
+                            value={selectedReviewLine.lineTotal}
+                            onChange={(e) => handleLineChange(selectedReviewLine.id, 'lineTotal', parseFloat(e.target.value) || 0)}
+                            className="mt-0.5 w-full bg-white border border-slate-300 rounded px-2 py-1 text-right text-xs font-bold text-slate-900"
+                          />
+                        </label>
+                      </div>
+
+                      <div className="flex flex-wrap items-center justify-end gap-1.5">
+                        {selectedReviewLine.reviewStatus === 'confirmed' || selectedReviewLine.manuallyValidated ? (
+                          <span className="inline-flex items-center gap-1 px-2 py-1 bg-emerald-100 text-emerald-800 rounded-lg text-xs font-semibold">
+                            <CheckCircle2 className="w-3.5 h-3.5" /> Confermata
+                          </span>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => handleConfirmLine(selectedReviewLine.id)}
+                            className="inline-flex items-center gap-1 px-2 py-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-300 rounded-lg text-xs font-semibold"
+                          >
+                            <CheckCircle2 className="w-3.5 h-3.5" /> Conferma
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => setExpandedDetailsRowId(expandedDetailsRowId === selectedReviewLine.id ? null : selectedReviewLine.id)}
+                          className="inline-flex items-center gap-1 px-2 py-1 border border-slate-300 rounded-lg text-xs text-slate-600 hover:bg-white"
+                        >
+                          <Package className="w-3.5 h-3.5" />
+                          Prodotto/Categoria
+                          {expandedDetailsRowId === selectedReviewLine.id ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            handleDeleteLine(selectedReviewLine.id);
+                            setEditingRowId(null);
+                          }}
+                          className="p-1.5 text-slate-400 hover:text-rose-600 rounded"
+                          title="Elimina riga"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+
+                      {expandedDetailsRowId === selectedReviewLine.id && (
+                        <div className="pt-2 border-t border-slate-200 grid grid-cols-1 sm:grid-cols-2 gap-2 text-[11px]">
+                          <label className="text-[10px] text-slate-500">
+                            Prodotto Catalogo
+                            <select
+                              value={selectedReviewLine.productId || (selectedReviewLine.actionMode === 'create_new' ? 'CREATE_NEW' : '')}
+                              onChange={(e) => {
+                                const val = e.target.value;
+                                if (val === 'CREATE_NEW') {
+                                  handleLineChange(selectedReviewLine.id, 'productId', null);
+                                  handleLineChange(selectedReviewLine.id, 'actionMode', 'create_new');
+                                } else if (val) {
+                                  handleLineChange(selectedReviewLine.id, 'productId', val);
+                                  handleLineChange(selectedReviewLine.id, 'actionMode', 'link_existing');
+                                } else {
+                                  handleLineChange(selectedReviewLine.id, 'productId', null);
+                                  handleLineChange(selectedReviewLine.id, 'actionMode', 'unlinked');
+                                }
+                              }}
+                              className="mt-0.5 w-full bg-white border border-slate-300 rounded-lg px-2 py-1 text-xs text-slate-900"
+                            >
+                              <option value="">Nessun collegamento</option>
+                              <option value="CREATE_NEW">➕ Crea nuovo prodotto</option>
+                              {products.map((product) => (
+                                <option key={product.id} value={product.id}>{product.displayName}</option>
+                              ))}
+                            </select>
+                          </label>
+
+                          <label className="text-[10px] text-slate-500">
+                            Categoria
+                            <select
+                              value={selectedReviewLine.categoryId || ''}
+                              onChange={(e) => handleLineChange(selectedReviewLine.id, 'categoryId', e.target.value || null)}
+                              className="mt-0.5 w-full bg-white border border-slate-300 rounded-lg px-2 py-1 text-xs text-slate-900"
+                            >
+                              <option value="">Seleziona Categoria...</option>
+                              {parentCategories.map((category) => (
+                                <option key={category.id} value={category.id}>{category.name}</option>
+                              ))}
+                            </select>
+                          </label>
+                        </div>
+                      )}
                     </div>
                   ) : (
-                    editableLines.map((line, idx) => {
-                      const visualState = getLineVisualState(line);
-                      const isEditing = editingRowId === line.id;
-                      const isExpanded = expandedDetailsRowId === line.id;
+                    <div className="text-center py-4 px-3 bg-slate-50 border border-dashed border-slate-300 rounded-lg text-[11px] text-slate-500 font-sans">
+                      Clicca una riga evidenziata nella Digital Reconstruction 2.0 per modificarla o confermarla.
+                    </div>
+                  )}
 
-                      return (
-                        <div
-                          key={line.id}
-                          className={`p-1.5 rounded-lg border transition-all space-y-1 ${
-                            isEditing
-                              ? 'bg-white border-indigo-500 ring-1 ring-indigo-500 shadow-sm'
-                              : 'bg-transparent border-transparent hover:bg-slate-200/50'
-                          }`}
-                        >
-                          {/* Receipt Line Row: columns stay readable on mobile; actions never compress description */}
-                          <div className="space-y-1">
-                            <div className="grid grid-cols-[minmax(0,1fr)_3.5rem_4rem] items-center gap-2">
-                              <div className="flex items-center gap-1.5 min-w-0">
-                                <span className="text-[10px] text-slate-400 font-mono shrink-0">#{idx + 1}</span>
-                                {isEditing ? (
-                                  <input
-                                    type="text"
-                                    value={line.description}
-                                    onChange={(e) => handleLineChange(line.id, 'description', e.target.value)}
-                                    className="min-w-0 w-full bg-white border border-slate-300 rounded px-2 py-0.5 text-xs font-sans font-medium"
-                                    autoFocus
-                                  />
-                                ) : (
-                                  <span
-                                    onClick={() => setEditingRowId(line.id)}
-                                    className={`min-w-0 block truncate font-medium cursor-pointer hover:underline ${getFieldHighlightClass(visualState)}`}
-                                    title={line.description || 'Clicca per modificare'}
-                                  >
-                                    {line.description || line.originalText}
-                                  </span>
-                                )}
-                              </div>
-
-                              {/* IVA column */}
-                              <span className="text-center text-[11px] text-slate-600 font-mono">
-                                10,0%
-                              </span>
-
-                              {/* Price / Total column */}
-                              {isEditing ? (
-                                <input
-                                  type="number"
-                                  step="0.01"
-                                  value={line.lineTotal}
-                                  onChange={(e) => handleLineChange(line.id, 'lineTotal', parseFloat(e.target.value) || 0)}
-                                  className="w-full bg-white border border-slate-300 rounded px-1 text-right text-xs font-bold font-mono"
-                                  title="Totale riga"
-                                />
-                              ) : (
-                                <span className="font-bold text-slate-900 text-right font-mono text-xs">
-                                  {line.lineTotal.toFixed(2)}
-                                </span>
-                              )}
-                            </div>
-
-                            {/* Actions on their own row so they cannot squeeze receipt columns */}
-                            <div className="flex items-center justify-end gap-1.5 min-h-7">
-                              {isEditing ? (
-                                <button
-                                  type="button"
-                                  onClick={() => setEditingRowId(null)}
-                                  className="p-1 bg-indigo-600 text-white rounded hover:bg-indigo-700"
-                                  title="Salva riga"
-                                >
-                                  <Check className="w-3.5 h-3.5" />
-                                </button>
-                              ) : (
-                                <>
-                                  {line.reviewStatus === 'confirmed' || line.manuallyValidated ? (
-                                    <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-emerald-100 dark:bg-emerald-950/60 text-emerald-800 dark:text-emerald-200 rounded-full text-[11px] font-sans font-semibold">
-                                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-                                      <span>Confermata</span>
-                                    </span>
-                                  ) : (
-                                    <button
-                                      type="button"
-                                      onClick={() => handleConfirmLine(line.id)}
-                                      className="inline-flex items-center gap-1 px-2 py-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-300 rounded-lg text-xs font-sans font-semibold shadow-xs transition-all cursor-pointer"
-                                      title="Conferma riga senza modificarla"
-                                    >
-                                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-                                      <span>Conferma</span>
-                                    </button>
-                                  )}
-                                  <button
-                                    type="button"
-                                    onClick={() => setEditingRowId(line.id)}
-                                    className="p-1 text-slate-400 hover:text-indigo-600 rounded"
-                                    title="Modifica riga"
-                                  >
-                                    <Edit3 className="w-3.5 h-3.5" />
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={() => setExpandedDetailsRowId(isExpanded ? null : line.id)}
-                                    className="p-1 text-slate-400 hover:text-indigo-600 rounded"
-                                    title="Associazione Prodotto & Categoria"
-                                  >
-                                    {isExpanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={() => handleDeleteLine(line.id)}
-                                    className="p-1 text-slate-400 hover:text-rose-600 rounded"
-                                    title="Elimina riga"
-                                  >
-                                    <Trash2 className="w-3.5 h-3.5" />
-                                  </button>
-                                </>
-                              )}
-                            </div>
-                          </div>
-
-                          {/* Collapsible Product & Category Details */}
-                          {isExpanded && (
-                            <div className="pt-2 mt-1 border-t border-slate-200 grid grid-cols-1 sm:grid-cols-2 gap-2 text-[11px] font-sans">
-                              <div>
-                                <label className="block text-[10px] text-slate-500 mb-0.5 flex items-center gap-1">
-                                  <Package className="w-3 h-3 text-indigo-500" /> Prodotto Catalogo
-                                </label>
-                                <select
-                                  value={line.productId || (line.actionMode === 'create_new' ? 'CREATE_NEW' : '')}
-                                  onChange={(e) => {
-                                    const val = e.target.value;
-                                    if (val === 'CREATE_NEW') {
-                                      handleLineChange(line.id, 'productId', null);
-                                      handleLineChange(line.id, 'actionMode', 'create_new');
-                                    } else if (val) {
-                                      handleLineChange(line.id, 'productId', val);
-                                      handleLineChange(line.id, 'actionMode', 'link_existing');
-                                    } else {
-                                      handleLineChange(line.id, 'productId', null);
-                                      handleLineChange(line.id, 'actionMode', 'unlinked');
-                                    }
-                                  }}
-                                  className="w-full bg-white border border-slate-300 rounded-lg px-2 py-1 text-xs text-slate-900"
-                                >
-                                  <option value="">Nessun collegamento</option>
-                                  <option value="CREATE_NEW">➕ Crea nuovo prodotto</option>
-                                  {products.map((p) => (
-                                    <option key={p.id} value={p.id}>{p.displayName}</option>
-                                  ))}
-                                </select>
-                              </div>
-
-                              <div>
-                                <label className="block text-[10px] text-slate-500 mb-0.5 flex items-center gap-1">
-                                  <Tag className="w-3 h-3 text-indigo-500" /> Categoria
-                                </label>
-                                <select
-                                  value={line.categoryId || ''}
-                                  onChange={(e) => handleLineChange(line.id, 'categoryId', e.target.value || null)}
-                                  className="w-full bg-white border border-slate-300 rounded-lg px-2 py-1 text-xs text-slate-900"
-                                >
-                                  <option value="">Seleziona Categoria...</option>
-                                  {parentCategories.map((c) => (
-                                    <option key={c.id} value={c.id}>{c.name}</option>
-                                  ))}
-                                </select>
-                              </div>
-                            </div>
-                          )}
-                        </div>
-                      );
-                    })
+                  {unmappedEditableLines.length > 0 && (
+                    <div className="pt-1 space-y-1 font-sans">
+                      <div className="text-[10px] uppercase font-semibold text-amber-700">
+                        Righe non ancora localizzate nella geometria ({unmappedEditableLines.length})
+                      </div>
+                      <div className="flex flex-wrap gap-1">
+                        {unmappedEditableLines.map((line) => (
+                          <button
+                            key={line.id}
+                            type="button"
+                            onClick={() => setEditingRowId(line.id)}
+                            className="px-2 py-1 rounded-md border border-amber-300 bg-amber-50 text-amber-800 text-[10px] hover:bg-amber-100 max-w-full truncate"
+                            title={line.description || line.originalText}
+                          >
+                            {line.description || line.originalText}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
                   )}
 
                   <div className="pt-2">
                     <button
                       type="button"
                       onClick={handleAddLine}
-                      className="w-full py-1.5 border border-dashed border-slate-300 rounded-lg text-xs text-indigo-600 font-semibold hover:bg-indigo-50/50 flex items-center justify-center gap-1.5"
+                      className="w-full py-1.5 border border-dashed border-slate-300 rounded-lg text-xs text-indigo-600 font-semibold hover:bg-indigo-50/50 flex items-center justify-center gap-1.5 font-sans"
                     >
-                      <Plus className="w-3.5 h-3.5" /> Aggiungi Articolo alla Copia Digitale
+                      <Plus className="w-3.5 h-3.5" /> Aggiungi Articolo
                     </button>
                   </div>
                 </div>

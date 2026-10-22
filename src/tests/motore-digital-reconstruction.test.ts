@@ -65,6 +65,26 @@ describe('donazione MOTORE - ricostruzione geometrica',()=>{
     expect(Math.max(...reconstruction.lines.map(line=>line.fontSize))).toBeLessThan(normalHeight);
   });
 
+  it('ricostruisce una word-box patologica dalle box dei caratteri',()=>{
+    const p=page();
+    const bad=token('charbox','PAROLA','l3',100,400,220);
+    bad.box.height=90;
+    bad.characters=[
+      {text:'P',confidence:99,box:{x:110,y:430,width:14,height:27}},
+      {text:'A',confidence:99,box:{x:128,y:432,width:15,height:27}},
+      {text:'R',confidence:99,box:{x:146,y:434,width:15,height:27}},
+      {text:'O',confidence:99,box:{x:164,y:436,width:15,height:27}},
+      {text:'L',confidence:99,box:{x:182,y:438,width:14,height:27}},
+      {text:'A',confidence:99,box:{x:200,y:440,width:15,height:27}},
+    ];
+    p.tokens.push(bad);
+    const reconstruction=buildDigitalPageReconstruction(p);
+    const rebuilt=reconstruction.elements.find(element=>element.id==='charbox')!;
+    expect(rebuilt.box.height).toBeLessThan(40);
+    expect(rebuilt.box.width).toBeLessThan(130);
+    expect(rebuilt.box.y).toBeGreaterThanOrEqual(425);
+  });
+
   it('riunisce una riga inclinata usando la baseline compensata',()=>{
     const p=page();
     p.tokens=[

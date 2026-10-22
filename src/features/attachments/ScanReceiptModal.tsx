@@ -50,6 +50,19 @@ export interface ScanReceiptModalProps {
 
 type WizardStep = 'recovery' | 'source' | 'pages' | 'summary';
 
+type AcquisitionSourceInfo = {
+  acquisitionSource: 'camera_direct' | 'gallery_picker' | 'drag_and_drop' | 'file_picker';
+  inputAccept?: string;
+  hasCaptureAttribute?: boolean;
+  isMultiple?: boolean;
+};
+
+type PendingConflictBatch = {
+  files: File[];
+  isPdf: boolean;
+  sourceInfo: AcquisitionSourceInfo;
+};
+
 export const ScanReceiptModal: React.FC<ScanReceiptModalProps> = ({
   isOpen,
   onClose,
@@ -91,7 +104,7 @@ export const ScanReceiptModal: React.FC<ScanReceiptModalProps> = ({
 
   // Conflict recovery state
   const [conflictingSession, setConflictingSession] = useState<DocumentSession | null>(null);
-  const [conflictingFile, setConflictingFile] = useState<File | null>(null);
+  const [pendingConflictBatch, setPendingConflictBatch] = useState<PendingConflictBatch | null>(null);
 
   // Delete Draft Confirmation Modal State
   const [confirmDeleteDraftId, setConfirmDeleteDraftId] = useState<string | null>(null);
@@ -115,7 +128,7 @@ export const ScanReceiptModal: React.FC<ScanReceiptModalProps> = ({
     setConfirmDeleteDraftId(null);
     setConfirmDeleteCurrent(false);
     setConflictingSession(null);
-    setConflictingFile(null);
+    setPendingConflictBatch(null);
   }, []);
 
   // Fetch draft thumbnails helper
@@ -263,7 +276,7 @@ export const ScanReceiptModal: React.FC<ScanReceiptModalProps> = ({
       if (status === 'draft') {
         const sess = conflictingSession;
         setConflictingSession(null);
-        setConflictingFile(null);
+        setPendingConflictBatch(null);
         await handleResumeDraft(sess);
       } else if (
         status === 'ready' ||
@@ -277,7 +290,7 @@ export const ScanReceiptModal: React.FC<ScanReceiptModalProps> = ({
         const procId = String(conflictingSession.ocrProcessId || '');
 
         setConflictingSession(null);
-        setConflictingFile(null);
+        setPendingConflictBatch(null);
         onClose();
         if (procId) {
           onScanComplete(attId, procId);
@@ -285,7 +298,7 @@ export const ScanReceiptModal: React.FC<ScanReceiptModalProps> = ({
       } else {
         const sess = conflictingSession;
         setConflictingSession(null);
-        setConflictingFile(null);
+        setPendingConflictBatch(null);
         await handleResumeDraft(sess);
       }
     } catch (err: any) {
@@ -317,7 +330,7 @@ export const ScanReceiptModal: React.FC<ScanReceiptModalProps> = ({
 
       await documentSessionRepository.delete(sessId);
       setConflictingSession(null);
-      setConflictingFile(null);
+      setPendingConflictBatch(null);
 
       if (fileToAcquire) {
         await handleFilesIngest([fileToAcquire]);
@@ -333,7 +346,7 @@ export const ScanReceiptModal: React.FC<ScanReceiptModalProps> = ({
 
   const handleResolveConflictCancel = () => {
     setConflictingSession(null);
-    setConflictingFile(null);
+    setPendingConflictBatch(null);
     setStep('source');
   };
 
@@ -341,14 +354,10 @@ export const ScanReceiptModal: React.FC<ScanReceiptModalProps> = ({
   const handleFilesIngest = async (
     files: FileList | File[],
     isPdf = false,
-    sourceInfo: {
-      acquisitionSource: 'camera_direct' | 'gallery_picker' | 'drag_and_drop' | 'file_picker';
-      inputAccept?: string;
-      hasCaptureAttribute?: boolean;
-      isMultiple?: boolean;
-    } = { acquisitionSource: 'gallery_picker', isMultiple: true }
+    sourceInfo: AcquisitionSourceInfo = { acquisitionSource: 'gallery_picker', isMultiple: true }
   ) => {
     if (!files || files.length === 0) return;
+    const inputFiles = Array.from(files);
     setIsLoading(true);
     setErrorMsg(null);
     setInfoMsg(null);
@@ -357,17 +366,17 @@ export const ScanReceiptModal: React.FC<ScanReceiptModalProps> = ({
       let session = currentSession;
 
       // Determine initial modes
-      const firstFile = files[0];
+      const firstFile = inputFiles[0];
       const isFirstPdf = isPdf || firstFile.type === 'application/pdf' || firstFile.name.endsWith('.pdf');
       const sourceMode: DocumentSourceMode = isFirstPdf
         ? 'pdf'
-        : files.length > 1
+        : inputFiles.length > 1
         ? 'multiplePages'
         : 'singleImage';
 
       const initialProcessingMode: DocumentProcessingMode = isFirstPdf
         ? 'multiPageDocument'
-        : files.length > 1
+        : inputFiles.length > 1
         ? 'multiPageDocument'
         : 'singleReceipt';
 
@@ -401,8 +410,8 @@ export const ScanReceiptModal: React.FC<ScanReceiptModalProps> = ({
       let duplicateCount = 0;
 
       // 2. Process each file
-      for (let i = 0; i < files.length; i++) {
-        const file = files[i];
+      for (let i = 0; i < inputFiles.length; i++) {
+        const file = inputFiles[i];
         const val = validateReceiptFile(file);
         if (!val.valid) {
           setErrorMsg(val.error || `File "${file.name}" non valido`);
@@ -415,12 +424,21 @@ export const ScanReceiptModal: React.FC<ScanReceiptModalProps> = ({
         const activeExistingSession = await documentSessionRepository.findActiveSessionByFileHash(fileHash, session.id);
         if (activeExistingSession) {
           const segs = await documentPageSegmentRepository.getBySessionId(session.id);
-          if (segs.length === 0 && !session.ocrProcessId) {
+          const temporarySessionIsEmpty = segs.length === 0 && !session.ocrProcessId;
+          if (temporarySessionIsEmpty) {
             await documentSessionRepository.delete(session.id);
+            setCurrentSession(null);
+          } else {
+            // Conserva la sessione parzialmente acquisita: al riavvio gli hash già presenti
+            // vengono ignorati, quindi il batch può essere ripreso senza perdere o duplicare pagine.
+            setCurrentSession(session);
           }
-          setCurrentSession(null);
           setConflictingSession(activeExistingSession);
-          setConflictingFile(file);
+          setPendingConflictBatch({
+            files: inputFiles,
+            isPdf,
+            sourceInfo,
+          });
           setIsLoading(false);
           return;
         }

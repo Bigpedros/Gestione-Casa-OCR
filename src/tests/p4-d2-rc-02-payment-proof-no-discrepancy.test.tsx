@@ -258,7 +258,7 @@ describe('FASE P4-D2-RC-02 — Nessuna Falsa Discrepanza per PAYMENT_PROOF', () 
       expect(screen.getByDisplayValue('EUROSPAR')).toBeInTheDocument();
     });
 
-    const diagToggle = screen.getByRole('button', { name: /^Diagnostica$/i });
+    const diagToggle = screen.getByText(/^Diagnostica$/i);
     fireEvent.click(diagToggle);
 
     const copyBtn = screen.getByRole('button', { name: /Copia D1 JSON/i });
@@ -455,7 +455,7 @@ describe('FASE P4-D2-RC-02 — Nessuna Falsa Discrepanza per PAYMENT_PROOF', () 
     expect(accountingBtn).not.toBeDisabled();
 
     // 5. Diagnostica con discrepancy 0 e hasDiscrepancy false
-    const diagToggle = screen.getByRole('button', { name: /^Diagnostica$/i });
+    const diagToggle = screen.getByText(/^Diagnostica$/i);
     fireEvent.click(diagToggle);
 
     const copyBtn = screen.getByRole('button', { name: /Copia D1 JSON/i });
@@ -655,7 +655,7 @@ describe('FASE P4-D2-RC-02 — Nessuna Falsa Discrepanza per PAYMENT_PROOF', () 
       expect(screen.getByDisplayValue('SUPERMERCATO')).toBeInTheDocument();
     });
 
-    const diagToggle = screen.getByRole('button', { name: /^Diagnostica$/i });
+    const diagToggle = screen.getByText(/^Diagnostica$/i);
     fireEvent.click(diagToggle);
 
     const copyBtn = screen.getByRole('button', { name: /Copia D1 JSON/i });
@@ -758,7 +758,7 @@ describe('FASE P4-D2-RC-02 — Nessuna Falsa Discrepanza per PAYMENT_PROOF', () 
     ).not.toBeInTheDocument();
 
     // 4. Diagnostica: discrepancy 0, hasDiscrepancy false
-    const diagToggle = screen.getByRole('button', { name: /^Diagnostica$/i });
+    const diagToggle = screen.getByText(/^Diagnostica$/i);
     fireEvent.click(diagToggle);
 
     const copyBtn = screen.getByRole('button', { name: /Copia D1 JSON/i });

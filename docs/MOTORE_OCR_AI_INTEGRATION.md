@@ -1,7 +1,7 @@
 # MOTORE-OCR-AI — integrazione Gestione Casa
 
 Baseline OCR importata da `Bigpedros/MOTORE-OCR-AI` al commit
-`7e6738262d326099b7c73955207a371c09ee042f` (MOTORE `0.5.0-rc.1`, CI/certification green).
+`4209daa43b547faf3e887357fc4bc817ff8147b2` (MOTORE `0.5.0-rc.1`, CI/certification green).
 
 ## Perimetro
 
@@ -45,8 +45,12 @@ La logica di parsing scontrino, knowledge base, contabilità e revisione utente 
 
 
 ## Receipt Line Fusion
-La baseline `7e6738262d326099b7c73955207a371c09ee042f` aggiunge fusione receipt a livello di riga tra Tesseract e OCRS/RTen. La fusione usa ancore geometriche/semantiche di riga (IVA/prezzo) e produce evidenze senza mutare il raw OCR.
+La baseline `4209daa43b547faf3e887357fc4bc817ff8147b2` aggiunge fusione receipt a livello di riga tra Tesseract e OCRS/RTen. La fusione usa ancore geometriche/semantiche di riga (IVA/prezzo) e produce evidenze senza mutare il raw OCR.
 
 
 ## Receipt Item Block Reconstruction v1
-La baseline `7e6738262d326099b7c73955207a371c09ee042f` ricostruisce voci commerciali indipendentemente dai lineId OCR e dal layout grafico, usando coordinate fisiche, campi Articolo/IVA/Prezzo e relazioni quantità × prezzo unitario = totale. Supporta SINGLE_LINE, DESCRIPTION_CONTINUATION e QTY_UNIT_PREFIX.
+La baseline `4209daa43b547faf3e887357fc4bc817ff8147b2` ricostruisce voci commerciali indipendentemente dai lineId OCR e dal layout grafico, usando coordinate fisiche, campi Articolo/IVA/Prezzo e relazioni quantità × prezzo unitario = totale. Supporta SINGLE_LINE, DESCRIPTION_CONTINUATION e QTY_UNIT_PREFIX.
+
+
+### Headerless receipt inference
+La baseline `4209daa43b547faf3e887357fc4bc817ff8147b2` rende facoltativa l’intestazione DESCRIZIONE/IVA/PREZZO: quando manca, le colonne vengono inferite da ancore IVA e prezzi ripetute, mantenendo il motore indipendente dal layout grafico dello scontrino.

@@ -41,8 +41,17 @@ export interface OcrBlockGeometry{
 export interface OcrProviderVariantEvidence{
   source:string; score:number; confidence:number|null; tokens:OcrToken[];
 }
+export interface CanonicalRasterArtifact {
+  dataUrl:string;
+  width:number;
+  height:number;
+  mimeType:string;
+  source:'geometry-normalized'|'source-fallback';
+  ocrCleanupApplied:boolean;
+}
 export interface OcrPage {
   pageNumber:number; width:number; height:number; text:string; tokens:OcrToken[]; warnings:string[];
+  canonicalRaster?:CanonicalRasterArtifact;
   lines?:OcrLineGeometry[];blocks?:OcrBlockGeometry[];
   photoScan?:PhotoScanInfo; quality?:QualityReport; geometryCorrection?:GeometryCorrectionInfo;
   detectedRegions?:StructuralRegion[];

@@ -126,6 +126,7 @@ describe('PATCH DIAGNOSTICA D1 — Parità OCR PC / iPhone', () => {
     expect(report.diagnosticVersion).toBe('D1');
     expect(report.environment).toBeDefined();
     expect(report.environment.appBuildSha).toBeDefined();
+    expect(report.environment.appBuildSha).not.toBe('8c9a051');
     expect(report.tesseract).toBeDefined();
     expect(report.tesseract.coreVersion).toBe('v5.1.0');
     expect(report.session).toBeDefined();

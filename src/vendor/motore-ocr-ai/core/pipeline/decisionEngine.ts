@@ -2,7 +2,7 @@ import type {Box,OcrPage,OcrToken} from '../../contracts.js';
 import type {OcrDecision,OcrEvidenceCandidate,OcrEvidenceSet,StabilizedOcrCheckpoint,DecisionSummary,TokenMatchingDiagnostic} from './checkpoints.js';
 import {withLocalEvidenceConsensus} from './localEvidenceResolver.js';
 
-export const DECISION_ENGINE_VERSION = "DE-RUNTIME-DIAG-3";
+export const DECISION_ENGINE_VERSION = "DE-RUNTIME-DIAG-4";
 
 export function stabilizeOcrPage(evidence:OcrEvidenceSet):StabilizedOcrCheckpoint{
   const resolved=withLocalEvidenceConsensus(evidence);
@@ -182,9 +182,10 @@ export function stabilizeOcrPage(evidence:OcrEvidenceSet):StabilizedOcrCheckpoin
     if(processedNovel.has(novelKey))continue;
     processedNovel.add(novelKey);
     if(selected.some(token=>compatible(token,candidate.token)))continue;
-    if((candidate.token.confidence??0)<92||isSuspicious(candidate.token.text))continue;
-    const lineId=nearestLine(selected,candidate.token.box);
-    if(!lineId)continue;
+    const confidence=candidate.token.confidence??0;
+    const coherentLine=hasCoherentIndependentLineSupport(candidate,resolved.candidates);
+    if((confidence<92&&!coherentLine)||(confidence<76)||isSuspicious(candidate.token.text))continue;
+    const lineId=nearestLine(selected,candidate.token.box)||candidate.token.lineId||`p${resolved.raw.pageNumber}-secondary-line`;
     if(isCriticalNovelValue(candidate.token.text)&&!hasIndependentCorroboration(candidate,resolved.candidates))continue;
     if(hasNearbyConflict(selected,candidate.token))continue;
     selected.push({...cloneToken(candidate.token),id:`p${resolved.raw.pageNumber}-stabilized-${selected.length}`,lineId});
@@ -249,6 +250,32 @@ export function stabilizeOcrPage(evidence:OcrEvidenceSet):StabilizedOcrCheckpoin
 
 function isIndependentSource(source:string):boolean{
   return source==='recognizer-b'||source==='recognizer-b-region'||source==='critical-reocr'||source==='targeted-reocr'||source==='local-consensus';
+}
+
+function hasCoherentIndependentLineSupport(
+  candidate:OcrEvidenceCandidate,
+  allCandidates:OcrEvidenceCandidate[]
+):boolean{
+  if(!isIndependentSource(candidate.source))return false;
+  const lineId=candidate.token.lineId;
+  if(!lineId)return false;
+  const peers=allCandidates.filter(peer=>
+    peer!==candidate&&
+    isIndependentSource(peer.source)&&
+    peer.token.lineId===lineId&&
+    !isSuspicious(peer.token.text)&&
+    (peer.token.confidence??0)>=72
+  );
+  if(peers.length>=1)return true;
+
+  const cy=candidate.token.box.y+candidate.token.box.height/2;
+  return allCandidates.some(peer=>{
+    if(peer===candidate||!isIndependentSource(peer.source)||isSuspicious(peer.token.text))return false;
+    if((peer.token.confidence??0)<72)return false;
+    const py=peer.token.box.y+peer.token.box.height/2;
+    const tolerance=Math.max(candidate.token.box.height,peer.token.box.height)*.8;
+    return Math.abs(py-cy)<=tolerance;
+  });
 }
 
 function isMeaninglessUncertain(value:string):boolean{

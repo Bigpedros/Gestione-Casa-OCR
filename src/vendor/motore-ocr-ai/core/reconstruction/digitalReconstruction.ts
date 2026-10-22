@@ -45,7 +45,7 @@ export function buildDigitalPageReconstruction(page:OcrPage):DigitalPageReconstr
   ).sort((a,b)=>a.box.y-b.box.y||a.box.x-b.box.x);
 
   return{
-    schemaVersion:'1.5',
+    schemaVersion:'1.6',
     pageNumber:page.pageNumber,
     width:page.width,
     height:page.height,
@@ -404,15 +404,23 @@ function deriveTokenBox(token:OcrToken,pageWidth:number,pageHeight:number,pageCh
 }
 
 function estimatePageCharacterHeight(tokens:OcrToken[],pageHeight:number):number{
-  const heights=tokens.flatMap(token=>
+  const characterHeights=tokens.flatMap(token=>
     (token.characters??[])
       .filter(character=>/[\p{L}\p{N}]/u.test(character.text))
       .map(character=>character.box.height)
   ).filter(value=>Number.isFinite(value)&&value>=4&&value<=Math.max(80,pageHeight*.08));
-  if(!heights.length)return Math.max(10,pageHeight*.018);
 
-  const sorted=[...heights].sort((a,b)=>a-b);
-  const lower=sorted.filter(value=>value<=median(sorted)*1.45);
+  const tokenHeights=tokens
+    .filter(token=>/[\p{L}\p{N}]/u.test(token.text))
+    .map(token=>token.box.height)
+    .filter(value=>Number.isFinite(value)&&value>=4&&value<=Math.max(80,pageHeight*.08));
+
+  const source=characterHeights.length>=5?characterHeights:[...characterHeights,...tokenHeights];
+  if(!source.length)return Math.max(10,pageHeight*.018);
+
+  const sorted=[...source].sort((a,b)=>a-b);
+  const pivot=median(sorted);
+  const lower=sorted.filter(value=>value<=pivot*1.45);
   return robustMedian(lower.length>=5?lower:sorted)||Math.max(10,pageHeight*.018);
 }
 

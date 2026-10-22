@@ -1,4 +1,5 @@
 import { computeStringSha256 } from './imagePreprocessing';
+import { getAppBuildInfo } from './telemetry';
 import type {
   DocumentSession,
   DocumentPageSegment,
@@ -45,8 +46,8 @@ export const buildDiagnosticReport = async (
   const rawTextSha256 = await computeStringSha256(rawText);
 
   // Environment detection
-  const appBuildInfo = (typeof window !== 'undefined' && (window as any).__APP_BUILD_INFO__) || {};
-  const appBuildSha = appBuildInfo.gitCommit || '8c9a051';
+  const appBuildInfo = getAppBuildInfo();
+  const appBuildSha = appBuildInfo.gitCommit || 'unknown';
   const appBuildTimestamp = appBuildInfo.buildTimestamp || new Date().toISOString();
   const appVersion = appBuildInfo.appVersion || '1.0.0';
 

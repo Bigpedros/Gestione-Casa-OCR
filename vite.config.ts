@@ -33,7 +33,7 @@ const appBuildInfo = {
 
 export default defineConfig({
   define: {
-    __APP_BUILD_INFO__: JSON.stringify(appBuildInfo),
+    'globalThis.__APP_BUILD_INFO__': JSON.stringify(appBuildInfo),
   },
   plugins: [
     react(),

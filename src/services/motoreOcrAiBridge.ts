@@ -6,7 +6,7 @@ import { DECISION_ENGINE_VERSION } from '../vendor/motore-ocr-ai/core/pipeline/d
 import { collectReceiptEvidence } from '../vendor/motore-ocr-ai/core/ocr/receiptFinalizer.js';
 import type { OcrWordGeometry } from './ocrParser/types';
 
-export const MOTORE_OCR_AI_SOURCE_COMMIT = '4209daa43b547faf3e887357fc4bc817ff8147b2';
+export const MOTORE_OCR_AI_SOURCE_COMMIT = '6d9b6f8300429af0db1d54e7af3a10c1fe96e7ce';
 
 export interface MotoreOcrAiPageResult {
   text: string;

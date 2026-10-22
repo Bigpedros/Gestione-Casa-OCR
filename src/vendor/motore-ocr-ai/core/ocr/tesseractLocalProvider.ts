@@ -1,6 +1,6 @@
 /* eslint-disable no-useless-escape */
 import {createWorker,OEM,PSM,type Worker} from 'tesseract.js';
-import type {OcrPage,OcrToken,QualityReport} from '../../contracts.js';
+import type {CanonicalRasterArtifact,OcrPage,OcrToken,QualityReport} from '../../contracts.js';
 import {scanPhotographedDocument} from '../geometry/photoDocumentScanner.js';
 import {estimateOrientation,normalizeRasterGeometry,rotateRightAngle} from '../geometry/imageGeometryNormalizer.js';
 import {qualityFromCanvas} from '../quality/qualityAnalyzer.js';
@@ -132,7 +132,7 @@ export class TesseractLocalProvider implements OcrProvider {
 
       const canonicalVisualCanvas=geometry.canvas;
       const canonicalRasterDataUrl=encodeCanonicalRaster(canonicalVisualCanvas);
-      const canonicalRaster={
+      const canonicalRaster:CanonicalRasterArtifact={
         dataUrl:canonicalRasterDataUrl,
         width:canonicalVisualCanvas.width,
         height:canonicalVisualCanvas.height,

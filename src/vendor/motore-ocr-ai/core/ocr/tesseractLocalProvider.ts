@@ -137,7 +137,7 @@ export class TesseractLocalProvider implements OcrProvider {
         width:canonicalVisualCanvas.width,
         height:canonicalVisualCanvas.height,
         mimeType:canonicalRasterDataUrl.startsWith('data:image/webp')?'image/webp':'image/png',
-        source:(sourceFallback||transformFallback?'source-fallback':'geometry-normalized') as const,
+        source:sourceFallback||transformFallback?'source-fallback':'geometry-normalized',
         ocrCleanupApplied:cleanupAccepted
       };
 

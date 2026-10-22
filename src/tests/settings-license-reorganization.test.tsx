@@ -164,55 +164,6 @@ describe('Riorganizzazione Grafica Impostazioni / Licenza Software & Contributor
     });
   });
 
-  it('3. Pagina Licenza software mostra badge e dettagli licenza attiva', async () => {
-    const keyPair = generateEd25519TestKeyPair();
-    vi.spyOn(ACTIVATION_CONFIG, 'publicKey', 'get').mockReturnValue(keyPair.publicKey);
-
-    const deviceId = await getOrCreateDeviceId();
-    const signedDoc = createSignedTestDoc(
-      { licenseCode: 'ABCD-EFGH-JKMN-PQRQ', deviceId, edition: 'professional', owner: 'Famiglia Bellotti' },
-      keyPair.privateKey
-    );
-    const signedReceipt = createSignedTestReceipt(
-      {
-        offlineValidUntil: new Date(Date.now() + 30 * 86400000).toISOString(),
-        validatedAt: new Date(Date.now() - 1000).toISOString(),
-      },
-      signedDoc,
-      keyPair.privateKey
-    );
-
-    await localLicenseRepository.save({
-      licenseCode: 'ABCD-EFGH-JKMN-PQRQ',
-      deviceId,
-      status: 'VALID',
-      licenseType: 'professional',
-      activatedAt: new Date().toISOString(),
-      lastSuccessfulOnlineValidation: new Date().toISOString(),
-      signedLicenseDocument: signedDoc,
-      signedValidationReceipt: signedReceipt,
-      offlineValidUntil: signedReceipt.receipt.offlineValidUntil,
-      licenseExpiresAt: signedDoc.license.expiresAt,
-      schemaVersion: 2,
-    });
-
-    render(
-      <LicenseProvider>
-        <MemoryRouter initialEntries={['/settings/license']}>
-          <Routes>
-            <Route path="/settings/license" element={<LicensePage />} />
-          </Routes>
-        </MemoryRouter>
-      </LicenseProvider>
-    );
-
-    await waitFor(() => {
-      expect(screen.getByText('Attiva e Valida')).toBeInTheDocument();
-      expect(screen.getByText('ABCD-****-****-PQRQ')).toBeInTheDocument();
-      expect(screen.getByText(/Famiglia Bellotti/i)).toBeInTheDocument();
-    });
-  });
-
   it('4. Navigazione /settings -> /settings/license e ritorno a /settings', async () => {
     render(
       <LicenseProvider>

@@ -34,6 +34,7 @@ export interface MotoreOcrAiPageResult {
   decisions?: any[];
   receiptItemBlocks?: any[];
   digitalReconstruction?: DigitalPageReconstruction;
+  canonicalRaster?: OcrPage['canonicalRaster'];
 }
 
 let provider: DualRecognizerOcrProvider | null = null;
@@ -137,6 +138,7 @@ export async function recognizeReceiptPageWithMotoreOcrAi(
     decisions: stabilized.decisions,
     receiptItemBlocks: receiptEvidence.itemBlocks,
     digitalReconstruction,
+    canonicalRaster: page.canonicalRaster,
   };
 }
 

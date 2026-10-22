@@ -50,18 +50,28 @@ interface ColumnModel{
 export function reconstructReceiptItemBlocks(page:OcrPage):ReceiptItemBlockResult{
   const lines=reconstructPhysicalLines(page.tokens);
   const headerIndex=lines.findIndex(line=>isItemHeader(line.text));
-  if(headerIndex<0)return{blocks:[],observations:[{
-    code:'RECEIPT_ITEM_HEADER_NOT_FOUND',
-    message:'Intestazione articoli non riconosciuta: ricostruzione blocchi non applicata.',
+  const header=headerIndex>=0?lines[headerIndex]:undefined;
+  const columns=header
+    ?inferColumns(header,page.width)
+    :inferColumnsFromAnchors(page.tokens,page.width);
+  if(!columns)return{blocks:[],observations:[{
+    code:'RECEIPT_ITEM_COLUMNS_UNRESOLVED',
+    message:'Colonne receipt non ricostruibili né da intestazione né da ancore IVA/prezzo ripetute.',
     confidence:null
   }]};
 
-  const header=lines[headerIndex]!;
-  const columns=inferColumns(header,page.width);
-  const body=lines.slice(headerIndex+1).filter(line=>line.centerY>header.centerY);
+  const body=header
+    ?lines.slice(headerIndex+1).filter(line=>line.centerY>header.centerY)
+    :lines;
   const bounded=body.slice(0,firstTerminalIndex(body));
   const blocks:ReceiptItemBlock[]=[];
-  const observations:ReceiptItemBlockObservation[]=[];
+  const observations:ReceiptItemBlockObservation[]=[{
+    code:header?'RECEIPT_ITEM_COLUMNS_FROM_HEADER':'RECEIPT_ITEM_COLUMNS_FROM_ANCHORS',
+    message:header
+      ?'Colonne receipt ricavate dall’intestazione.'
+      :'Intestazione assente: colonne receipt ricavate dalle ancore IVA/prezzo ripetute.',
+    confidence:header?.95:.88
+  }];
   let pendingDescription:PhysicalLine|undefined;
   let pendingQuantity:PhysicalLine|undefined;
 
@@ -177,6 +187,36 @@ function inferColumns(header:PhysicalLine,pageWidth:number):ColumnModel{
     vatEnd:Math.min(width*.82,(vatCenter+priceCenter)/2),
     priceStart:Math.max(width*.66,priceCenter-width*.11)
   };
+}
+
+
+function inferColumnsFromAnchors(tokens:OcrToken[],pageWidth:number):ColumnModel|undefined{
+  const width=Math.max(1,pageWidth||Math.max(...tokens.map(token=>token.box.x+token.box.width),1));
+  const vatTokens=tokens.filter(token=>parsePercent(token.text)!==undefined);
+  if(vatTokens.length<2)return undefined;
+
+  const vatCenters=vatTokens.map(token=>centerX(token.box)).sort((a,b)=>a-b);
+  const vatCenter=median(vatCenters);
+  const moneyTokens=tokens.filter(token=>parseMoney(token.text)!==undefined&&centerX(token.box)>vatCenter+width*.10);
+  if(moneyTokens.length<2)return undefined;
+
+  const priceCenters=moneyTokens.map(token=>centerX(token.box)).sort((a,b)=>a-b);
+  const priceCenter=median(priceCenters);
+  if(priceCenter<=vatCenter+width*.08)return undefined;
+
+  const midpoint=(vatCenter+priceCenter)/2;
+  return{
+    descriptionEnd:Math.max(width*.42,vatCenter-width*.08),
+    vatStart:Math.max(width*.35,vatCenter-width*.09),
+    vatEnd:Math.min(width*.86,midpoint),
+    priceStart:Math.max(midpoint,width*.62)
+  };
+}
+
+function median(values:number[]):number{
+  if(!values.length)return 0;
+  const mid=Math.floor(values.length/2);
+  return values.length%2?values[mid]!:(values[mid-1]!+values[mid]!)/2;
 }
 
 function classifyLine(line:PhysicalLine,columns:ColumnModel){
